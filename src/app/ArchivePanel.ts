@@ -16,8 +16,10 @@ import {
   createPanelElement,
   createSelectAll,
   errorText,
+  nextSelectAll,
   q,
   setStatus,
+  triState,
   type AppEvents,
   type Panel
 } from './dom'
@@ -72,18 +74,25 @@ export function createArchivePanel(events: AppEvents): Panel {
   const status = q<HTMLParagraphElement>(element, '#restore-status')
 
   const selectAll = createSelectAll(q<HTMLDivElement>(element, '#sessions-all-host'), {
-    describe: (kept, total) => {
-      if (total === 0) return '没有可选的存档'
-      if (kept === 0) return `未选中存档（共 ${total} 个）`
-      const tabs = selectedBookmarkCount()
-      return `已选 ${kept} / ${total} 个存档 · ${tabs} 个标签页`
+    describe: (kept, total, filtered) => {
+      if (total === 0) return '没有可还原的标签页'
+      const base =
+        kept === 0
+          ? `未选中标签页（列表里共 ${total} 枚）`
+          : `已选 ${kept} / ${total} 枚标签页 · ${targets().length} 个存档`
+      return filtered ? `${base}（仅列表可见）` : base
     },
     onChange: (wantAll) => {
+      // 与三态框自己的范围一致：只管列表里可见的那些存档。
       for (const view of rendered) {
-        if (wantAll) selectedSessions.add(view.node.id)
-        else selectedSessions.delete(view.node.id)
+        const ids = containerBookmarks.get(view.node.id) ?? []
+        for (const id of ids) {
+          if (wantAll) excludedBookmarks.delete(id)
+          else excludedBookmarks.add(id)
+        }
       }
-      render()
+      applyContainerStates()
+      updateBulkBar()
     }
   })
 
@@ -94,8 +103,12 @@ export function createArchivePanel(events: AppEvents): Panel {
   let sessions: SessionView[] = []
   let rendered: SessionView[] = []
   const expanded = new Set<string>()
-  const selectedSessions = new Set<string>()
-  /** 被勾掉的书签 id（跨存档共用一个集合，书签 id 本身全局唯一）。 */
+  /**
+   * 被勾掉的书签 id（跨存档共用一个集合，书签 id 本身全局唯一）。
+   *
+   * **只有这一个勾选维度**：一枚书签要么会被还原、要么不会。存档行与分组行都是它上面
+   * 的聚合（三态），所以不存在「看着全选、但按钮说没选中」这种自相矛盾。
+   */
   const excludedBookmarks = new Set<string>()
   const contentInputs = new Map<string, HTMLInputElement>()
   /** 容器 id（会话或分组）→ 它包含的书签 id，用于整组勾选与计数。 */
@@ -201,9 +214,8 @@ export function createArchivePanel(events: AppEvents): Panel {
           <button type="button" class="tree__caret" data-toggle="${escapeHtml(id)}"
                   aria-expanded="${open}" aria-label="${open ? '折叠' : '展开'}"
                   title="${open ? '折叠' : '展开'}">${open ? '▾' : '▸'}</button>
-          <input type="checkbox" data-select="${escapeHtml(id)}"${
-            selectedSessions.has(id) ? ' checked' : ''
-          } title="选中这个存档，再用下方的按钮批量打开" />
+          <input type="checkbox" data-content="${escapeHtml(id)}"
+                 title="这个存档里哪些标签要还原" />
           ${title}
           <span class="tree__meta" data-meta="${escapeHtml(id)}">${escapeHtml(
             sessionMetaText(view)
@@ -283,11 +295,24 @@ export function createArchivePanel(events: AppEvents): Panel {
     }
   }
 
-  /** 让每个勾选框反映 `excludedBookmarks`：全选 / 半选 / 全不选。 */
+  /**
+   * 让每个勾选框反映 `excludedBookmarks`：
+   * 容器（存档 / 分组）是三态，叶子（单枚标签）是两态。
+   *
+   * 叶子也必须在这里同步。它们渲染时一律不带 `checked`（`bookmarkMarkup` 不写它），
+   * 所以不在此处补上，叶子会永远显示成未勾选——而模型里其实是勾选的，
+   * 于是点一下反而变成「不排除」，什么都不会发生。
+   */
   function applyContainerStates(): void {
-    for (const [containerId, bookmarkIds] of containerBookmarks) {
-      const input = contentInputs.get(containerId)
-      if (!input) continue
+    for (const [containerId, input] of contentInputs) {
+      const bookmarkIds = containerBookmarks.get(containerId)
+
+      if (!bookmarkIds) {
+        // 叶子：单枚书签。
+        input.checked = !excludedBookmarks.has(containerId)
+        continue
+      }
+
       const kept = bookmarkIds.filter((id) => !excludedBookmarks.has(id)).length
       input.checked = kept > 0
       input.indeterminate = kept > 0 && kept < bookmarkIds.length
@@ -300,28 +325,59 @@ export function createArchivePanel(events: AppEvents): Panel {
   }
 
   /**
-   * 选中的存档数——只数**当前可见**的（搜索过滤后的），
-   * 因为三态勾选框管的是「列表里这些」，被搜索藏起来的不该把状态顶成「部分」。
+   * 列表里可见的标签勾选概况：`kept` 是还会被还原的枚数，`total` 是可见的总枚数。
+   *
+   * 顶层三态按**标签**聚合，而不按「有几个存档还有东西」：勾选的真正维度是标签，
+   * 按存档聚合会出现「已选 4 / 5 枚」却显示全选这种对不上（3 个存档都至少留了一枚）。
+   * 搜索过滤时只算可见的，被藏起来的不会把状态顶成「部分」。
    */
-  function visibleSelectedCount(): number {
-    return rendered.filter((view) => selectedSessions.has(view.node.id)).length
+  function visibleTotals(): {kept: number; total: number} {
+    let kept = 0
+    let total = 0
+    for (const view of rendered) {
+      const count = (containerBookmarks.get(view.node.id) ?? []).length
+      total += count
+      kept += keptCount(view.node.id)
+    }
+    return {kept, total}
   }
 
-  function selectedBookmarkCount(): number {
-    let total = 0
-    for (const id of selectedSessions) {
-      const bookmarkIds = containerBookmarks.get(id) ?? []
-      total += bookmarkIds.filter((bookmarkId) => !excludedBookmarks.has(bookmarkId)).length
-    }
-    return total
+  /** 某个容器（存档 / 分组）里还剩几枚被勾选的标签。 */
+  function keptCount(containerId: string): number {
+    const ids = containerBookmarks.get(containerId) ?? []
+    return ids.filter((id) => !excludedBookmarks.has(id)).length
+  }
+
+  /**
+   * 当前的还原目标：列表里可见、且至少还剩一枚被勾选标签的存档。
+   *
+   * 局限在可见范围是刻意的一致选择：三态框、按钮上的数量、真正打开的东西三者用同一个集合，
+   * 用户搜索过滤后不会出现「按钮写着 12 个存档、实际只开了 3 个」这种对不上。
+   * 搜索过滤时，三态框的文案会明写「仅列表可见」。
+   */
+  function targets(): SessionView[] {
+    return rendered.filter((view) => keptCount(view.node.id) > 0)
+  }
+
+  /** 目标里的标签总数（即「会打开多少个标签页」）。 */
+  function targetBookmarkCount(): number {
+    return targets().reduce((sum, view) => sum + keptCount(view.node.id), 0)
   }
 
   function updateBulkBar(): void {
-    const count = selectedSessions.size
+    const targetsCount = targets().length
+    const tabs = targetBookmarkCount()
+    const filtered = searchInput.value.trim().length > 0
 
-    selectAll.update(visibleSelectedCount(), rendered.length)
+    const {kept, total} = visibleTotals()
+    selectAll.update(kept, total, filtered)
 
-    const disabled = busy || count === 0
+    // 数量写在按钮上：默认全选，一下会把所有东西都打开，得让人先看见数。
+    openWindowButton.textContent = `还原为窗口（${tabs} 个标签页 / ${targetsCount} 个存档）`
+    openTabsButton.textContent = `只开标签页（${tabs} 个标签页 / ${targetsCount} 个存档）`
+    openViewersButton.textContent = `打开阅读页（${targetsCount} 个）`
+
+    const disabled = busy || targetsCount === 0
     openWindowButton.disabled = disabled
     openTabsButton.disabled = disabled
     openViewersButton.disabled = disabled
@@ -347,9 +403,6 @@ export function createArchivePanel(events: AppEvents): Panel {
     for (const id of [...excludedBookmarks]) {
       if (!alive.has(id)) excludedBookmarks.delete(id)
     }
-    for (const id of [...selectedSessions]) {
-      if (!sessions.some((view) => view.node.id === id)) selectedSessions.delete(id)
-    }
     for (const id of [...expanded]) {
       if (!sessions.some((view) => view.node.id === id)) expanded.delete(id)
     }
@@ -358,14 +411,14 @@ export function createArchivePanel(events: AppEvents): Panel {
   }
 
   /**
-   * 打开选中的存档。
+   * 打开还原目标。
    *
-   * `groupTabs: false` 是「只开标签页」——同一份勾选，只是不建标签分组。
+   * `groupTabs: false` 是「只开标签页」——同一份勾选，只是不建分组。
    */
   async function runRestore(groupTabs: boolean): Promise<void> {
     if (busy || !settings) return
-    const targets = [...selectedSessions]
-    if (targets.length === 0) return
+    const folderIds = targets().map((view) => view.node.id)
+    if (folderIds.length === 0) return
 
     busy = true
     updateBulkBar()
@@ -375,7 +428,7 @@ export function createArchivePanel(events: AppEvents): Panel {
       let opened = 0
       let groups = 0
       let skipped = 0
-      for (const folderId of targets) {
+      for (const folderId of folderIds) {
         const result = await restoreFolder(folderId, {
           target: settings.restoreTarget,
           groupTabs,
@@ -431,7 +484,6 @@ export function createArchivePanel(events: AppEvents): Panel {
       if (settings?.lastSessionFolderId === sessionId) {
         settings = await updateSettings({lastSessionFolderId: undefined})
       }
-      selectedSessions.delete(sessionId)
       expanded.delete(sessionId)
       setStatus(status, `已删除存档「${view.node.title}」。`, 'ok')
     } catch (error) {
@@ -480,25 +532,28 @@ export function createArchivePanel(events: AppEvents): Panel {
 
   sessionList.addEventListener('change', (event) => {
     const input = event.target as HTMLInputElement
+    const id = input.dataset.content
+    if (id === undefined) return
 
-    const containerId = input.dataset.content
-    if (containerId !== undefined) {
-      for (const bookmarkId of containerBookmarks.get(containerId) ?? []) {
-        if (input.checked) excludedBookmarks.delete(bookmarkId)
+    const container = containerBookmarks.get(id)
+    if (container) {
+      // 容器（存档 / 分组）：按三态推意图，与顶层勾选框同一套规则。
+      // 不能读原生取反的结果，否则「部分选择」会变成「全不选」。
+      const kept = container.filter((bookmarkId) => !excludedBookmarks.has(bookmarkId)).length
+      const wantAll = nextSelectAll(triState(kept, container.length))
+      for (const bookmarkId of container) {
+        if (wantAll) excludedBookmarks.delete(bookmarkId)
         else excludedBookmarks.add(bookmarkId)
       }
-      // 只更新勾选态与计数：重建 DOM 会让键盘操作的焦点丢掉。
-      applyContainerStates()
-      updateBulkBar()
-      return
+    } else {
+      // 叶子：单枚标签，两态，直接看原生结果。
+      if (input.checked) excludedBookmarks.delete(id)
+      else excludedBookmarks.add(id)
     }
 
-    const sessionId = input.dataset.select
-    if (sessionId !== undefined) {
-      if (input.checked) selectedSessions.add(sessionId)
-      else selectedSessions.delete(sessionId)
-      updateBulkBar()
-    }
+    // 只更新勾选态与计数：重建 DOM 会让键盘操作的焦点丢掉。
+    applyContainerStates()
+    updateBulkBar()
   })
 
   sessionList.addEventListener('click', (event) => {
@@ -592,7 +647,10 @@ export function createArchivePanel(events: AppEvents): Panel {
   openWindowButton.addEventListener('click', () => void runRestore(true))
   openTabsButton.addEventListener('click', () => void runRestore(false))
   openViewersButton.addEventListener('click', () =>
-    void runOpenViewers([...selectedSessions], '阅读页')
+    void runOpenViewers(
+      targets().map((view) => view.node.id),
+      '阅读页'
+    )
   )
 
   return {element, refresh}

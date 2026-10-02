@@ -86,8 +86,8 @@ export function nextSelectAll(state: TriState): boolean {
 /** 顶层三态勾选框。 */
 export interface SelectAllControl {
   readonly input: HTMLInputElement
-  /** 用「保留数 / 总数」刷新三态与文案。 */
-  update(kept: number, total: number): void
+  /** 用「保留数 / 总数」刷新三态与文案；`filtered` 表示列表正处于搜索过滤状态。 */
+  update(kept: number, total: number, filtered?: boolean): void
 }
 
 /**
@@ -99,8 +99,8 @@ export interface SelectAllControl {
 export function createSelectAll(
   host: HTMLElement,
   options: {
-    /** 由保留数与总数生成文案。 */
-    describe(kept: number, total: number): string
+    /** 由保留数、总数、以及「列表是否在过滤中」生成文案。 */
+    describe(kept: number, total: number, filtered: boolean): string
     /** 用户点击后的意图：true = 全选，false = 全不选。 */
     onChange(selectAll: boolean): void
   }
@@ -124,12 +124,12 @@ export function createSelectAll(
 
   return {
     input,
-    update(kept: number, total: number): void {
+    update(kept: number, total: number, filtered = false): void {
       state = triState(kept, total)
       input.checked = state !== 'none'
       input.indeterminate = state === 'some'
       input.disabled = total <= 0
-      text.textContent = options.describe(kept, total)
+      text.textContent = options.describe(kept, total, filtered)
     }
   }
 }

@@ -16,8 +16,10 @@ import {
   createPanelElement,
   createSelectAll,
   errorText,
+  nextSelectAll,
   q,
   setStatus,
+  triState,
   type AppEvents,
   type Panel
 } from './dom'
@@ -288,14 +290,19 @@ export function createCapturePanel(events: AppEvents): Panel {
 
     const tabId = input.dataset.tab
     if (tabId !== undefined) {
+      // 叶子：单枚标签，两态，直接看原生结果。
       if (input.checked) excluded.delete(Number(tabId))
       else excluded.add(Number(tabId))
     }
 
     const groupIndex = input.dataset.group
     if (groupIndex !== undefined) {
-      for (const id of groupTabIds.get(Number(groupIndex)) ?? []) {
-        if (input.checked) excluded.delete(id)
+      // 分组：按三态推意图，与顶层勾选框同一套规则（部分选择 → 全选）。
+      const tabIds = groupTabIds.get(Number(groupIndex)) ?? []
+      const kept = tabIds.filter((id) => !excluded.has(id)).length
+      const wantAll = nextSelectAll(triState(kept, tabIds.length))
+      for (const id of tabIds) {
+        if (wantAll) excluded.delete(id)
         else excluded.add(id)
       }
     }
