@@ -8,6 +8,7 @@
   "scripts": {
     "build": "extension build",
     "dev": "extension build --mode development",
+    "watch": "node tools/watch.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --import ./tools/ts-hooks.mjs --test",
     "verify": "node tools/verify-build.mjs",

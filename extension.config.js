@@ -19,7 +19,9 @@ export default {
   },
   // 必须锁定 chrome：否则 build 按默认的 chromium 产出 dist/chromium，
   // 而 tools/verify-build.mjs 是按 dist/chrome 自检的。
+  // `dev` 同样要锁定——它默认也是 chromium，会另写一份 dist/chromium。
   commands: {
+    dev: {browser: 'chrome'},
     build: {browser: 'chrome'}
   }
 }

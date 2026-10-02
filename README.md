@@ -32,8 +32,9 @@ TabFurl 只补这两块，不做通用收藏管理：书签树仍然是唯一存
 ```bash
 pnpm install
 
+pnpm watch          # 监视 src/ 与 pages/，改完自动重建 dist/chrome/（日常开发用这个）
 pnpm build          # 生产构建 → dist/chrome/（混淆）
-pnpm dev            # 开发用构建 → dist/chrome/（不混淆，报错堆栈可读）
+pnpm dev            # 单次开发用构建 → dist/chrome/（不混淆，报错堆栈可读）
 
 pnpm test           # 单元测试（node:test）
 pnpm typecheck      # tsc --noEmit
@@ -47,13 +48,18 @@ pnpm icons          # 重新生成 src/images/ 下的占位图标
 
 ## 在 Chrome 里加载
 
-1. `pnpm build`（或开发时 `pnpm dev`）生成 `dist/chrome/`
+1. `pnpm build`（开发时用 `pnpm watch`）生成 `dist/chrome/`
 2. 打开 `chrome://extensions`，右上角开启「开发者模式」
 3. 点「加载已解压的扩展程序」，选 `dist/chrome` 目录
 4. 点工具栏的 TabFurl 图标 → 侧边栏打开
-5. 改完代码：重新构建，回到扩展页点卡片上的刷新（↻），再重开侧边栏
+5. 改完代码：`pnpm watch` 会自动重建，回到扩展页点卡片上的刷新（↻），再重开侧边栏
 
 首次还要在侧边栏底部的「设置」里点一下「创建 / 定位」，把存档根建在「其他书签」下。
+
+**关于自动编译**：`pnpm watch` 会监视 `src/` 与 `pages/`，改完自动重建 `dist/chrome/`。
+它**不启动浏览器，也没有热重载**——重建完仍需自己点扩展卡片上的刷新（↻），因为自动重载
+要依赖独立的 Chrome for Testing（约 150 MB，`pnpm exec extension install chrome`）。
+好处是产物的权限与生产构建完全一致，`pnpm verify` 照常通过。
 
 **关于 `pnpm dev`**：它只是「不混淆的构建」，**不启动浏览器、也没有热重载**（名字取短是为了顺手）。
 真正的 `extension dev` 没有做成脚本——它需要先下载独立的 Chrome for Testing（约 150 MB，
@@ -61,8 +67,6 @@ pnpm icons          # 重新生成 src/images/ 下的占位图标
 所以换成了「手动加载 + 点卡片刷新」，省掉一个重依赖。需要时仍可临时 `pnpm exec extension dev`，
 但它会把 `dist/chrome` 覆盖成开发版清单（多出 `scripting` 与 `management` 权限，
 `pnpm verify` 会失败），跑完要再 `pnpm build`。
-
-⚠️ **`pnpm dev` 会把 `dist/chrome` 覆盖成开发版产物**（清单多出 `scripting` 与 `management` 权限，并写入 `extension-js-control.json`），此时 `pnpm verify` 必然失败。想拿到干净产物就再跑一次 `pnpm build`。
 
 ## 测试
 

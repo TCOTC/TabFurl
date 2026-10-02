@@ -160,7 +160,8 @@ src/shared/
 ```bash
 pnpm install
 pnpm build        # → dist/chrome/（同时生成 extension-env.d.ts）
-pnpm dev          # 同上，但不混淆：日常开发用它，报错堆栈里是真实函数名；只构建，不启动浏览器
+pnpm dev          # 同上，但不混淆：单次开发用构建；只构建，不启动浏览器
+pnpm watch        # 监视 src/ 与 pages/，改完自动重建（日常开发用这个）
 pnpm test         # 单元测试（node:test；需要 Node >= 23.6）
 pnpm typecheck    # 构建不做类型检查，必须单独跑，且需先 build
 pnpm verify       # 产物自检：权限漂移 / host 权限 / Firefox 残留 / 入口缺失 / 中文编码 / 测试文件泄漏
@@ -168,7 +169,11 @@ pnpm icons        # 重新生成占位图标
 ```
 
 加载进 Chrome：`chrome://extensions` → 开启开发者模式 → 「加载已解压的扩展程序」→ 选 `dist/chrome`。
-改完代码重新构建、点扩展卡片上的刷新（↻）、重开侧边栏。
+`pnpm watch` 重建后，点扩展卡片上的刷新（↻）再重开侧边栏。
+
+`pnpm watch` 是自己的脚本（`tools/watch.mjs`），只调 `extension build`，因此产物的权限与生产完全一致。
+没有用它自带的 `extension dev --no-browser`，因为那条路必然产出开发版清单（多出 `scripting` 与
+`management` 权限），会破坏权限最小化。
 
 `extension dev` / `start` / `preview` 没有做成脚本：它们都要求下载独立的 Chrome for Testing（约 150 MB），
 而换来的是热重载与一套控制桥；本项目不做自动化验收。需要时临时跑 `pnpm exec extension dev`，

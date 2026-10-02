@@ -27,22 +27,30 @@
 ```bash
 pnpm build          # 生产构建 → dist/chrome/（混淆）
 pnpm dev            # 开发用构建 → dist/chrome/（不混淆，权限同样干净）
+pnpm watch          # 同上，但监视 src/ 与 pages/，改完自动重建
 pnpm typecheck      # 必须通过；构建本身不做类型检查，且需先 build 生成 extension-env.d.ts
 pnpm test           # 单元测试（node:test，无额外依赖）
 pnpm verify         # 产物自检（需先 build）：权限、host 权限、入口文件、中文编码、测试文件泄漏
 pnpm icons          # 重新生成占位图标
 ```
 
-日常开发用 `pnpm dev`：权限与生产构建完全一致（所以 `pnpm verify` 照常通过），但不混淆，
-浏览器里报错时的堆栈是真实函数名。代价只是体积大一倍（都是本地产物，无所谓）。
+日常开发用 `pnpm watch`：权限与生产构建完全一致（所以 `pnpm verify` 照常通过），但不混淆，
+浏览器里报错时的堆栈是真实函数名；改完代码它会自动重建。代价只是体积大一倍（都是本地产物，无所谓）。
 
-⚠️ **它只构建，不启动浏览器、也没有热重载。** 名字取短是为了顺手，背后是
-`extension build --mode development`。改完代码要重新跑 `pnpm dev`，再去扩展页点卡片上的刷新（↻）。
+⚠️ **`watch` / `dev` 只构建，不启动浏览器、也没有热重载。** 名字取得短是为了顺手。
+自动重建之后仍需自己去 `chrome://extensions` 点扩展卡片上的刷新（↻）再重开侧边栏。
 
 **`extension dev` / `start` / `preview` 没有做成脚本**（2026-10-02 决定）。它们都要求先下载独立的
-Chrome for Testing（约 150 MB，`pnpm exec extension install chrome`），换来的是热重载与一套控制桥
-（`logs` / `open` / `reload` / `eval` / `storage`）。本项目不做自动化验收，于是换成「手动加载
-`dist/chrome` + 点扩展卡片的刷新」，省掉一个重依赖。哪天要做自动化了，命令随时可以加回来。
+Chrome for Testing（约 150 MB，`pnpm exec extension install chrome`），换来的是浏览器自动加载与热重载。
+本项目不做自动化验收，于是换成「`pnpm watch` + 手动点刷新」，省掉一个重依赖。
+
+顺带记下两条实测结论，免得以后再试一遍：
+
+- `extension build` **没有 `--watch`**，真正的监视能力只存在于 `dev` 里。
+- `extension dev --no-browser` 确实能只监视不启动浏览器（日志显示 `Chrome (no-browser mode)`），
+  但它**必然产出开发版清单**——多出 `scripting` 与 `management` 两个权限并写入 CSP，
+  `pnpm verify` 会失败；`--no-reload` 也去不掉这两个权限。
+  这就是 `tools/watch.mjs` 自己调 `extension build` 而不用 `dev --no-browser` 的原因。
 
 需要时临时跑 `pnpm exec extension dev`，但要知道两件事（2026-10-02 实测）：
 
@@ -77,6 +85,7 @@ pages/
 tools/
   generate-icons.mjs 占位图标生成器（纯 Node，无第三方依赖）
   verify-build.mjs   产物自检
+  watch.mjs          自动重建（监视 src/ 与 pages/，纯 Node）
   ts-hooks.mjs       测试专用的 TS 解析钩子（给无扩展名的相对导入补 .ts）
 ```
 
