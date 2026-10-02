@@ -67,7 +67,7 @@ test('updateSettings 可以写入撤销用的 lastSessionFolderId', async () => 
 })
 
 test('loadSettings 原样透传存储里的值，不做校验', async () => {
-  // 写入方必须保证合法（设置页只写联合类型里的值）；读取方直接信任存储，
+  // 写入方必须保证合法（设置面板只写联合类型里的值）；读取方直接信任存储，
   // 不引入「纠正脏值」这类逻辑。
   store.settings = {sessionNameMode: 'nonsense'}
 

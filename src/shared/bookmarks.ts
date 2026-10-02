@@ -159,7 +159,7 @@ export async function listFolders(
 /**
  * 可作存档根的候选：书签栏自身 + 它下面所有层级的文件夹。
  *
- * 只读——存档位置由用户在设置页指定，扩展不负责建文件夹。
+ * 只读——存档位置由用户在「设置」里指定，扩展不负责建文件夹。
  * 返回项的 `path` 一律不含书签栏自己，界面拼显示路径时自行补上头部的 `barTitle`。
  */
 export async function listArchiveRootCandidates(): Promise<{

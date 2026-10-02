@@ -77,10 +77,15 @@ src/
     tile.ts         占位块 HTML 生成
     base.css        全站共用的设计变量与基础组件
     *.test.ts       与实际文件同目录的单元测试（node:test，给 chrome.* 打桩）
-  options/          设置页
+  app/              主界面的界面模块（只被 pages/app.ts 引用）
+    App.ts          标签页外壳：顶部三个 Tab、面板装配、跨面板刷新
+    CapturePanel.ts 保存面板
+    ArchivePanel.ts 存档面板
+    SettingsPanel.ts 设置面板
+    dom.ts          面板契约（Panel / AppEvents）与共用小工具
   images/           图标
 pages/
-  app.html/.ts      主界面（独立标签页；由特殊文件夹 pages/ 编译，路径即 pages/app.html）
+  app.html/.ts      主界面入口（独立标签页；由特殊文件夹 pages/ 编译，路径即 pages/app.html）
   folder.html/.ts   收藏文件夹阅读页（同上，路径即 pages/folder.html）
 tools/
   generate-icons.mjs 占位图标生成器（纯 Node，无第三方依赖）
@@ -95,7 +100,8 @@ tools/
 2. **只用 `chrome.*`**：MV3 下这些 API 原生返回 Promise，不再需要 `webextension-polyfill`。不要为了「保持中立」而引入 `browser.*` 或 polyfill。
 3. **`minimum_chrome_version: 114` 是保守下限，不要下调**：本项目实际用到的最高 API 要求是 `chrome.tabGroups`（89），移除 `sidePanel` 后 114 已无强制理由，但下调等于声明未经验证的旧版本兼容性。若将来用到更新的 API，必须同步抬高此版本号，并同步 `tools/verify-build.mjs` 的 `MIN_CHROME_VERSION`。
 4. **命名规则只在 `shared/naming.ts` 里实现**：界面层不得自己拼字符串。规则见 `docs/design.md`。
-5. **`shared/` 不允许 import `pages/` 与 `options/`**：依赖方向只能是从界面到核心。
+5. **依赖方向单向，且面板之间不互相 import**：`pages/` → `src/app/` → `src/shared/`。`shared/` 不得 import 任何界面模块；
+   `src/app/` 下的三个面板只通过 `dom.ts` 的 `AppEvents` 通信（谁该刷新由 `App.ts` 决定），互不引用，免得绕成环。
 6. **`bookmarks` API 的 id 是设备本地的**：同一账号在另一台设备上 id 不同。任何持久化数据都不要以书签 id 作为跨设备稳定的标识；id 只允许存在本地设置里（如 `archiveRootId`），且必须能重建。
 7. **写入书签前先过滤内部页面**（`chrome://`、`chrome-extension://`、`devtools://` 等），用 `isInternalUrl()`。
 8. **同名不覆盖**：建文件夹前先用 `dedupeName()` 对同级已有名字去重。

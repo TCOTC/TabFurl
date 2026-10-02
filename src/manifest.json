@@ -23,10 +23,6 @@
     },
     "default_title": "TabFurl"
   },
-  "options_ui": {
-    "page": "options/index.html",
-    "open_in_tab": true
-  },
   "background": {
     "service_worker": "background.ts"
   }

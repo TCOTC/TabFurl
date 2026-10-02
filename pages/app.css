@@ -1,7 +1,51 @@
-/* 主界面以独立标签页打开：版面宽裕，两块清单各自滚动，不挤在很矮的区域里。 */
+/* 主界面以独立标签页打开：顶部三个标签页切换，每块内容各自滚动。 */
 
 .app {
   padding: 20px;
+}
+
+/* ———————————————— 顶部标签页 ———————————————— */
+
+.tabs {
+  display: flex;
+  align-self: flex-start;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+
+.tab {
+  min-width: 68px;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--accent-strong);
+}
+
+.tab[aria-selected='true'] {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* 设置面板里几个小节挨在一起，比默认的面板间距再松一点。 */
+.card + .card {
+  margin-top: 4px;
 }
 
 /* ———————————————— 保存侧：标签勾选清单 ———————————————— */

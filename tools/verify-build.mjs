@@ -14,17 +14,13 @@ const EXPECTED_PERMISSIONS = ['bookmarks', 'tabs', 'tabGroups', 'storage']
 /** 清单里必须指向这些文件的入口。 */
 const EXPECTED_ENTRIES = {
   'background.service_worker': 'background/service_worker.js',
-  action: 'images/icon-128.png',
-  'options_ui.page': 'options/index.html'
+  action: 'images/icon-128.png'
 }
 
 const EXPECTED_FILES = [
   'manifest.json',
   'background/service_worker.js',
   'shared/commons.js',
-  'options/index.html',
-  'options/index.js',
-  'options/index.css',
   'pages/app.html',
   'pages/app.js',
   'pages/app.css',
