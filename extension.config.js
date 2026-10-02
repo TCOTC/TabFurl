@@ -8,7 +8,8 @@
 //   - 它会把 dist/chrome 换成开发版清单（多出 `scripting` 与 `management` 权限）
 //   - 跑完要再 `pnpm build` 一次，才能拿到可自检、可对外分发的产物
 //
-// 日常开发用 `pnpm build:dev`：权限同样干净，但不混淆，报错堆栈里是真实函数名。
+// 日常开发用 `pnpm dev`（= `extension build --mode development`）：权限同样干净，
+// 但不混淆，报错堆栈里是真实函数名。注意它只构建，不启动浏览器、也没有热重载。
 const ciFlags = process.env.CI ? ['--no-sandbox', '--disable-gpu'] : []
 
 export default {

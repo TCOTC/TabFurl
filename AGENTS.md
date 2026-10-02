@@ -26,17 +26,20 @@
 
 ```bash
 pnpm build          # 生产构建 → dist/chrome/（混淆）
-pnpm build:dev      # 开发用构建 → dist/chrome/（不混淆，权限同样干净）
+pnpm dev            # 开发用构建 → dist/chrome/（不混淆，权限同样干净）
 pnpm typecheck      # 必须通过；构建本身不做类型检查，且需先 build 生成 extension-env.d.ts
 pnpm test           # 单元测试（node:test，无额外依赖）
 pnpm verify         # 产物自检（需先 build）：权限、host 权限、入口文件、中文编码、测试文件泄漏
 pnpm icons          # 重新生成占位图标
 ```
 
-日常开发用 `pnpm build:dev`：权限与生产构建完全一致（所以 `pnpm verify` 照常通过），但不混淆，
+日常开发用 `pnpm dev`：权限与生产构建完全一致（所以 `pnpm verify` 照常通过），但不混淆，
 浏览器里报错时的堆栈是真实函数名。代价只是体积大一倍（都是本地产物，无所谓）。
 
-**没有保留 `dev` / `start` / `preview` 脚本**（2026-10-02 决定）。它们都要求先下载独立的
+⚠️ **它只构建，不启动浏览器、也没有热重载。** 名字取短是为了顺手，背后是
+`extension build --mode development`。改完代码要重新跑 `pnpm dev`，再去扩展页点卡片上的刷新（↻）。
+
+**`extension dev` / `start` / `preview` 没有做成脚本**（2026-10-02 决定）。它们都要求先下载独立的
 Chrome for Testing（约 150 MB，`pnpm exec extension install chrome`），换来的是热重载与一套控制桥
 （`logs` / `open` / `reload` / `eval` / `storage`）。本项目不做自动化验收，于是换成「手动加载
 `dist/chrome` + 点扩展卡片的刷新」，省掉一个重依赖。哪天要做自动化了，命令随时可以加回来。

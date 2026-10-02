@@ -7,7 +7,7 @@
   "type": "module",
   "scripts": {
     "build": "extension build",
-    "build:dev": "extension build --mode development",
+    "dev": "extension build --mode development",
     "typecheck": "tsc --noEmit",
     "test": "node --import ./tools/ts-hooks.mjs --test",
     "verify": "node tools/verify-build.mjs",
