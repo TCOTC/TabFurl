@@ -225,9 +225,8 @@ export function createCapturePanel(events: AppEvents): Panel {
     const parts = [`主界面所在窗口有 ${alive.size} 个可保存的标签页`]
     if (snapshot.groups.length > 0) parts.push(`${snapshot.groups.length} 个标签分组`)
     if (snapshot.skipped > 0) parts.push(`跳过 ${snapshot.skipped} 个内部页面`)
-    hint.textContent = archiveAvailable
-      ? `${parts.join('，')}。取消勾选即不保存。`
-      : '需要先在「设置」里指定存档根文件夹。'
+    // 存档位置就在上面的标签栏旁边，所以文案里不再写「去设置里选」这类指路。
+    hint.textContent = archiveAvailable ? `${parts.join('，')}。` : '先在上方选一个存档位置。'
 
     updatePreview()
     render()

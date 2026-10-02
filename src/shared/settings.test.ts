@@ -25,18 +25,17 @@ test('没有存储时返回默认设置', async () => {
 
 test('返回的是默认设置的新副本，不会污染默认值', async () => {
   const settings = await loadSettings()
-  settings.restoreTarget = 'currentWindow'
-  assert.equal(DEFAULT_SETTINGS.restoreTarget, 'newWindow')
+  settings.archiveRootId = 'root-x'
+  assert.equal(DEFAULT_SETTINGS.archiveRootId, '')
 })
 
 test('存储里只有部分字段时与默认值合并', async () => {
-  store.settings = {archiveRootId: 'abc', restoreTarget: 'currentWindow'}
+  store.settings = {lastSessionFolderId: 'session-1'}
 
   const settings = await loadSettings()
 
-  assert.equal(settings.archiveRootId, 'abc')
-  assert.equal(settings.restoreTarget, 'currentWindow')
-  assert.equal(settings.lastSessionFolderId, undefined)
+  assert.equal(settings.archiveRootId, '', '读不到的字段回落到默认值')
+  assert.equal(settings.lastSessionFolderId, 'session-1')
 })
 
 test('saveSettings 写入约定的存储键', async () => {
@@ -47,12 +46,12 @@ test('saveSettings 写入约定的存储键', async () => {
 })
 
 test('updateSettings 合并补丁并落盘', async () => {
-  store.settings = {archiveRootId: 'root-1', restoreTarget: 'newWindow'}
+  store.settings = {archiveRootId: 'root-1', lastSessionFolderId: 'old'}
 
-  const next = await updateSettings({restoreTarget: 'currentWindow'})
+  const next = await updateSettings({archiveRootId: 'root-2'})
 
-  assert.equal(next.archiveRootId, 'root-1', '未提及的字段必须保留')
-  assert.equal(next.restoreTarget, 'currentWindow')
+  assert.equal(next.lastSessionFolderId, 'old', '未提及的字段必须保留')
+  assert.equal(next.archiveRootId, 'root-2')
   assert.deepEqual(store.settings, next, '返回值应与落盘内容一致')
 })
 
@@ -66,11 +65,11 @@ test('updateSettings 可以写入撤销用的 lastSessionFolderId', async () => 
 })
 
 test('loadSettings 原样透传存储里的值，不做校验', async () => {
-  // 写入方必须保证合法（设置面板只写联合类型里的值）；读取方直接信任存储，
-  // 不引入「纠正脏值」这类逻辑。
-  store.settings = {restoreTarget: 'nonsense'}
+  // 写入方必须保证合法（选择器只写书签栏里的 id）；读取方直接信任存储，
+  // 不引入「纠正脏值」这类逻辑——指向已不存在的 id 时，由使用方按「未指定」处理。
+  store.settings = {archiveRootId: '这个-id-已经不存在了'}
 
   const settings = await loadSettings()
 
-  assert.equal(settings.restoreTarget, 'nonsense' as typeof settings.restoreTarget)
+  assert.equal(settings.archiveRootId, '这个-id-已经不存在了')
 })

@@ -1,7 +1,64 @@
-/* 主界面以独立标签页打开：顶部三个标签页切换，每块内容各自滚动。 */
+/* 主界面以独立标签页打开：顶部标签页切换，每块内容各自滚动。 */
 
 .app {
   padding: 20px;
+}
+
+/*
+ * 标签栏与存档位置同一行：前者切内容，后者是两块共用的上下文，所以它不属于任何一块面板。
+ * 存档位置靠右（`margin-left: auto`）：它是个一次性选定的东西，不该抢标签栏的位置。
+ */
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.root-pick {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.root-pick__field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.root-pick__label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 下拉框跟着内容走，不撑满一行：顶栏只有一个控件，宽度写死才稳定。 */
+.input--sm {
+  width: 100%;
+  max-width: 260px;
+  padding: 3px 6px;
+  font-size: 11px;
+}
+
+/* 刷新按钮里只有那个图标，所以要把行高让给它，免得图标把行撑得比下拉框高。 */
+.root-pick .btn--sm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon {
+  display: block;
+  width: 13px;
+  height: 13px;
+}
+
+/* 存档位置出错时的红字。正常状态下整块 UI 只有一个下拉框与一个刷新按钮。 */
+.root-pick .status {
+  max-width: 320px;
 }
 
 /* ———————————————— 顶部标签页 ———————————————— */
@@ -41,11 +98,6 @@
 .tab:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
-}
-
-/* 设置面板里几个小节挨在一起，比默认的面板间距再松一点。 */
-.card + .card {
-  margin-top: 4px;
 }
 
 /* ———————————————— 保存侧：标签勾选清单 ———————————————— */

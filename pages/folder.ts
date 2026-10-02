@@ -1,8 +1,7 @@
 import {getNodePath, getSubTree} from '../src/shared/bookmarks'
 import {restoreFolder} from '../src/shared/restore'
-import {loadSettings} from '../src/shared/settings'
 import {escapeHtml, faviconMarkup} from '../src/shared/tile'
-import type {BookmarkNode} from '../src/shared/types'
+import type {BookmarkNode, RestoreOptions} from '../src/shared/types'
 import {hostnameOf, isSeparatorUrl, separatorTitle} from '../src/shared/urls'
 import '../src/shared/base.css'
 import './folder.css'
@@ -112,7 +111,9 @@ function subfolderCardMarkup(folder: BookmarkNode): string {
 
 async function render(): Promise<void> {
   const root = q<HTMLDivElement>('#root')
-  const folderId = new URLSearchParams(location.search).get('id')
+  // 兜底成空串而不是留着 undefined：`runRestore` 是嵌套函数，在那里面 TS 会丢掉
+  // 外面那个守卫对 `string | null` 的收窄。
+  const folderId = new URLSearchParams(location.search).get('id') ?? ''
 
   if (!folderId) {
     root.innerHTML = '<main class="app"><p class="empty">缺少文件夹参数，请从 TabFurl 主界面打开。</p></main>'
@@ -164,7 +165,8 @@ async function render(): Promise<void> {
       <div class="row">
         <input type="search" class="input" id="search" placeholder="在本文件夹内搜索…"
                autocomplete="off" style="max-width:280px" />
-        <button type="button" class="btn" id="open-window-btn">按子文件夹还原为窗口</button>
+        <button type="button" class="btn" id="open-new-window-btn">还原到新窗口</button>
+        <button type="button" class="btn" id="open-current-window-btn">还原到当前窗口</button>
         <span class="status" id="status"></span>
       </div>
 
@@ -188,7 +190,8 @@ async function render(): Promise<void> {
 
   const searchInput = q<HTMLInputElement>('#search')
   const status = q<HTMLSpanElement>('#status')
-  const openWindowButton = q<HTMLButtonElement>('#open-window-btn')
+  const openNewWindowButton = q<HTMLButtonElement>('#open-new-window-btn')
+  const openCurrentWindowButton = q<HTMLButtonElement>('#open-current-window-btn')
 
   searchInput.addEventListener('input', () => {
     const term = searchInput.value.trim().toLowerCase()
@@ -198,14 +201,20 @@ async function render(): Promise<void> {
     }
   })
 
-  openWindowButton.addEventListener('click', async () => {
-    openWindowButton.disabled = true
+  /**
+   * 还原这个文件夹。
+   *
+   * 去向由按钮直接决定（新窗口 / 当前窗口），不存全局偏好：它是「这一次要开到哪里」，
+   * 同一个文件夹两次可能选得不一样。
+   */
+  async function runRestore(target: RestoreOptions['target']): Promise<void> {
+    openNewWindowButton.disabled = true
+    openCurrentWindowButton.disabled = true
     // 这一句必须留：舍弃前要等导航提交（最多 2 秒），没有它界面看起来就是卡住的。
     status.className = 'status status--ok'
     status.textContent = '正在打开…'
     try {
-      const settings = await loadSettings()
-      await restoreFolder(folderId, {target: settings.restoreTarget})
+      await restoreFolder(folderId, {target})
       // 成功不留报账式提示：窗口已经打开，看得见。
       status.className = 'status'
       status.textContent = ''
@@ -213,9 +222,13 @@ async function render(): Promise<void> {
       status.className = 'status status--error'
       status.textContent = error instanceof Error ? error.message : String(error)
     } finally {
-      openWindowButton.disabled = false
+      openNewWindowButton.disabled = false
+      openCurrentWindowButton.disabled = false
     }
-  })
+  }
+
+  openNewWindowButton.addEventListener('click', () => void runRestore('newWindow'))
+  openCurrentWindowButton.addEventListener('click', () => void runRestore('currentWindow'))
 }
 
 void render()

@@ -11,7 +11,7 @@ import {
 } from '../shared/restore'
 import {loadSettings, updateSettings} from '../shared/settings'
 import {escapeHtml, faviconMarkup} from '../shared/tile'
-import type {BookmarkNode, Settings} from '../shared/types'
+import type {BookmarkNode, RestoreOptions, Settings} from '../shared/types'
 import {hostnameOf, separatorTitle} from '../shared/urls'
 import {
   createPanelElement,
@@ -69,7 +69,8 @@ const TEMPLATE = `
   <div class="row row--compact" id="sessions-all-host"></div>
   <ul class="tree" id="session-list"></ul>
   <div class="row">
-    <button type="button" class="btn btn--primary" id="open-window-btn" disabled>还原为窗口</button>
+    <button type="button" class="btn btn--primary" id="open-new-window-btn" disabled>还原到新窗口</button>
+    <button type="button" class="btn" id="open-current-window-btn" disabled>还原到当前窗口</button>
     <button type="button" class="btn" id="open-tabs-btn" disabled>只开标签页</button>
     <button type="button" class="btn" id="open-viewers-btn" disabled>打开阅读页</button>
   </div>
@@ -92,7 +93,8 @@ export function createArchivePanel(events: AppEvents): Panel {
   const collapseAllButton = q<HTMLButtonElement>(element, '#collapse-all-btn')
   const openRootButton = q<HTMLButtonElement>(element, '#open-root-btn')
   const sessionList = q<HTMLUListElement>(element, '#session-list')
-  const openWindowButton = q<HTMLButtonElement>(element, '#open-window-btn')
+  const openNewWindowButton = q<HTMLButtonElement>(element, '#open-new-window-btn')
+  const openCurrentWindowButton = q<HTMLButtonElement>(element, '#open-current-window-btn')
   const openTabsButton = q<HTMLButtonElement>(element, '#open-tabs-btn')
   const openViewersButton = q<HTMLButtonElement>(element, '#open-viewers-btn')
   const status = q<HTMLParagraphElement>(element, '#restore-status')
@@ -288,7 +290,7 @@ export function createArchivePanel(events: AppEvents): Panel {
     if (!archiveAvailable) {
       rendered = []
       sessionList.innerHTML =
-        '<li class="empty">还没有指定存档根文件夹，请到「设置」里选择。</li>'
+        '<li class="empty">还没有指定存档位置，请在上方选一个书签栏里的文件夹。</li>'
       updateBulkBar()
       return
     }
@@ -425,12 +427,16 @@ export function createArchivePanel(events: AppEvents): Panel {
     selectAll.update(kept, total, filtered)
 
     // 数量写在按钮上：得让人在点之前看见这一下会打开多少。
-    openWindowButton.textContent = `还原为窗口（${tabs} 个标签页 / ${targetsCount} 个存档）`
-    openTabsButton.textContent = `只开标签页（${tabs} 个标签页 / ${targetsCount} 个存档）`
+    // 「还原到新窗口」这一枚说「N 个窗口」而不是「N 个存档」——一个存档开一个窗口，
+    // 而这里真正要预告的就是会多出几个窗口。
+    openNewWindowButton.textContent = `还原到新窗口（${tabs} 个标签页 / ${targetsCount} 个窗口）`
+    openCurrentWindowButton.textContent = `还原到当前窗口（${tabs} 个标签页）`
+    openTabsButton.textContent = `只开标签页（${tabs} 个标签页）`
     openViewersButton.textContent = `打开阅读页（${targetsCount} 个）`
 
     const disabled = busy || targetsCount === 0
-    openWindowButton.disabled = disabled
+    openNewWindowButton.disabled = disabled
+    openCurrentWindowButton.disabled = disabled
     openTabsButton.disabled = disabled
     openViewersButton.disabled = disabled
     expandAllButton.disabled = busy || sessions.length === 0
@@ -481,9 +487,15 @@ export function createArchivePanel(events: AppEvents): Panel {
   /**
    * 打开还原目标。
    *
+   * `target` 由按钮直接决定（新窗口 / 当前窗口），不再是存起来的全局偏好：
+   * 它是「这一次要开到哪里」，同一个存档两次可能选得不一样。
+   *
    * `groupTabs: false` 是「只开标签页」——同一份勾选，只是不建分组。
    */
-  async function runRestore(groupTabs: boolean): Promise<void> {
+  async function runRestore(
+    target: RestoreOptions['target'],
+    groupTabs: boolean
+  ): Promise<void> {
     if (busy || !settings) return
     const folderIds = targets().map((view) => view.node.id)
     if (folderIds.length === 0) return
@@ -496,7 +508,7 @@ export function createArchivePanel(events: AppEvents): Panel {
     try {
       for (const folderId of folderIds) {
         await restoreFolder(folderId, {
-          target: settings.restoreTarget,
+          target,
           groupTabs,
           excludeBookmarkIds: excludedBookmarks
         })
@@ -704,8 +716,11 @@ export function createArchivePanel(events: AppEvents): Panel {
     if (settings?.archiveRootId) void runOpenViewers([settings.archiveRootId])
   })
 
-  openWindowButton.addEventListener('click', () => void runRestore(true))
-  openTabsButton.addEventListener('click', () => void runRestore(false))
+  openNewWindowButton.addEventListener('click', () => void runRestore('newWindow', true))
+  openCurrentWindowButton.addEventListener('click', () => void runRestore('currentWindow', true))
+  // 「只开标签页」固定开到新窗口：它与「还原到新窗口」是同一件事的轻重两档，
+  // 都不打断正在用的窗口。把几十个标签塞进当前窗口是不可撤销的，不适合当默认。
+  openTabsButton.addEventListener('click', () => void runRestore('newWindow', false))
   openViewersButton.addEventListener('click', () =>
     void runOpenViewers(targets().map((view) => view.node.id))
   )

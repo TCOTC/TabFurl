@@ -122,12 +122,10 @@ export interface Settings {
    * 不再额外建一层，也不往「其他书签」里写任何东西。
    */
   archiveRootId: string
-  restoreTarget: RestoreOptions['target']
   /** 最近一次保存创建的会话文件夹 id，用于撤销。 */
   lastSessionFolderId?: string
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  archiveRootId: '',
-  restoreTarget: 'newWindow'
+  archiveRootId: ''
 }

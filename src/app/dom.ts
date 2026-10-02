@@ -16,7 +16,7 @@ export interface Panel {
 export interface AppEvents {
   /** 存档树变了：保存、撤销、删除、改名。 */
   archiveChanged(): Promise<void>
-  /** 设置变了：存档根、会话命名方式、还原行为。 */
+  /** 存档位置变了：保存与存档两块的内容都换了根。 */
   settingsChanged(): Promise<void>
 }
 
