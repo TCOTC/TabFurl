@@ -33,6 +33,15 @@ pnpm verify         # 产物自检（需先 build）：权限、host 权限、�
 pnpm icons          # 重新生成占位图标
 ```
 
+`pnpm dev` 有两个坑（2026-10-02 实测）：
+
+1. **它不启动你系统里的 Chrome**，而是用独立的 Chrome for Testing，首次需
+   `pnpm exec extension install chrome`（下载到 `%LOCALAPPDATA%\extension.js\browsers\chrome`）。
+   不装的话 `dev` 会报 `Chrome for Testing isn't installed`，浏览器起不来但 dev server 照样挂着。
+2. **它会把 `dist/chrome` 覆盖成开发版产物**：清单里多出 `scripting` 与 `management` 权限，
+   并写入 `extension-js-control.json`。此时 `pnpm verify` 必然报「权限与预期不一致」。
+   所以 **`dev` 之后要再跑一次 `pnpm build`**，才能拿到可自检、可对外分发的干净产物。
+
 ## 目录结构
 
 ```

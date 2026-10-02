@@ -46,6 +46,31 @@ pnpm icons          # 重新生成 src/images/ 下的占位图标
 
 注意 `pnpm build` 要排在 `pnpm typecheck` 之前：`chrome` 全局类型与 `*.css` 模块声明的来源 `extension-env.d.ts` 由构建生成、不入库，新 clone 后直接跑 `typecheck` 会报一堆 `Cannot find name 'chrome'`。
 
+## 在 Chrome 里加载
+
+两条路，任选其一：
+
+**A. 手动加载（推荐，用你自己的 Chrome、不用下载）**
+
+1. `pnpm build` 生成 `dist/chrome/`
+2. 打开 `chrome://extensions`，右上角开启「开发者模式」
+3. 点「加载已解压的扩展程序」，选 `dist/chrome` 目录
+4. 点工具栏的 TabFurl 图标 → 侧边栏打开
+5. 改完代码：重新 `pnpm build`，回到扩展页点卡片上的刷新（↻），再重开侧边栏
+
+**B. `pnpm dev`（热重载，但不用你的 Chrome）**
+
+它启动的是独立的 **Chrome for Testing**，首次需要先下载：
+
+```bash
+pnpm exec extension install chrome   # 约 150 MB，装到 %LOCALAPPDATA%\extension.js\browsers\chrome
+pnpm dev
+```
+
+优点是改文件即时生效、profile 存在 `dist/extension-profile-chrome` 里跨次保留；代价是一个干净的浏览器实例（没登录任何站点）。
+
+⚠️ **`pnpm dev` 会把 `dist/chrome` 覆盖成开发版产物**（清单多出 `scripting` 与 `management` 权限，并写入 `extension-js-control.json`），此时 `pnpm verify` 必然失败。想拿到干净产物就再跑一次 `pnpm build`。
+
 ## 测试
 
 `pnpm test` 用 Node 内置的 `node:test` 跑 `src/shared/*.test.ts`，不引入任何测试框架：
