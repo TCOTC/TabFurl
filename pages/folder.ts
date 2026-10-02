@@ -10,6 +10,20 @@ import './folder.css'
 /** Chrome 本地 favicon 缓存端点：读缓存、不联网（配合 `faviconMarkup` 使用）。 */
 const FAVICON_BASE = chrome.runtime.getURL('_favicon/')
 
+/**
+ * 子文件夹卡片上的图标。
+ *
+ * 之前用的是 `▸`，那是**展开/折叠**的指示符，而这里的卡片是个链接（点进去看内容），
+ * 语义对不上。改用内联 SVG 而不是 emoji：emoji 各平台配色不一，而这个要跟着主题走
+ * （`currentColor` 会继承 `.folder-tile` 的前景色）。
+ */
+const FOLDER_ICON = `
+  <svg class="folder-tile__icon" viewBox="0 0 16 16">
+    <path d="M1.75 4.5A1.5 1.5 0 0 1 3.25 3h2.6a1 1 0 0 1 .8.4l.9 1.2h5.2A1.5 1.5 0 0 1 14.25 6.1v5.4A1.5 1.5 0 0 1 12.75 13H3.25A1.5 1.5 0 0 1 1.75 11.5Z"
+          fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round" />
+  </svg>
+`
+
 function q<T extends Element>(selector: string): T {
   const element = document.querySelector(selector)
   if (!element) throw new Error(`缺少必需的 DOM 节点：${selector}`)
@@ -54,7 +68,7 @@ function subfolderCardMarkup(folder: BookmarkNode): string {
   const folderCount = (folder.children ?? []).filter((child) => !child.url).length
   return `
     <a class="bookmark" href="${escapeHtml(folderHref(folder.id))}">
-      <span class="folder-tile" aria-hidden="true">▸</span>
+      <span class="folder-tile" aria-hidden="true">${FOLDER_ICON}</span>
       <span class="bookmark__main">
         <span class="bookmark__title">${escapeHtml(folder.title)}</span>
         <span class="bookmark__host">${bookmarks.length} 个书签${
