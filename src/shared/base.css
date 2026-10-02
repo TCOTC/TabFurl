@@ -122,6 +122,33 @@ body {
   gap: 6px;
 }
 
+/* 顶层三态勾选框：原生 checkbox 的 indeterminate 就是第三种状态。 */
+.select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.select-all input {
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+
+.select-all:hover {
+  color: var(--text);
+}
+
+/* 没有可勾的项：整块变淡且不能点，但仍占位，免得版面抽动。 */
+.select-all:has(input:disabled) {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .badge {
   padding: 1px 7px;
   border-radius: 999px;

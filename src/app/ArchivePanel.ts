@@ -14,6 +14,7 @@ import type {BookmarkNode, Settings} from '../shared/types'
 import {hostnameOf} from '../shared/urls'
 import {
   createPanelElement,
+  createSelectAll,
   errorText,
   q,
   setStatus,
@@ -37,16 +38,14 @@ const TEMPLATE = `
            placeholder="搜索存档（名称或里面的标签页）" autocomplete="off" />
     <button type="button" class="btn btn--ghost btn--sm" id="expand-all-btn">全部展开</button>
     <button type="button" class="btn btn--ghost btn--sm" id="collapse-all-btn">全部折叠</button>
-    <button type="button" class="btn btn--ghost btn--sm" id="sessions-all-btn">全选</button>
-    <button type="button" class="btn btn--ghost btn--sm" id="sessions-none-btn">清空</button>
     <button type="button" class="btn btn--ghost btn--sm" id="open-root-btn" hidden>打开存档根</button>
   </div>
+  <div class="row row--compact" id="sessions-all-host"></div>
   <ul class="tree" id="session-list"></ul>
   <div class="row">
     <button type="button" class="btn btn--primary" id="open-window-btn" disabled>还原为窗口</button>
     <button type="button" class="btn" id="open-tabs-btn" disabled>只开标签页</button>
     <button type="button" class="btn" id="open-viewers-btn" disabled>打开阅读页</button>
-    <span class="muted" id="sessions-selected"></span>
   </div>
   <p class="status" id="restore-status" hidden></p>
 `
@@ -65,15 +64,28 @@ export function createArchivePanel(events: AppEvents): Panel {
   const searchInput = q<HTMLInputElement>(element, '#archive-search')
   const expandAllButton = q<HTMLButtonElement>(element, '#expand-all-btn')
   const collapseAllButton = q<HTMLButtonElement>(element, '#collapse-all-btn')
-  const sessionsAllButton = q<HTMLButtonElement>(element, '#sessions-all-btn')
-  const sessionsNoneButton = q<HTMLButtonElement>(element, '#sessions-none-btn')
   const openRootButton = q<HTMLButtonElement>(element, '#open-root-btn')
   const sessionList = q<HTMLUListElement>(element, '#session-list')
   const openWindowButton = q<HTMLButtonElement>(element, '#open-window-btn')
   const openTabsButton = q<HTMLButtonElement>(element, '#open-tabs-btn')
   const openViewersButton = q<HTMLButtonElement>(element, '#open-viewers-btn')
-  const selectedLabel = q<HTMLSpanElement>(element, '#sessions-selected')
   const status = q<HTMLParagraphElement>(element, '#restore-status')
+
+  const selectAll = createSelectAll(q<HTMLDivElement>(element, '#sessions-all-host'), {
+    describe: (kept, total) => {
+      if (total === 0) return '没有可选的存档'
+      if (kept === 0) return `未选中存档（共 ${total} 个）`
+      const tabs = selectedBookmarkCount()
+      return `已选 ${kept} / ${total} 个存档 · ${tabs} 个标签页`
+    },
+    onChange: (wantAll) => {
+      for (const view of rendered) {
+        if (wantAll) selectedSessions.add(view.node.id)
+        else selectedSessions.delete(view.node.id)
+      }
+      render()
+    }
+  })
 
   let settings: Settings | undefined
   let archiveAvailable = false
@@ -287,6 +299,14 @@ export function createArchivePanel(events: AppEvents): Panel {
     }
   }
 
+  /**
+   * 选中的存档数——只数**当前可见**的（搜索过滤后的），
+   * 因为三态勾选框管的是「列表里这些」，被搜索藏起来的不该把状态顶成「部分」。
+   */
+  function visibleSelectedCount(): number {
+    return rendered.filter((view) => selectedSessions.has(view.node.id)).length
+  }
+
   function selectedBookmarkCount(): number {
     let total = 0
     for (const id of selectedSessions) {
@@ -298,17 +318,13 @@ export function createArchivePanel(events: AppEvents): Panel {
 
   function updateBulkBar(): void {
     const count = selectedSessions.size
-    const tabs = selectedBookmarkCount()
 
-    selectedLabel.textContent =
-      count === 0 ? '未选中存档' : `已选 ${count} 个存档 · ${tabs} 个标签页`
+    selectAll.update(visibleSelectedCount(), rendered.length)
 
     const disabled = busy || count === 0
     openWindowButton.disabled = disabled
     openTabsButton.disabled = disabled
     openViewersButton.disabled = disabled
-    sessionsAllButton.disabled = busy || rendered.length === 0
-    sessionsNoneButton.disabled = busy || count === 0
     expandAllButton.disabled = busy || sessions.length === 0
     collapseAllButton.disabled = busy || sessions.length === 0
   }
@@ -566,16 +582,6 @@ export function createArchivePanel(events: AppEvents): Panel {
 
   collapseAllButton.addEventListener('click', () => {
     expanded.clear()
-    render()
-  })
-
-  sessionsAllButton.addEventListener('click', () => {
-    for (const view of rendered) selectedSessions.add(view.node.id)
-    render()
-  })
-
-  sessionsNoneButton.addEventListener('click', () => {
-    selectedSessions.clear()
     render()
   })
 

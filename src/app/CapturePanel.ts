@@ -14,6 +14,7 @@ import type {Settings, TabSnapshot, WindowSnapshot} from '../shared/types'
 import {hostnameOf} from '../shared/urls'
 import {
   createPanelElement,
+  createSelectAll,
   errorText,
   q,
   setStatus,
@@ -33,11 +34,7 @@ const TEMPLATE = `
   </label>
   <p class="muted" id="capture-preview"></p>
   <p class="muted" id="capture-hint"></p>
-  <div class="row row--compact">
-    <button type="button" class="btn btn--ghost btn--sm" id="tabs-all-btn">全选</button>
-    <button type="button" class="btn btn--ghost btn--sm" id="tabs-none-btn">清空</button>
-    <span class="muted" id="tabs-selected"></span>
-  </div>
+  <div class="row row--compact" id="tabs-all-host"></div>
   <ul class="pick-list" id="tab-list"></ul>
   <div class="row">
     <button type="button" class="btn btn--primary" id="capture-btn">保存当前窗口</button>
@@ -60,13 +57,24 @@ export function createCapturePanel(events: AppEvents): Panel {
   const preview = q<HTMLParagraphElement>(element, '#capture-preview')
   const nameInput = q<HTMLInputElement>(element, '#session-name')
   const countBadge = q<HTMLSpanElement>(element, '#capture-count')
-  const allButton = q<HTMLButtonElement>(element, '#tabs-all-btn')
-  const noneButton = q<HTMLButtonElement>(element, '#tabs-none-btn')
-  const selectedLabel = q<HTMLSpanElement>(element, '#tabs-selected')
   const tabList = q<HTMLUListElement>(element, '#tab-list')
   const captureButton = q<HTMLButtonElement>(element, '#capture-btn')
   const undoButton = q<HTMLButtonElement>(element, '#undo-btn')
   const status = q<HTMLParagraphElement>(element, '#capture-status')
+
+  const selectAll = createSelectAll(q<HTMLDivElement>(element, '#tabs-all-host'), {
+    describe: (kept, total) =>
+      total === 0
+        ? '当前窗口没有可保存的标签页'
+        : kept === total
+          ? `已全选 ${total} 个标签页`
+          : `已选 ${kept} / ${total} 个标签页`,
+    onChange: (wantAll) => {
+      if (wantAll) excluded.clear()
+      else for (const tabId of allTabIds()) excluded.add(tabId)
+      syncStates()
+    }
+  })
 
   let settings: Settings | undefined
   let archiveAvailable = false
@@ -91,6 +99,14 @@ export function createCapturePanel(events: AppEvents): Panel {
       ungrouped: [],
       skipped: 0
     }
+  }
+
+  /** 当前快照里的全部标签 id，供「全选 / 全不选」用。 */
+  function allTabIds(): number[] {
+    return [
+      ...snapshot.groups.flatMap((bucket) => bucket.tabs.map((tab) => tab.tabId)),
+      ...snapshot.ungrouped.map((tab) => tab.tabId)
+    ]
   }
 
   function tabMarkup(tab: TabSnapshot): string {
@@ -177,15 +193,12 @@ export function createCapturePanel(events: AppEvents): Panel {
     const total = countSnapshotTabs(snapshot)
     const kept = countSnapshotTabs(selectTabs(snapshot, excluded))
 
-    selectedLabel.textContent =
-      total === 0 ? '' : kept === total ? `已全选 ${total} 个` : `已选 ${kept} / ${total} 个`
+    selectAll.update(kept, total)
 
     captureButton.textContent = busy
       ? '保存中…'
       : kept === total ? '保存整个窗口' : `保存选中的 ${kept} 个标签页`
     captureButton.disabled = busy || kept === 0 || !archiveAvailable
-    allButton.disabled = busy || total === 0
-    noneButton.disabled = busy || total === 0
     undoButton.disabled = busy
   }
 
@@ -287,19 +300,6 @@ export function createCapturePanel(events: AppEvents): Panel {
       }
     }
 
-    syncStates()
-  })
-
-  allButton.addEventListener('click', () => {
-    excluded.clear()
-    render()
-  })
-
-  noneButton.addEventListener('click', () => {
-    for (const child of children) {
-      if (child.kind === 'tab') excluded.add(child.tab.tabId)
-      else for (const tab of child.tabs) excluded.add(tab.tabId)
-    }
     syncStates()
   })
 

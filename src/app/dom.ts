@@ -56,3 +56,80 @@ export function createPanelElement(id: string): HTMLElement {
   element.setAttribute('aria-labelledby', `tab-${id}`)
   return element
 }
+
+/** 勾选的三种状态。 */
+export type TriState = 'all' | 'some' | 'none'
+
+/**
+ * 由「保留数 / 总数」推出三态。
+ *
+ * `total` 为 0（没有可勾的项）时一律算 `none`：此时勾选框应当不可用，而不是显示成「全选」。
+ */
+export function triState(kept: number, total: number): TriState {
+  if (total <= 0 || kept <= 0) return 'none'
+  return kept >= total ? 'all' : 'some'
+}
+
+/**
+ * 点一下三态勾选框该变成什么。
+ *
+ * 「全选」→ 全不选（清空）；「部分」「全不选」→ 全选。
+ * 这是 Windows 资源管理器一类界面的惯例：部分选择时点击的意图是「干脆全要」。
+ *
+ * 之所以不读 `input.checked` 的取反结果：原生 indeterminate 被点击时只是把 `checked`
+ * 取反，在「部分」状态下（checked 为真）会变成「全不选」，与惯例相反。
+ */
+export function nextSelectAll(state: TriState): boolean {
+  return state !== 'all'
+}
+
+/** 顶层三态勾选框。 */
+export interface SelectAllControl {
+  readonly input: HTMLInputElement
+  /** 用「保留数 / 总数」刷新三态与文案。 */
+  update(kept: number, total: number): void
+}
+
+/**
+ * 建一个顶层三态勾选框，追加到 `host` 里。
+ *
+ * 原生 `<input type="checkbox">` 就能表示三态——`indeterminate` 是 **DOM 属性**，
+ * 所以不能写进 `innerHTML`，必须建好元素后用 JS 设置（这也常被误认为「原生不支持」）。
+ */
+export function createSelectAll(
+  host: HTMLElement,
+  options: {
+    /** 由保留数与总数生成文案。 */
+    describe(kept: number, total: number): string
+    /** 用户点击后的意图：true = 全选，false = 全不选。 */
+    onChange(selectAll: boolean): void
+  }
+): SelectAllControl {
+  const label = document.createElement('label')
+  label.className = 'select-all'
+
+  const input = document.createElement('input')
+  input.type = 'checkbox'
+
+  const text = document.createElement('span')
+
+  label.append(input, text)
+  host.append(label)
+
+  let state: TriState = 'none'
+
+  input.addEventListener('change', () => {
+    options.onChange(nextSelectAll(state))
+  })
+
+  return {
+    input,
+    update(kept: number, total: number): void {
+      state = triState(kept, total)
+      input.checked = state !== 'none'
+      input.indeterminate = state === 'some'
+      input.disabled = total <= 0
+      text.textContent = options.describe(kept, total)
+    }
+  }
+}
