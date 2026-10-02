@@ -50,6 +50,8 @@ TabFurl 只补这两块。它**不做**通用收藏管理：新增标签、笔�
 - **存档根是书签栏里的一个已有文件夹，由用户在顶部的「存档位置」里指定。** 扩展不建文件夹、不往「其他书签」里写任何东西，
   存档直接写进选中的文件夹。代价是「选中文件夹下的每个子文件夹都会被当成一次存档」，所以最好专为它建一个文件夹。
   这个选择器挂在标签栏旁边而不是某个面板里：保存与存档两块都要用它，塞进任一块都会让另一块看起来没配置。
+  **候选只来自书签栏**（`getBookmarksBarId()` 认 id `1`，认不出就报错），**绝不退化为「其他书签」**——
+  存档位置只能来自用户的明确指定，扩展不替用户决定往哪里写；也不提供「自动创建存档根」「迁移旧存档根」这类动作。
 - **直接子级严格按窗口顺序排列。** 标签分组建成了子文件夹，窗口里没进分组的标签建成散装书签，**插在它们原来的位置上**——不会被集中挪到末尾，也不会有「未分组」这一层。窗口里一个分组都没有时，结果就是一列散装书签，所以「保存 → 还原」始终是对称的。
 - **会话文件夹永远在存档根的直接下级。** 层级最多三级（会话 → 分组 → 书签），与 Chrome 标签分组不支持嵌套这一点保持一致。
 
@@ -215,23 +217,38 @@ TabFurl 把它当成书签树里的组织记号，而不是一个页面：
 ## 七、模块划分
 
 ```
-src/shared/         与界面无关的核心，全部可独立复用
+src/shared/         与界面无关的核心，全部可独立复用（**不得 import 界面模块**）
   types.ts        领域类型 + 默认设置
   naming.ts       命名规则（纯函数，无 IO）
-  urls.ts         URL / 主机名 / 占位块小工具
+  urls.ts         URL / 主机名 / 分隔线判定与标题清洗
   bookmarks.ts    书签树读写与展开
   capture.ts      窗口 → 书签（F1）
   restore.ts      书签 → 窗口、文件夹启动器（F2/F3）
   settings.ts     chrome.storage 读写
-  tile.ts         占位块 HTML 生成
-  base.css        设计变量与基础组件
+  tile.ts         favicon 标记与 HTML 转义
+  base.css        设计变量与基础组件（尺度、条目排版）
+  *.test.ts       与实现同目录的单元测试（node:test，给 chrome.* 打桩）
 
 src/app/            主界面的界面模块（只被 pages/app.ts 引用）
-  App.ts          外壳：顶部两个 Tab + 存档位置选择器、面板装配、跨面板刷新
-  ArchiveRootPicker.ts 存档位置选择器（挂在标签栏旁）
+  App.ts          外壳：顶栏 + 面板装配 + 跳面板刷新 + hash 同步
+  ArchiveRootPicker.ts 存档位置选择器（挂在标签栏旁，选择即落盘）
   CapturePanel.ts 保存面板
   ArchivePanel.ts 存档面板
   dom.ts          面板契约（Panel / AppEvents）与共用小工具
+
+src/manifest.json   清单来源（**不要**放到 public/，构建会直接失败）
+src/background.ts   点图标 → 在独立标签页里打开主界面
+src/images/         图标
+
+pages/              构建工具的特殊目录：放「未被清单声明的 HTML」，产物路径 = pages/<name>.html
+  app.html/.ts      主界面入口
+  folder.html/.ts   收藏文件夹阅读页
+
+tools/              纯 Node，无第三方依赖
+  generate-icons.mjs 占位图标生成器
+  verify-build.mjs   产物自检
+  watch.mjs          自动重建（监视 src/ 与 pages/）
+  ts-hooks.mjs       测试专用的 TS 解析钩子（给无扩展名的相对导入补 .ts）
 ```
 
 依赖方向单向：`pages/` → `src/app/` → `src/shared/`。**`shared/` 不得 import 任何界面模块**；
@@ -309,26 +326,32 @@ src/app/            主界面的界面模块（只被 pages/app.ts 引用）
 > 但该前提是错的——`tabs` 已经在权限集里，而 `favicon` 只在尚未申请 `tabs` 或主机权限时才触发警告，
 > 所以加载该权限不会让权限提示语多出一句。
 
-## 十、开发命令
+## 十、工具链取舍
 
-```bash
-pnpm install
-pnpm build        # → dist/chrome/（同时生成 extension-env.d.ts）
-pnpm dev          # 同上，但不混淆：单次开发用构建；只构建，不启动浏览器
-pnpm watch        # 监视 src/ 与 pages/，改完自动重建（日常开发用这个）
-pnpm test         # 单元测试（node:test；需要 Node >= 23.6）
-pnpm typecheck    # 构建不做类型检查，必须单独跑，且需先 build
-pnpm verify       # 产物自检：权限漂移 / host 权限 / Firefox 残留 / 入口缺失 / 中文编码 / 测试文件泄漏
-pnpm icons        # 重新生成占位图标
-```
+命令速查在 `AGENTS.md`（它每次都会被读），这里只记「为什么这么选」。
 
-加载进 Chrome：`chrome://extensions` → 开启开发者模式 → 「加载已解压的扩展程序」→ 选 `dist/chrome`。
-`pnpm watch` 重建后，点扩展卡片上的刷新（↻）再重开主界面标签页。
+**`pnpm watch` 是自己的脚本（`tools/watch.mjs`），只调 `extension build`**，因此产物的权限与生产完全一致。
+没有用它自带的 `extension dev --no-browser`，因为两条路都不通（2026-10-02 实测）：
 
-`pnpm watch` 是自己的脚本（`tools/watch.mjs`），只调 `extension build`，因此产物的权限与生产完全一致。
-没有用它自带的 `extension dev --no-browser`，因为那条路必然产出开发版清单（多出 `scripting` 与
-`management` 权限），会破坏权限最小化。
+- `extension build` **没有 `--watch`**，真正的监视能力只存在于 `dev` 里。
+- `extension dev --no-browser` 确实能只监视不启动浏览器（日志显示 `Chrome (no-browser mode)`），
+  但它**必然产出开发版清单**——多出 `scripting` 与 `management` 两个权限并写入 CSP，
+  `pnpm verify` 会失败；`--no-reload` 也去不掉这两个权限。
 
-`extension dev` / `start` / `preview` 没有做成脚本：它们都要求下载独立的 Chrome for Testing（约 150 MB），
-而换来的是热重载与一套控制桥；本项目不做自动化验收。需要时临时跑 `pnpm exec extension dev`，
-但注意它会把 `dist/chrome` 换成开发版清单（多出 `scripting` 与 `management` 权限），跑完要再 `pnpm build`。
+所以监视能力由 `fs.watch` 补（`tools/watch.mjs`，去抖 150ms），而不是换构建器。
+
+**`extension dev` / `start` / `preview` 没有做成脚本**（同为 2026-10-02 决定）：它们都要求先下载独立的
+Chrome for Testing（约 150 MB，`pnpm exec extension install chrome`），换来的是浏览器自动加载与热重载；
+本项目不做自动化验收，于是换成「`pnpm watch` + 手动点卡片刷新」，省掉一个重依赖。
+
+需要时仍可临时跑 `pnpm exec extension dev`，但要先知道两件事：
+
+1. **它不启动你系统里的 Chrome**，只用托管缓存里的 Chrome for Testing。没装时浏览器起不来，
+   而 dev server 会照常打印「ready」并继续挂着——只看这一行容易误判成功。
+2. **它会把 `dist/chrome` 覆盖成开发版产物**：清单里多出 `scripting` 与 `management` 权限，
+   并写入 `extension-js-control.json`。此时 `pnpm verify` 必然报「权限与预期不一致」。
+   所以 **`dev` 之后要再跑一次 `pnpm build`**，才能拿到可自检、可对外分发的干净产物。
+
+**为什么这套取舍值得守**：`pnpm verify` 是本项目唯一能自动拦住「权限悄悄变多」的关卡，
+而权限最小化是第 1 条约束（见 `AGENTS.md`）。任何让 `verify` 常态化失败的开发流程，
+都会把这个关卡变成「反正它总是红的」——那就等于没有。

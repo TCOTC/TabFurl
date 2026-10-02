@@ -35,64 +35,23 @@ pnpm icons          # 重新生成占位图标
 ```
 
 日常开发用 `pnpm watch`：权限与生产构建完全一致（所以 `pnpm verify` 照常通过），但不混淆，
-浏览器里报错时的堆栈是真实函数名；改完代码它会自动重建。代价只是体积大一倍（都是本地产物，无所谓）。
+浏览器里报错时的堆栈是真实函数名。
 
-⚠️ **`watch` / `dev` 只构建，不启动浏览器、也没有热重载。** 名字取得短是为了顺手。
-自动重建之后仍需自己去 `chrome://extensions` 点扩展卡片上的刷新（↻）再重开主界面标签页。
+⚠️ **`watch` / `dev` 只构建，不启动浏览器、也没有热重载。** 重建后仍需自己去 `chrome://extensions`
+点扩展卡片上的刷新（↻）再重开主界面标签页。
 
-**`extension dev` / `start` / `preview` 没有做成脚本**（2026-10-02 决定）。它们都要求先下载独立的
-Chrome for Testing（约 150 MB，`pnpm exec extension install chrome`），换来的是浏览器自动加载与热重载。
-本项目不做自动化验收，于是换成「`pnpm watch` + 手动点刷新」，省掉一个重依赖。
-
-顺带记下两条实测结论，免得以后再试一遍：
-
-- `extension build` **没有 `--watch`**，真正的监视能力只存在于 `dev` 里。
-- `extension dev --no-browser` 确实能只监视不启动浏览器（日志显示 `Chrome (no-browser mode)`），
-  但它**必然产出开发版清单**——多出 `scripting` 与 `management` 两个权限并写入 CSP，
-  `pnpm verify` 会失败；`--no-reload` 也去不掉这两个权限。
-  这就是 `tools/watch.mjs` 自己调 `extension build` 而不用 `dev --no-browser` 的原因。
-
-需要时临时跑 `pnpm exec extension dev`，但要知道两件事（2026-10-02 实测）：
-
-1. **它不启动你系统里的 Chrome**，只用托管缓存里的 Chrome for Testing。没装时浏览器起不来，
-   而 dev server 会照常打印「ready」并继续挂着——只看这一行容易误判成功。
-2. **它会把 `dist/chrome` 覆盖成开发版产物**：清单里多出 `scripting` 与 `management` 权限，
-   并写入 `extension-js-control.json`。此时 `pnpm verify` 必然报「权限与预期不一致」。
-   所以 **`dev` 之后要再跑一次 `pnpm build`**，才能拿到可自检、可对外分发的干净产物。
+**不要给 `extension dev` / `start` / `preview` 加脚本**：它们要求先下载独立的 Chrome for Testing（约 150 MB），
+而且**必然产出开发版清单**（多出 `scripting` / `management` 权限，`pnpm verify` 必失败）。
+这就是 `tools/watch.mjs` 自己调 `extension build` 的原因；`extension build` 本身没有 `--watch`，
+所以监视能力由 `fs.watch` 补。完整论证与实测细节（含「临时跑完 dev 要再 build 一次」）见 `docs/design.md` 十。
 
 ## 目录结构
 
-```
-src/
-  manifest.json     入口声明（纯 MV3，不含任何 browser-prefixed 字段）
-  background.ts     只负责「点图标 → 在独立标签页里打开主界面」
-  shared/           与界面无关的核心逻辑，全部可独立复用
-    types.ts        领域类型 + 默认设置
-    naming.ts       文件夹命名规则（纯函数，无 IO）
-    urls.ts         URL / 主机名 / 占位块小工具
-    bookmarks.ts    书签树读写与展开
-    capture.ts      窗口 → 书签
-    restore.ts      书签 → 窗口 / 标签页
-    settings.ts     Chrome storage 读写
-    tile.ts         占位块 HTML 生成
-    base.css        全站共用的设计变量与基础组件
-    *.test.ts       与实际文件同目录的单元测试（node:test，给 chrome.* 打桩）
-  app/              主界面的界面模块（只被 pages/app.ts 引用）
-    App.ts          外壳：顶部两个 Tab + 存档位置选择器、面板装配、跳面板刷新
-    ArchiveRootPicker.ts 存档位置选择器（挂在标签栏旁，选择即落盘）
-    CapturePanel.ts 保存面板
-    ArchivePanel.ts 存档面板
-    dom.ts          面板契约（Panel / AppEvents）与共用小工具
-  images/           图标
-pages/
-  app.html/.ts      主界面入口（独立标签页；由特殊文件夹 pages/ 编译，路径即 pages/app.html）
-  folder.html/.ts   收藏文件夹阅读页（同上，路径即 pages/folder.html）
-tools/
-  generate-icons.mjs 占位图标生成器（纯 Node，无第三方依赖）
-  verify-build.mjs   产物自检
-  watch.mjs          自动重建（监视 src/ 与 pages/，纯 Node）
-  ts-hooks.mjs       测试专用的 TS 解析钩子（给无扩展名的相对导入补 .ts）
-```
+只有三条容易踩错，其余（完整清单与各文件职责）见 `docs/design.md` 七：
+
+- `src/manifest.json` 是清单来源，**不要**挪到 `public/`（构建会直接失败）。
+- `pages/` 是构建工具的**特殊目录**（放「未被清单声明的 HTML」）；把主界面挪回 `src/` 就不会产出。
+- `extension-env.d.ts` 由构建生成且已 gitignore，**不要手写、不要提交**。
 
 ## 不可破坏的约定
 
@@ -112,15 +71,18 @@ tools/
    别在页面样式里重写一遍 flex 与省略号——那种重复每多一处就会漏掉一次 `min-width: 0`（省略号就失效了）。
    **盒子套盒子时，外圆角 = 内圆角 + 内边距**（写成 `calc(内圆角 + 内边距)`，别各写一个值）：差值不对，内块的四个角就会顶到外框的弧线上。
 10. **测试只用 `node:test`**：不引入 vitest / jest / tsx 等框架。测试文件与实现同目录（`naming.test.ts`），`chrome.*` 靠给 `globalThis.chrome` 赋值来打桩，不给产品代码加依赖注入。
-11. **会话文件夹的直接子级必须按窗口顺序排列**：标签分组建子文件夹，未分组的标签建成散装书签插在原位，**不要**把它们收进「未分组」文件夹。两个实现是逆运算，改一处必须同步另一处：`capture.ts` 的 `planSessionChildren()` ↔ `restore.ts` 的 `planRestore()`（前者按 `TabSnapshot.index` 归并，后者按子级数组顺序还原）。
+11. **会话文件夹的直接子级必须按窗口顺序排列**：标签分组建子文件夹，未分组的标签建成散装书签插在原位，**不要**把它们收进「未分组」文件夹。
+    两个实现是逆运算，改一处必须同步另一处：`capture.ts` 的 `planSessionChildren()` ↔ `restore.ts` 的 `planRestore()`
+    （前者按 `TabSnapshot.index` 归并，后者按子级数组顺序还原）。规则与理由见 `docs/design.md` 三、五。
 12. **界面不得自己遍历标签／书签树**：勾选清单直接用 `planSessionChildren()` / `planRestore()` 的产物渲染，
     「将保存／将还原 N 个」也由 `countSnapshotTabs(selectTabs(...))` / `applyExclusions()` 算。
     一旦界面自己走一遍树，顺序或过滤口径就会与写入/还原脱钩——这是第 11 条那一对函数新增消费方时最容易出的错。
-13. **存档位置由用户在书签栏里指定，扩展不建文件夹**：存档根的候选只来自 `getBookmarksBarId()`（认 id `1`，认不出就报错），**绝不退化为「其他书签」**。不要给扩展加「自动创建 / 迁移存档根」这类行为。
-    它由 `src/app/ArchiveRootPicker.ts` 选择，**挂在标签栏旁边（不在面板里）**：保存与存档两块都要用它，塞进任一块都会让另一块看起来没配置。选择即落盘，没有「保存设置」这一步。
-14. **还原去向是按钮，不是存起来的偏好**：打开标签去哪里（新窗口 / 当前窗口）属于「这一次要开到哪里」，同一个存档两次可能选得不一样，所以做成两个按钮。
-    **不要把它加回 `Settings`**，也不要为了省一个按钮而合并它们。「只开标签页」固定开新窗口：它与「还原到新窗口」是同一件事的轻重两档，都不打断正在用的窗口。
-    阅读页（`pages/folder.ts`）同样给出这两个按钮。
+13. **存档位置由用户在书签栏里指定，扩展不建文件夹**：候选**只**来自 `getBookmarksBarId()`（认 id `1`，认不出就报错），
+    **绝不退化为「其他书签」**，也不要加「自动创建 / 迁移存档根」这类行为。
+    它由 `src/app/ArchiveRootPicker.ts` 提供，**挂在标签栏旁边（不在面板里）**，选中即落盘。理由见 `docs/design.md` 三。
+14. **还原去向是按钮，不是存起来的偏好**：**不要把它加回 `Settings`**，也不要为了省一个按钮而合并它们。
+    「只开标签页」固定开新窗口：它与「还原到新窗口」是同一件事的轻重两档，都不打断正在用的窗口。
+    阅读页（`pages/folder.ts`）同样给出这两个按钮。理由见 `docs/design.md` 五。
 15. **勾选用「排除集」而不是「选中集」**：默认什么都不排除，界面上才不会在每次重渲染后把用户没碰过的项弄丢。标签用 `TabSnapshot.tabId`（标签存活期间不变），书签用书签 id；**不要用 `TabSnapshot.index`**，它会被别的标签关闭而整体前移。
     两侧的**默认值相反，是刻意的**：保存侧默认全选（语义就是「把当前窗口收起来」）；存档侧默认一个都不勾（还原是「要打开哪些」，默认全开太危险，而且刚存完的存档不该被下一次还原顺手打开）。
     存档侧的「默认不勾」仍用排除集实现：多维护一份「见过的书签 id」（`knownBookmarks`），没见过的默认算排除。
@@ -132,15 +94,13 @@ tools/
 17. **叶子勾选框的状态必须在渲染后手工同步**：`innerHTML` 写不出 `checked`，所以叶子渲染出来一律是未勾选。
     若忘了在 `applyContainerStates()` / `syncStates()` 里按模型回填，症状是**叶子永远显示未勾选**，
     而点一下反而把「未排除」改成「勾上」——看上去完全没反应。容器（三态）也必须回填，否则它会与实际状态脱钩。
-18. **勾选只有一个维度**：不要同时维护「哪些项被选中」与「哪些项被排除」两套集合——
-    那会让列表看着全选、而按钮说没选中。统一用「排除集」，各层三态由它聚合出来。
-19. **副文案不能拿「还会还原的枚数」当「有几个标签」写**：存档侧默认不勾，那样写会显示成「0 个标签」，
-    看着像这个存档是空的。要以「已选」为主：`未勾选 · 共 5 枚标签` / `已选 2 / 5 枚标签` / `已全选 5 枚标签`。
-20. **分隔线是记号，不是书签**：`isSeparatorUrl()`（`shared/urls.ts`）认出的那个占位书签，在阅读页与存档面板里都画成一条横线（有标题就嵌在线的正中），**不计入任何枚数、没有勾选框、还原时跳过**，也不算 `skipped`。
-    判定只看主机名 + 路径（忽略协议、查询串、片段），别改成只认主机名。
-    渲染标题前过一道 `separatorTitle()`：**首尾的 `─` 与空白一起去掉**（`──── 工作 ────` 这类手画的线会与 CSS 画的线打架），
-    整条都是横杠时退化成无标题、只画一根线。别只剥横杠再 `trim()`——`─ ─ ─` 会剩下中间那根。
-    实现在两处界面 + `restore.ts` 的 `PlannedBookmark.separator`；新增任何「数标签」的地方都必须走 `restorableBookmarks()`，否则枚数会在分隔线上对不上。
+18. **勾选只有一个维度**：不要再维护一份「哪些项被选中」——它与第 15 条的排除集一旦并存，就会出现「列表看着全选、按钮说没选中」。
+19. **存档侧的副文案以「已选」为主**：不能把「还会还原的枚数」写成「N 个标签」——默认不勾时会显示成「0 个标签」，看着像这个存档是空的。
+    用 `未勾选 · 共 5 枚标签` / `已选 2 / 5 枚标签` / `已全选 5 枚标签`。理由见 `docs/design.md` 七。
+20. **分隔线是记号，不是书签**：判定 `isSeparatorUrl()` 与标题清洗 `separatorTitle()` 都在 `shared/urls.ts`，两处界面都把它画成一条横线，
+    **不计入任何枚数、没有勾选框、还原时跳过**，也不算 `skipped`。
+    **新增任何「数标签」的地方都必须走 `restorableBookmarks()`**，否则枚数会在分隔线上对不上。
+    两个最容易被「顺手简化」掉的细节：判定要看**主机名 + 路径**（不是只认主机名）；清洗要把**首尾的横杠与空白一起去掉**（不是只剥横杠再 `trim()`）。
 21. **主界面只允许有一个滚动容器**：`.app--shell` 把整页锁在一屏内（`100dvh`），滚动交给 `.pick-list` / `.tree`（`flex: 1; min-height: 0; overflow-y: auto`），
     这样顶部标签栏与底部按钮始终可见。**不要给列表加 `max-height`**——那会与页面滚动叠成两条滚动条，而且列表一长，底部按钮就被推出屏幕。
     阅读页（`folder.html`）不加 `app--shell`：它就是要整页往下读的文档。
