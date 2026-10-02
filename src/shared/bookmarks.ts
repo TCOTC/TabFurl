@@ -1,8 +1,8 @@
 import type {BookmarkNode, FolderOption} from './types'
 import {isInternalUrl} from './urls'
 
-/** Chrome 内置文件夹「其他书签」的固定 id。 */
-const OTHER_BOOKMARKS_ID = '2'
+/** Chrome 内置文件夹「书签栏」的固定 id。 */
+const BOOKMARKS_BAR_ID = '1'
 
 function toNode(node: chrome.bookmarks.BookmarkTreeNode): BookmarkNode {
   return {
@@ -75,65 +75,17 @@ export async function removeSubTree(id: string): Promise<void> {
 }
 
 /**
- * 找存档根的落点：固定在「其他书签」，避免污染书签栏。
+ * 取书签栏。Chrome 把内置文件夹的 id 固定为 `1`（书签栏）、`2`（其他书签）、
+ * `3`（移动设备书签，仅在开启同步时存在），所以认 `1` 即可。
  *
- * Chrome 把内置文件夹的 id 固定为 `1`（书签栏）、`2`（其他书签）、`3`（移动设备书签，
- * 仅在开启了同步时存在）。所以优先认 `2`；取不到时退化为最后一个顶级文件夹。
+ * 认不出就报错，**绝不退化为「其他书签」**：存档位置只能来自用户的明确指定，
+ * 扩展不替用户决定往哪里写。
  */
-export async function findArchiveParentId(): Promise<string> {
+export async function getBookmarksBarId(): Promise<string> {
   const roots = await getRoots()
-  const children = roots[0]?.children ?? []
-  if (children.length === 0) {
-    throw new Error('书签树为空，无法创建存档根文件夹')
-  }
-
-  const preferred = children.find((child) => child.id === OTHER_BOOKMARKS_ID)
-  return (preferred ?? children[children.length - 1]).id
-}
-
-/** 在 parentId 下找同名文件夹；不存在返回 undefined。 */
-export async function findChildFolder(
-  parentId: string,
-  title: string
-): Promise<BookmarkNode | undefined> {
-  const children = await getChildren(parentId)
-  return children.find((child) => !child.url && child.title === title)
-}
-
-function countBookmarks(node: BookmarkNode): number {
-  if (node.url) return isInternalUrl(node.url) ? 0 : 1
-  return (node.children ?? []).reduce((total, child) => total + countBookmarks(child), 0)
-}
-
-/**
- * 把存档根展开成扁平列表，供主界面与启动器使用。
- * 顺序即书签树里的前序遍历顺序，所以会话文件夹天然按时间排列。
- */
-export async function listFolders(archiveRootId: string): Promise<FolderOption[]> {
-  const root = await getSubTree(archiveRootId)
-  if (!root) return []
-
-  const options: FolderOption[] = []
-
-  const walk = (node: BookmarkNode, path: string[]): void => {
-    for (const child of node.children ?? []) {
-      if (child.url) continue
-      const childPath = [...path, child.title]
-      const grandChildren = child.children ?? []
-      options.push({
-        id: child.id,
-        title: child.title,
-        path,
-        bookmarkCount: grandChildren.filter((item) => Boolean(item.url)).length,
-        totalBookmarkCount: countBookmarks(child),
-        folderCount: grandChildren.filter((item) => !item.url).length
-      })
-      walk(child, childPath)
-    }
-  }
-
-  walk(root, [])
-  return options
+  const bar = (roots[0]?.children ?? []).find((child) => child.id === BOOKMARKS_BAR_ID)
+  if (!bar) throw new Error('找不到书签栏，无法确定存档位置')
+  return bar.id
 }
 
 /** 从节点一路向上收集标题，用于在界面上显示完整位置。 */
@@ -150,14 +102,61 @@ export async function getNodePath(id: string): Promise<string[]> {
   return titles
 }
 
+/** 统计一个文件夹下的全部可收藏书签（递归，跳过内部页面）。 */
+function countBookmarks(node: BookmarkNode): number {
+  if (node.url) return isInternalUrl(node.url) ? 0 : 1
+  return (node.children ?? []).reduce((total, child) => total + countBookmarks(child), 0)
+}
+
+function describeFolder(node: BookmarkNode, path: string[]): FolderOption {
+  const children = node.children ?? []
+  return {
+    id: node.id,
+    title: node.title,
+    path,
+    bookmarkCount: children.filter((child) => Boolean(child.url)).length,
+    totalBookmarkCount: countBookmarks(node),
+    folderCount: children.filter((child) => !child.url).length
+  }
+}
+
 /**
- * 取（必要时创建）存档根文件夹。
- *
- * 优先复用同名文件夹，避免用户重复点「创建」时在书签树里堆出好几份存档。
+ * 把 rootId 展开成扁平文件夹列表，供主界面与启动器使用。
+ * 顺序即书签树里的前序遍历顺序，所以会话文件夹天然按时间排列。
+ * `includeRoot` 为真时把 rootId 自身也作为第一项（存档根候选列表要用它）。
  */
-export async function ensureArchiveRoot(name: string): Promise<BookmarkNode> {
-  const parentId = await findArchiveParentId()
-  const existing = await findChildFolder(parentId, name)
-  if (existing) return existing
-  return createFolder(parentId, name)
+export async function listFolders(
+  archiveRootId: string,
+  options: {includeRoot?: boolean} = {}
+): Promise<FolderOption[]> {
+  const root = await getSubTree(archiveRootId)
+  if (!root) return []
+
+  const folders: FolderOption[] = options.includeRoot ? [describeFolder(root, [])] : []
+
+  const walk = (node: BookmarkNode, path: string[]): void => {
+    for (const child of node.children ?? []) {
+      if (child.url) continue
+      folders.push(describeFolder(child, path))
+      walk(child, [...path, child.title])
+    }
+  }
+
+  walk(root, [])
+  return folders
+}
+
+/**
+ * 可作存档根的候选：书签栏自身 + 它下面所有层级的文件夹。
+ *
+ * 只读——存档位置由用户在设置页指定，扩展不负责建文件夹。
+ * 返回项的 `path` 一律不含书签栏自己，界面拼显示路径时自行补上头部的 `barTitle`。
+ */
+export async function listArchiveRootCandidates(): Promise<{
+  barTitle: string
+  folders: FolderOption[]
+}> {
+  const barId = await getBookmarksBarId()
+  const folders = await listFolders(barId, {includeRoot: true})
+  return {barTitle: folders[0]?.title ?? '', folders}
 }

@@ -25,8 +25,8 @@ test('没有存储时返回默认设置', async () => {
 
 test('返回的是默认设置的新副本，不会污染默认值', async () => {
   const settings = await loadSettings()
-  settings.archiveRootName = '被改坏了'
-  assert.equal(DEFAULT_SETTINGS.archiveRootName, '标签页存档')
+  settings.sessionNameMode = 'datetimeSite'
+  assert.equal(DEFAULT_SETTINGS.sessionNameMode, 'datetime')
 })
 
 test('存储里只有部分字段时与默认值合并', async () => {
@@ -37,7 +37,6 @@ test('存储里只有部分字段时与默认值合并', async () => {
   assert.equal(settings.archiveRootId, 'abc')
   assert.equal(settings.restoreTarget, 'currentWindow')
   assert.equal(settings.sessionNameMode, DEFAULT_SETTINGS.sessionNameMode)
-  assert.equal(settings.archiveRootName, DEFAULT_SETTINGS.archiveRootName)
 })
 
 test('saveSettings 写入约定的存储键', async () => {

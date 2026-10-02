@@ -166,11 +166,11 @@ function TabFurlApp(): void {
     if (!settings.archiveRootId || !(await getNode(settings.archiveRootId))) {
       folders = []
       folderList.innerHTML =
-        '<li class="empty">还没有存档根文件夹，请到设置页创建。</li>'
+        '<li class="empty">还没有指定存档根文件夹，请到设置页选择。</li>'
       folderCount.textContent = '0'
       docsLink.hidden = true
       captureButton.disabled = true
-      captureHint.textContent = '需要先在设置页创建存档根文件夹。'
+      captureHint.textContent = '需要先在设置页指定存档根文件夹。'
       updateSelectionUi()
       return
     }

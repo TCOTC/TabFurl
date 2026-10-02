@@ -95,10 +95,13 @@ export interface FolderOption {
 export type SessionNameMode = 'datetime' | 'datetimeSite'
 
 export interface Settings {
-  /** 存档根文件夹在书签树中的 id；空字符串表示尚未创建。 */
+  /**
+   * 存档根文件夹在书签树中的 id；空字符串表示尚未指定。
+   *
+   * 它必须是用户在书签栏里指定的一个**已有**文件夹：存档直接写进它，
+   * 不再额外建一层，也不往「其他书签」里写任何东西。
+   */
   archiveRootId: string
-  /** 存档根文件夹的名字，首次创建时使用。 */
-  archiveRootName: string
   sessionNameMode: SessionNameMode
   restoreTarget: RestoreOptions['target']
   /** 最近一次保存创建的会话文件夹 id，用于撤销。 */
@@ -107,7 +110,6 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   archiveRootId: '',
-  archiveRootName: '标签页存档',
   sessionNameMode: 'datetime',
   restoreTarget: 'newWindow'
 }

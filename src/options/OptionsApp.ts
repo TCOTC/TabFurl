@@ -1,6 +1,6 @@
-import {ensureArchiveRoot, getNode, getNodePath} from '../shared/bookmarks'
-import {loadSettings, saveSettings} from '../shared/settings'
-import {DEFAULT_SETTINGS, type Settings} from '../shared/types'
+import {getNode, getNodePath, listArchiveRootCandidates} from '../shared/bookmarks'
+import {loadSettings, saveSettings, updateSettings} from '../shared/settings'
+import {DEFAULT_SETTINGS, type FolderOption, type Settings} from '../shared/types'
 
 const ROOT_TEMPLATE = `
   <main class="app">
@@ -10,17 +10,19 @@ const ROOT_TEMPLATE = `
     </header>
 
     <section class="card">
-      <h2 class="panel__title">存档根文件夹</h2>
+      <h2 class="panel__title">存档位置</h2>
       <label class="field">
-        <span class="field__label">文件夹名</span>
-        <input type="text" class="input" id="root-name" autocomplete="off" />
+        <span class="field__label">存档根文件夹（书签栏内）</span>
+        <select class="input" id="root-select"></select>
       </label>
       <p class="muted" id="root-status"></p>
       <div class="row">
-        <button type="button" class="btn btn--primary" id="root-create-btn">创建 / 定位</button>
+        <button type="button" class="btn btn--ghost" id="root-refresh-btn">重新读取书签栏</button>
       </div>
       <p class="muted">
-        存档会创建在「其他书签」下。已有的浏览器收藏夹、同步与导入导出功能不受影响。
+        存档直接写进选中的文件夹，不再额外建一层；扩展不会自己建文件夹，也不往「其他书签」里写东西。
+        它下面的每个子文件夹都会被当成一次存档，所以最好专为它建一个文件夹。
+        列表里没有合适的选项时，先在书签管理器里于「书签栏」下新建一个，再点「重新读取书签栏」。
       </p>
     </section>
 
@@ -74,14 +76,15 @@ function OptionsApp(): void {
   if (!root) return
   root.innerHTML = ROOT_TEMPLATE
 
-  const rootNameInput = q<HTMLInputElement>(root, '#root-name')
+  const rootSelect = q<HTMLSelectElement>(root, '#root-select')
   const rootStatus = q<HTMLParagraphElement>(root, '#root-status')
-  const rootCreateButton = q<HTMLButtonElement>(root, '#root-create-btn')
+  const rootRefreshButton = q<HTMLButtonElement>(root, '#root-refresh-btn')
   const saveButton = q<HTMLButtonElement>(root, '#save-btn')
   const resetButton = q<HTMLButtonElement>(root, '#reset-btn')
   const saveStatus = q<HTMLParagraphElement>(root, '#save-status')
 
   let settings: Settings = {...DEFAULT_SETTINGS}
+  let barTitle = ''
 
   function radioValue(name: string): string {
     const checked = document.querySelector<HTMLInputElement>(`input[name="${name}"]:checked`)
@@ -102,17 +105,57 @@ function OptionsApp(): void {
   async function describeRoot(): Promise<void> {
     const id = settings.archiveRootId
     if (!id || !(await getNode(id))) {
-      rootStatus.textContent = '尚未创建。填好名字后点「创建 / 定位」。'
+      rootStatus.textContent = '尚未指定。请从上面的列表里选一个书签栏下的文件夹。'
       return
     }
     const path = await getNodePath(id)
     rootStatus.textContent = `当前存档根：${path.join(' / ')}`
   }
 
+  /** 第 0 项是书签栏自己，其余项的 path 不含书签栏，所以这里补上头部。 */
+  function rootOptionLabel(folder: FolderOption, index: number): string {
+    if (index === 0) return `${folder.title}（存档直接放在书签栏里）`
+    return [barTitle, ...folder.path, folder.title].join(' / ')
+  }
+
+  /**
+   * 用当前存档根重建下拉选项。
+   *
+   * 旧版本把存档根建在「其他书签」下，那里不在候选范围内；这种遗留 id 会额外插一项
+   * 并显示它的真实路径，免得下拉框静默地显示成另一个文件夹。
+   */
+  async function refreshRootOptions(): Promise<void> {
+    const {barTitle: title, folders} = await listArchiveRootCandidates()
+    barTitle = title
+
+    const options = folders.map((folder, index) => ({
+      id: folder.id,
+      label: rootOptionLabel(folder, index)
+    }))
+
+    const current = settings.archiveRootId
+    if (current && !options.some((option) => option.id === current) && (await getNode(current))) {
+      options.unshift({
+        id: current,
+        label: `${(await getNodePath(current)).join(' / ')}（不在书签栏内）`
+      })
+    }
+
+    rootSelect.innerHTML = ''
+    for (const option of options) {
+      const element = document.createElement('option')
+      element.value = option.id
+      element.textContent = option.label
+      rootSelect.append(element)
+    }
+    if (current && options.some((option) => option.id === current)) {
+      rootSelect.value = current
+    }
+  }
+
   function readForm(): Settings {
     return {
       ...settings,
-      archiveRootName: rootNameInput.value.trim() || DEFAULT_SETTINGS.archiveRootName,
       sessionNameMode:
         radioValue('session-name-mode') === 'datetimeSite' ? 'datetimeSite' : 'datetime',
       restoreTarget: radioValue('restore-target') === 'currentWindow'
@@ -121,26 +164,39 @@ function OptionsApp(): void {
     }
   }
 
-  function fillForm(): void {
-    rootNameInput.value = settings.archiveRootName
-    setRadio('session-name-mode', settings.sessionNameMode)
-    setRadio('restore-target', settings.restoreTarget)
-    void describeRoot()
+  /** 读书签栏、重建下拉与状态行。读不到时把原因写在状态行里，不把异常抛到控制台。 */
+  async function showRoot(): Promise<boolean> {
+    try {
+      await refreshRootOptions()
+      await describeRoot()
+      return true
+    } catch (error) {
+      rootSelect.innerHTML = ''
+      rootStatus.textContent = error instanceof Error ? error.message : String(error)
+      return false
+    }
   }
 
-  rootCreateButton.addEventListener('click', async () => {
-    rootCreateButton.disabled = true
+  function fillForm(): void {
+    setRadio('session-name-mode', settings.sessionNameMode)
+    setRadio('restore-target', settings.restoreTarget)
+    void showRoot()
+  }
+
+  // 存档位置是单独一次选择，选中就落盘；「保存设置」只管名字与还原行为。
+  rootSelect.addEventListener('change', async () => {
+    const next = await updateSettings({archiveRootId: rootSelect.value})
+    settings = {...settings, archiveRootId: next.archiveRootId}
+    await describeRoot()
+    setStatus('存档位置已更新。', 'ok')
+  })
+
+  rootRefreshButton.addEventListener('click', async () => {
+    rootRefreshButton.disabled = true
     try {
-      settings = readForm()
-      const node = await ensureArchiveRoot(settings.archiveRootName)
-      settings = {...settings, archiveRootId: node.id}
-      await saveSettings(settings)
-      setStatus('存档根已就绪。', 'ok')
-      await describeRoot()
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error), 'error')
+      if (await showRoot()) setStatus('已重新读取书签栏。', 'ok')
     } finally {
-      rootCreateButton.disabled = false
+      rootRefreshButton.disabled = false
     }
   })
 
@@ -152,11 +208,11 @@ function OptionsApp(): void {
   })
 
   resetButton.addEventListener('click', async () => {
-    // 只重置偏好，不动已经建好的书签文件夹。
+    // 只重置偏好，不动已经选好的存档位置。
     settings = {...DEFAULT_SETTINGS, archiveRootId: settings.archiveRootId}
     await saveSettings(settings)
     fillForm()
-    setStatus('已恢复默认（已建好的存档保留在原处）。', 'ok')
+    setStatus('已恢复默认（存档位置保留不变）。', 'ok')
   })
 
   void loadSettings().then((loaded) => {
