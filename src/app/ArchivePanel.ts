@@ -9,7 +9,7 @@ import {
   type RestorePlan
 } from '../shared/restore'
 import {loadSettings, updateSettings} from '../shared/settings'
-import {decorateTiles, escapeHtml, tileMarkup} from '../shared/tile'
+import {escapeHtml, faviconMarkup} from '../shared/tile'
 import type {BookmarkNode, Settings} from '../shared/types'
 import {hostnameOf} from '../shared/urls'
 import {
@@ -122,7 +122,7 @@ export function createArchivePanel(events: AppEvents): Panel {
       <li class="tree__node">
         <label class="tree__row tree__row--bookmark">
           <input type="checkbox" data-content="${escapeHtml(bookmark.id)}" />
-          ${tileMarkup(bookmark.title, bookmark.url, FAVICON_BASE)}
+          ${faviconMarkup(bookmark.url, FAVICON_BASE)}
           <span class="tree__title">${escapeHtml(bookmark.title || bookmark.url)}</span>
           <span class="tree__meta">${escapeHtml(host)}</span>
         </label>
@@ -259,7 +259,6 @@ export function createArchivePanel(events: AppEvents): Panel {
       if (id) contentInputs.set(id, input)
     }
 
-    decorateTiles(sessionList)
     applyContainerStates()
     updateBulkBar()
 

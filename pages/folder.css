@@ -30,6 +30,21 @@
   gap: 8px;
 }
 
+/* 子文件夹卡片没有网站图标，用一个箭头色块代替。颜色走设计变量，不写死色值。 */
+.folder-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 12px;
+  line-height: 1;
+}
+
 .bookmark {
   display: flex;
   align-items: center;

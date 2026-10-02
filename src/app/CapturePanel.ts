@@ -9,7 +9,7 @@ import {
 } from '../shared/capture'
 import {loadSettings, updateSettings} from '../shared/settings'
 import {formatSessionName} from '../shared/naming'
-import {decorateTiles, escapeHtml, tileMarkup} from '../shared/tile'
+import {escapeHtml, faviconMarkup} from '../shared/tile'
 import type {Settings, TabSnapshot, WindowSnapshot} from '../shared/types'
 import {hostnameOf} from '../shared/urls'
 import {
@@ -100,7 +100,7 @@ export function createCapturePanel(events: AppEvents): Panel {
         <input type="checkbox" data-tab="${tab.tabId}"${
           excluded.has(tab.tabId) ? '' : ' checked'
         } />
-        ${tileMarkup(tab.title, tab.url, FAVICON_BASE)}
+        ${faviconMarkup(tab.url, FAVICON_BASE)}
         <span class="pick__main">
           <span class="pick__title">${escapeHtml(tab.title || tab.url)}${
             tab.pinned ? '<span class="pick__pin" title="已固定">📌</span>' : ''
@@ -144,7 +144,6 @@ export function createCapturePanel(events: AppEvents): Panel {
       .map((child, index) => (child.kind === 'tab' ? tabMarkup(child.tab) : groupMarkup(child, index)))
       .join('')
 
-    decorateTiles(tabList)
     syncStates()
   }
 

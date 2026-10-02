@@ -97,7 +97,7 @@ tools/
 ## 不可破坏的约定
 
 1. **权限最小化**：当前不需要任何 `host_permissions`，也没有 content script。加功能时先问「能不能不加权限」，新增权限必须在 `docs/design.md` 里写理由，并同步 `tools/verify-build.mjs` 的 `EXPECTED_PERMISSIONS`。
-   现有权限里 `favicon` 是例外中的例外：它**只读 Chrome 本地缓存、不联网**（`_favicon` 端点），而且因为已经有 `tabs`，它不会多出权限警告。图标本身则是「真实图标盖在首字母色块上」，所以拿不到图标时观感不退化。
+   现有权限里 `favicon` 是例外中的例外：它**只读 Chrome 本地缓存、不联网**（`_favicon` 端点），而且因为已经有 `tabs`，它不会多出权限警告。
 2. **只用 `chrome.*`**：MV3 下这些 API 原生返回 Promise，不再需要 `webextension-polyfill`。不要为了「保持中立」而引入 `browser.*` 或 polyfill。
 3. **`minimum_chrome_version: 114` 是保守下限，不要下调**：本项目实际用到的最高 API 要求是 `chrome.tabGroups`（89），移除 `sidePanel` 后 114 已无强制理由，但下调等于声明未经验证的旧版本兼容性。若将来用到更新的 API，必须同步抬高此版本号，并同步 `tools/verify-build.mjs` 的 `MIN_CHROME_VERSION`。
 4. **命名规则只在 `shared/naming.ts` 里实现**：界面层不得自己拼字符串。规则见 `docs/design.md`。

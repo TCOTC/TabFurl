@@ -1,6 +1,6 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {escapeHtml, tileMarkup} from './tile'
+import {escapeHtml, faviconMarkup} from './tile'
 
 test('escapeHtml 覆盖五个 HTML 敏感字符', () => {
   assert.equal(escapeHtml('&'), '&amp;')
@@ -19,37 +19,30 @@ test('escapeHtml 不改动普通文本', () => {
   assert.equal(escapeHtml('工作 123'), '工作 123')
 })
 
-test('tileMarkup 输出固定的结构与数字色相', () => {
-  const markup = tileMarkup('工作台', 'https://example.com')
-  assert.match(markup, /^<span class="tile" style="--tile-hue:\d+" aria-hidden="true">/)
-  assert.match(markup, /<span class="tile__text">工<\/span>/)
-  assert.match(markup, /<\/span><\/span>$/)
-})
+test('faviconMarkup 只出一张真图标，没有首字母与底色', () => {
+  const markup = faviconMarkup('https://example.com', 'chrome-extension://abc/_favicon/')
 
-test('不传 favicon 基址时不出图标，只有首字母色块', () => {
-  const markup = tileMarkup('工作台', 'https://example.com')
-
-  assert.ok(!markup.includes('<img'), '没有基址就拼不出端点，不要出破图')
-  assert.ok(!markup.includes('_favicon'), '不得凭空拼一个相对地址')
-})
-
-test('传了 favicon 基址时，图标盖在首字母后面', () => {
-  const markup = tileMarkup('工作台', 'https://example.com', 'chrome-extension://abc/_favicon/')
-
-  // 字母必须在前面：图标是覆盖层，加载不出来时被移掉就露出字母。
-  const textAt = markup.indexOf('tile__text')
-  const iconAt = markup.indexOf('tile__icon')
-  assert.ok(textAt >= 0 && iconAt >= 0, '两者都应在输出里')
-  assert.ok(textAt < iconAt, '首字母必须在图标之前（作为底层）')
-  assert.match(markup, /<img class="tile__icon" src="chrome-extension:\/\/abc\/_favicon\/\?pageUrl=[^"]+" alt="" loading="lazy" \/>/)
-})
-
-test('tileMarkup 不产生可逃逸的未转义尖括号', () => {
-  const markup = tileMarkup(
-    '<img src=x onerror=alert(1)>',
-    'https://example.com',
-    'chrome-extension://abc/_favicon/'
+  assert.match(
+    markup,
+    /^<img class="favicon" src="chrome-extension:\/\/abc\/_favicon\/\?pageUrl=[^"]+" alt="" loading="lazy" \/>$/
   )
-  assert.ok(!markup.includes('<img src=x'), '标题内容不得原样进入 HTML')
-  assert.ok(!markup.includes('onerror=alert'), '标题内容不得进入属性位置')
+  // 装饰性图片：alt 必须为空，读屏不该念出网址。
+  assert.ok(markup.includes('alt=""'), 'alt 必须为空')
+  assert.ok(!markup.includes('tile__text'), '不再有首字母')
+  assert.ok(!/<span/.test(markup), '不再需要外层色块')
+  assert.ok(!markup.includes('--tile-hue'), '不再有按 URL 推导的底色')
+})
+
+test('没有 favicon 基址时返回空串，不凭空拼相对地址', () => {
+  assert.equal(faviconMarkup('https://example.com'), '')
+  assert.equal(faviconMarkup('https://example.com', ''), '')
+})
+
+test('faviconMarkup 的网址会转义，不会逃出属性', () => {
+  const markup = faviconMarkup('https://example.com/a"b', 'chrome-extension://abc/_favicon/')
+
+  // 网址先经 URL 序列化（`"` 变成 `%22`），再由 escapeHtml 兜一层；两种情况都不该出现裸引号。
+  assert.ok(!markup.includes('a"b'), '双引号不得原样进入属性')
+  // class、src、alt、loading 各一对引号，多一个都说明有内容逃出了属性。
+  assert.equal(markup.match(/"/g)?.length, 8, '引号数必须正好是属性的那 8 个')
 })

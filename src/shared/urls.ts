@@ -28,23 +28,7 @@ export function hostnameOf(url: string | undefined): string | undefined {
   }
 }
 
-/** 书签卡片上的占位字母：优先标题首字，退化为主机名首字母。 */
-export function tileInitial(title: string, url: string): string {
-  const source = title.trim() || hostnameOf(url) || url
-  const match = source.match(/[\p{L}\p{N}]/u)
-  return (match?.[0] ?? '?').toUpperCase()
-}
-
-/** 由字符串稳定推导出的色相（0–359），用于占位卡片配色。 */
-export function tileHue(seed: string): number {
-  let hash = 0
-  for (let i = 0; i < seed.length; i++) {
-    hash = (hash * 31 + seed.charCodeAt(i)) % 360
-  }
-  return hash
-}
-
-/** 网站图标的像素尺寸。色块是 22px，取 32 是为了在 @2x 屏上也清楚。 */
+/** 网站图标的像素尺寸。预留位是 22px，取 32 是为了在 @2x 屏上也清楚。 */
 export const FAVICON_SIZE = 32
 
 /**

@@ -1,13 +1,13 @@
 import {getNodePath, getSubTree} from '../src/shared/bookmarks'
 import {restoreFolder} from '../src/shared/restore'
 import {loadSettings} from '../src/shared/settings'
-import {decorateTiles, escapeHtml, tileMarkup} from '../src/shared/tile'
+import {escapeHtml, faviconMarkup} from '../src/shared/tile'
 import type {BookmarkNode} from '../src/shared/types'
 import {hostnameOf} from '../src/shared/urls'
 import '../src/shared/base.css'
 import './folder.css'
 
-/** Chrome 本地 favicon 缓存端点：读缓存、不联网（配合 `tileMarkup` 使用）。 */
+/** Chrome 本地 favicon 缓存端点：读缓存、不联网（配合 `faviconMarkup` 使用）。 */
 const FAVICON_BASE = chrome.runtime.getURL('_favicon/')
 
 function q<T extends Element>(selector: string): T {
@@ -23,7 +23,7 @@ function bookmarkMarkup(node: BookmarkNode): string {
   return `
     <a class="bookmark" href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener"
        data-search="${escapeHtml(`${title} ${host}`.toLowerCase())}">
-      ${tileMarkup(title, url, FAVICON_BASE)}
+      ${faviconMarkup(url, FAVICON_BASE)}
       <span class="bookmark__main">
         <span class="bookmark__title">${escapeHtml(title)}</span>
         <span class="bookmark__host">${escapeHtml(host)}</span>
@@ -54,7 +54,7 @@ function subfolderCardMarkup(folder: BookmarkNode): string {
   const folderCount = (folder.children ?? []).filter((child) => !child.url).length
   return `
     <a class="bookmark" href="${escapeHtml(folderHref(folder.id))}">
-      <span class="tile" style="--tile-hue:236"><span class="tile__text">▸</span></span>
+      <span class="folder-tile" aria-hidden="true">▸</span>
       <span class="bookmark__main">
         <span class="bookmark__title">${escapeHtml(folder.title)}</span>
         <span class="bookmark__host">${bookmarks.length} 个书签${
@@ -137,8 +137,6 @@ async function render(): Promise<void> {
   const searchInput = q<HTMLInputElement>('#search')
   const status = q<HTMLSpanElement>('#status')
   const openWindowButton = q<HTMLButtonElement>('#open-window-btn')
-
-  decorateTiles(root)
 
   searchInput.addEventListener('input', () => {
     const term = searchInput.value.trim().toLowerCase()
