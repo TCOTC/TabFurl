@@ -99,11 +99,19 @@ export function applyExclusions(
   }
 }
 
-/** 按计划打开标签，返回每一项拿到的 tabId。 */
+/**
+ * 按计划打开标签。
+ *
+ * 返回每一项拿到的 tabId，以及「保持加载的那一枚」——它是第一个标签，也就是活动标签。
+ */
 async function openTabs(
   planned: readonly PlannedItem[],
   target: RestoreOptions['target']
-): Promise<{created: {item: PlannedItem; tabIds: number[]}[]; opened: number}> {
+): Promise<{
+  created: {item: PlannedItem; tabIds: number[]}[]
+  opened: number
+  keepLoadedTabId: number | undefined
+}> {
   const created: {item: PlannedItem; tabIds: number[]}[] = []
 
   // 「当前窗口」先取到 windowId，后续标签全部落在这里；
@@ -114,17 +122,24 @@ async function openTabs(
   }
 
   let opened = 0
+  let keepLoadedTabId: number | undefined
 
   for (const item of planned) {
     const tabIds: number[] = []
 
     for (const {url} of item.bookmarks) {
+      // 第一个标签无论哪种模式都会成为活动标签；它不能（也不该）被舍弃。
+      const isFirst = keepLoadedTabId === undefined
+
       if (windowId === undefined) {
         const newWindow = await chrome.windows.create({url, focused: true})
         if (!newWindow) throw new Error('无法创建新窗口')
         windowId = newWindow.id
         const tabId = newWindow.tabs?.[0]?.id
-        if (tabId !== undefined) tabIds.push(tabId)
+        if (tabId !== undefined) {
+          tabIds.push(tabId)
+          if (isFirst) keepLoadedTabId = tabId
+        }
       } else {
         const tab = await chrome.tabs.create({
           url,
@@ -132,7 +147,10 @@ async function openTabs(
           // 当前窗口模式下让第一个标签可见，否则用户看不到任何反应。
           active: target === 'currentWindow' && opened === 0
         })
-        if (tab.id !== undefined) tabIds.push(tab.id)
+        if (tab.id !== undefined) {
+          tabIds.push(tab.id)
+          if (isFirst) keepLoadedTabId = tab.id
+        }
       }
       opened++
     }
@@ -140,7 +158,38 @@ async function openTabs(
     created.push({item, tabIds})
   }
 
-  return {created, opened}
+  return {created, opened, keepLoadedTabId}
+}
+
+/**
+ * 把刚打开的标签舍弃掉——它们仍留在标签栏里，点开时才真正加载。
+ *
+ * **为什么需要这一步**：`chrome.tabs.create()` 没有「先不加载」的选项，
+ * 传了 `url` 就会立即开始加载，所以一次还原几十个标签会造成瞬时并发加载而卡顿。
+ * `chrome.tabs.discard()` 正好是这个语义：从内存中卸载，但标签仍在标签栏上
+ * （标题、位置、标签分组都保留）。
+ *
+ * **活动标签无法被舍弃**（API 限制），所以每个窗口会留下一枚已加载的——
+ * 这正好让人看得见窗口确实开出来了。
+ */
+async function discardTabs(
+  tabIds: readonly number[],
+  keepLoadedTabId: number | undefined
+): Promise<number> {
+  let discarded = 0
+
+  for (const tabId of tabIds) {
+    if (tabId === keepLoadedTabId) continue
+    try {
+      await chrome.tabs.discard(tabId)
+      discarded++
+    } catch (error) {
+      // 舍弃失败不该让整次还原失败：标签已经打开了，只是会真加载而已。
+      console.error('[tabfurl] 舍弃标签失败', tabId, error)
+    }
+  }
+
+  return discarded
 }
 
 /**
@@ -193,15 +242,21 @@ export async function restoreFolder(
 
   const plan = applyExclusions(planRestore(folder), options.excludeBookmarkIds)
   if (plan.items.length === 0) {
-    return {opened: 0, groups: 0, skipped: plan.skipped}
+    return {opened: 0, groups: 0, skipped: plan.skipped, discarded: 0}
   }
 
-  const {created, opened} = await openTabs(plan.items, options.target)
+  const {created, opened, keepLoadedTabId} = await openTabs(plan.items, options.target)
   const groups = options.groupTabs === false
     ? 0
     : await applyGroups(created, await currentWindowId(created))
 
-  return {opened, groups, skipped: plan.skipped}
+  // 舍弃放在最后：分组、窗口都建好了，标签的位置与归属都已固定，此时卸载最安全。
+  const discarded = await discardTabs(
+    created.flatMap((item) => item.tabIds),
+    keepLoadedTabId
+  )
+
+  return {opened, groups, skipped: plan.skipped, discarded}
 }
 
 /** openTabs 之后反查窗口 id：拿第一个标签所在窗口即可。 */

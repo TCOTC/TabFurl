@@ -92,6 +92,12 @@ export interface RestoreResult {
   opened: number
   groups: number
   skipped: number
+  /**
+   * 已打开但**未加载**的标签数（被 `tabs.discard` 卸载，点开时才加载）。
+   *
+   * 永远比 `opened` 少 1（每个窗口留一枚活动标签保持加载，API 不允许舍弃它）。
+   */
+  discarded: number
 }
 
 /** 采集字段在 UI 里的展示信息。 */

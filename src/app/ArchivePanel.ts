@@ -457,6 +457,7 @@ export function createArchivePanel(events: AppEvents): Panel {
       let opened = 0
       let groups = 0
       let skipped = 0
+      let discarded = 0
       for (const folderId of folderIds) {
         const result = await restoreFolder(folderId, {
           target: settings.restoreTarget,
@@ -466,9 +467,12 @@ export function createArchivePanel(events: AppEvents): Panel {
         opened += result.opened
         groups += result.groups
         skipped += result.skipped
+        discarded += result.discarded
       }
 
       const parts = [`已打开 ${opened} 个标签页`]
+      // 明说未加载的枚数，否则用户看到一排灰标签会以为还原出错了。
+      if (discarded > 0) parts.push(`其中 ${discarded} 个未加载（点开才加载）`)
       if (groups > 0) parts.push(`创建 ${groups} 个分组`)
       if (!groupTabs) parts.push('未建分组')
       if (skipped > 0) parts.push(`跳过 ${skipped} 项`)

@@ -1,6 +1,6 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {applyExclusions, planRestore, type RestorePlan} from './restore'
+import {applyExclusions, planRestore, restoreFolder, type RestorePlan} from './restore'
 import type {BookmarkNode} from './types'
 
 const folder = (id: string, title: string, children: BookmarkNode[] = []): BookmarkNode => ({
@@ -159,4 +159,127 @@ test('没有排除项时原样返回同一个计划，不做无谓复制', () =>
 
   assert.equal(applyExclusions(plan, undefined), plan)
   assert.equal(applyExclusions(plan, new Set()), plan)
+})
+
+/**
+ * 用内存书签树 + 记录调用的 chrome 桩跑 `restoreFolder`。
+ *
+ * 关注的是「打开后有没有把标签舍弃掉」这件事，所以只实现这条路径需要的几个方法。
+ */
+function stubChrome(folderNode: BookmarkNode): {
+  discarded: number[]
+  created: {url: string; active: boolean}[]
+  grouped: number[][]
+} {
+  const discarded: number[] = []
+  const created: {url: string; active: boolean}[] = []
+  const grouped: number[][] = []
+  let seq = 0
+
+  ;(globalThis as Record<string, unknown>).chrome = {
+    bookmarks: {
+      getSubTree: async (id: string) => {
+        if (id !== folderNode.id) throw new Error(`未知节点 ${id}`)
+        return [folderNode]
+      }
+    },
+    windows: {
+      WINDOW_ID_CURRENT: -2,
+      getCurrent: async () => ({id: 7}),
+      create: async (input: {url: string}) => {
+        seq += 1
+        created.push({url: input.url, active: true})
+        return {id: 1, tabs: [{id: seq}]}
+      }
+    },
+    tabs: {
+      create: async (input: {url: string; active: boolean}) => {
+        seq += 1
+        created.push({url: input.url, active: input.active})
+        return {id: seq, windowId: 7}
+      },
+      get: async (id: number) => ({id, windowId: 7}),
+      group: async (input: {tabIds: number[]}) => {
+        grouped.push([...input.tabIds])
+        return 100
+      },
+      discard: async (tabId: number) => {
+        discarded.push(tabId)
+        return {id: tabId, discarded: true}
+      }
+    },
+    tabGroups: {update: async () => ({})}
+  }
+
+  return {discarded, created, grouped}
+}
+
+const threeTabs = (): BookmarkNode =>
+  folder('s', '会话', [
+    folder('g1', '工作', [link('b1', 'https://a.com'), link('b2', 'https://b.com')]),
+    link('b3', 'https://loose.com')
+  ])
+
+test('新窗口还原：活动标签保持加载，其余全部舍弃', async () => {
+  const spy = stubChrome(threeTabs())
+
+  const result = await restoreFolder('s', {target: 'newWindow'})
+
+  assert.equal(result.opened, 3)
+  assert.equal(result.discarded, 2, '三枚里应当舍弃两枚')
+  assert.deepEqual(spy.discarded, [2, 3], '第一枚是活动标签，不能碰')
+  assert.ok(!spy.discarded.includes(1), '活动标签不得出现在舍弃列表里')
+})
+
+test('当前窗口还原同样只留活动的那一枚', async () => {
+  const spy = stubChrome(threeTabs())
+
+  const result = await restoreFolder('s', {target: 'currentWindow'})
+
+  assert.equal(result.discarded, 2)
+  assert.ok(!spy.discarded.includes(1))
+
+  // 当前窗口模式下只有第一个标签是 active，其余不能抢焦点。
+  assert.deepEqual(
+    spy.created.map((tab) => tab.active),
+    [true, false, false]
+  )
+})
+
+test('舍弃发生在建分组之后，且不影响分组内容', async () => {
+  const spy = stubChrome(threeTabs())
+
+  const result = await restoreFolder('s', {target: 'newWindow'})
+
+  assert.equal(result.groups, 1)
+  assert.deepEqual(spy.grouped, [[1, 2]], '分组里应当是本组的两枚标签')
+  assert.deepEqual(spy.discarded, [2, 3], '组内的第二枚也要舍弃')
+})
+
+test('只有一个标签时无可舍弃，discarded 为 0', async () => {
+  const spy = stubChrome(folder('s', '会话', [link('b1', 'https://only.com')]))
+
+  const result = await restoreFolder('s', {target: 'newWindow'})
+
+  assert.equal(result.opened, 1)
+  assert.equal(result.discarded, 0)
+  assert.deepEqual(spy.discarded, [], '唯一那枚就是活动标签')
+})
+
+test('舍弃失败不影响已打开的标签，也不算进 discarded', async () => {
+  const spy = stubChrome(threeTabs())
+  const chromeStub = (globalThis as Record<string, unknown>).chrome as {
+    tabs: {discard: (tabId: number) => Promise<unknown>}
+  }
+  // 第二枚标签舍弃失败（比如它正在被用户拖拽）。
+  chromeStub.tabs.discard = async (tabId: number) => {
+    if (tabId === 2) throw new Error('user is dragging')
+    spy.discarded.push(tabId)
+    return {id: tabId}
+  }
+
+  const result = await restoreFolder('s', {target: 'newWindow'})
+
+  assert.equal(result.opened, 3, '舍弃失败不该把已打开的标签算没')
+  assert.equal(result.discarded, 1, '只有成功的那一枚算数')
 })
