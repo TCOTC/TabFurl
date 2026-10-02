@@ -9,13 +9,12 @@ import {existsSync, readdirSync, readFileSync} from 'node:fs'
 const DIST = 'dist/chrome'
 
 /** 期望的权限集：多一个都算漂移，必须同步更新 docs/design.md。 */
-const EXPECTED_PERMISSIONS = ['bookmarks', 'tabs', 'tabGroups', 'storage', 'sidePanel']
+const EXPECTED_PERMISSIONS = ['bookmarks', 'tabs', 'tabGroups', 'storage']
 
 /** 清单里必须指向这些文件的入口。 */
 const EXPECTED_ENTRIES = {
   'background.service_worker': 'background/service_worker.js',
   action: 'images/icon-128.png',
-  'side_panel.default_path': 'sidebar/index.html',
   'options_ui.page': 'options/index.html'
 }
 
@@ -23,12 +22,12 @@ const EXPECTED_FILES = [
   'manifest.json',
   'background/service_worker.js',
   'shared/commons.js',
-  'sidebar/index.html',
-  'sidebar/index.js',
-  'sidebar/index.css',
   'options/index.html',
   'options/index.js',
   'options/index.css',
+  'pages/app.html',
+  'pages/app.js',
+  'pages/app.css',
   'pages/folder.html',
   'pages/folder.js',
   'pages/folder.css',
@@ -65,6 +64,8 @@ for (const key of Object.keys(manifest)) {
 check(!('browser_specific_settings' in manifest), '清单里残留 browser_specific_settings')
 check(!('browser_action' in manifest), '清单里残留 browser_action')
 check(!('sidebar_action' in manifest), '清单里残留 sidebar_action')
+// 主界面已改成独立标签页（pages/app.html）；side_panel 一旦回流，页面就会以窄面板渲染。
+check(!('side_panel' in manifest), '清单里残留 side_panel（主界面已改为 pages/app.html）')
 
 // 本项目承诺不申请任何 host 权限；一旦出现就是设计事故。
 check(!('host_permissions' in manifest), '出现了 host_permissions，这是本项目明确不允许的')
@@ -89,11 +90,13 @@ for (const [path, marker] of Object.entries(EXPECTED_ENTRIES)) {
   }
 }
 
-// sidePanel 需要 Chrome 114+，最低版本号不能低于它。
+// 移除 sidePanel 后，本项目实际用到的最高 API 要求是 tabGroups（89+）。
+// 这里仍要求 114：不下调以免声明未经验证的旧版本兼容性；升上去则必须同步抬高。
+const MIN_CHROME_VERSION = 114
 const minVersion = Number(manifest.minimum_chrome_version)
 check(
-  Number.isFinite(minVersion) && minVersion >= 114,
-  `minimum_chrome_version 应 >= 114（sidePanel 的要求），实际 ${manifest.minimum_chrome_version}`
+  Number.isFinite(minVersion) && minVersion >= MIN_CHROME_VERSION,
+  `minimum_chrome_version 应 >= ${MIN_CHROME_VERSION}，实际 ${manifest.minimum_chrome_version}`
 )
 
 for (const file of EXPECTED_FILES) {

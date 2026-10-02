@@ -1,9 +1,9 @@
-import {getNode, listFolders, removeSubTree} from '../shared/bookmarks'
-import {captureCurrentWindow, countCapturableTabs} from '../shared/capture'
-import {openFolderViewers, restoreFolder} from '../shared/restore'
-import {loadSettings, updateSettings} from '../shared/settings'
-import {escapeHtml} from '../shared/tile'
-import type {FolderOption, Settings} from '../shared/types'
+import {getNode, listFolders, removeSubTree} from '../src/shared/bookmarks'
+import {captureCurrentWindow, countCapturableTabs} from '../src/shared/capture'
+import {openFolderViewers, restoreFolder} from '../src/shared/restore'
+import {loadSettings, updateSettings} from '../src/shared/settings'
+import {escapeHtml} from '../src/shared/tile'
+import type {FolderOption, Settings} from '../src/shared/types'
 
 type StatusKind = 'ok' | 'error'
 
@@ -53,7 +53,7 @@ function q<T extends Element>(root: ParentNode, selector: string): T {
   return element as T
 }
 
-function SidebarApp(): void {
+function TabFurlApp(): void {
   const root = document.getElementById('root')
   if (!root) return
   root.innerHTML = ROOT_TEMPLATE
@@ -305,4 +305,4 @@ function SidebarApp(): void {
   void refresh()
 }
 
-SidebarApp()
+TabFurlApp()

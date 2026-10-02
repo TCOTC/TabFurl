@@ -215,7 +215,7 @@ export async function captureCurrentWindow(
   }
 }
 
-/** 侧边栏里「将保存 N 个标签页」的计数，不产生任何写入。 */
+/** 主界面里「将保存 N 个标签页」的计数，不产生任何写入。 */
 export async function countCapturableTabs(): Promise<{saveable: number; skipped: number}> {
   const snapshot = await snapshotCurrentWindow()
   const saveable = snapshot.groups.reduce((sum, bucket) => sum + bucket.tabs.length, 0) +

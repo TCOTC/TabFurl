@@ -106,7 +106,7 @@ function countBookmarks(node: BookmarkNode): number {
 }
 
 /**
- * 把存档根展开成扁平列表，供侧边栏与启动器使用。
+ * 把存档根展开成扁平列表，供主界面与启动器使用。
  * 顺序即书签树里的前序遍历顺序，所以会话文件夹天然按时间排列。
  */
 export async function listFolders(archiveRootId: string): Promise<FolderOption[]> {

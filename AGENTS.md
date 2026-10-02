@@ -11,7 +11,7 @@
 | 项 | 值 |
 | --- | --- |
 | 目标浏览器 | **仅 Chrome**（未做 Firefox 兼容，不要加 gecko 目标） |
-| 最低 Chrome | 114（`sidePanel` 的要求，写在 `minimum_chrome_version`） |
+| 最低 Chrome | 114（见下方第 3 条；移除 `sidePanel` 后实际绑定 API 是 `tabGroups` 的 89，此处不下调） |
 | 构建工具 | `extension` **4.1.30**（精确版本，勿升级） |
 | Node | >= 22.12（extension 4.x 要求）；`pnpm test` 需要 >= 23.6（原生 TypeScript 执行 + `module.registerHooks`） |
 | 包管理器 | pnpm |
@@ -38,7 +38,7 @@ pnpm icons          # 重新生成占位图标
 浏览器里报错时的堆栈是真实函数名；改完代码它会自动重建。代价只是体积大一倍（都是本地产物，无所谓）。
 
 ⚠️ **`watch` / `dev` 只构建，不启动浏览器、也没有热重载。** 名字取得短是为了顺手。
-自动重建之后仍需自己去 `chrome://extensions` 点扩展卡片上的刷新（↻）再重开侧边栏。
+自动重建之后仍需自己去 `chrome://extensions` 点扩展卡片上的刷新（↻）再重开主界面标签页。
 
 **`extension dev` / `start` / `preview` 没有做成脚本**（2026-10-02 决定）。它们都要求先下载独立的
 Chrome for Testing（约 150 MB，`pnpm exec extension install chrome`），换来的是浏览器自动加载与热重载。
@@ -65,7 +65,7 @@ Chrome for Testing（约 150 MB，`pnpm exec extension install chrome`），换�
 ```
 src/
   manifest.json     入口声明（纯 MV3，不含任何 browser-prefixed 字段）
-  background.ts     只负责「点图标 → 开侧边栏」
+  background.ts     只负责「点图标 → 在独立标签页里打开主界面」
   shared/           与界面无关的核心逻辑，全部可独立复用
     types.ts        领域类型 + 默认设置
     naming.ts       文件夹命名规则（纯函数，无 IO）
@@ -77,11 +77,11 @@ src/
     tile.ts         占位块 HTML 生成
     base.css        全站共用的设计变量与基础组件
     *.test.ts       与实际文件同目录的单元测试（node:test，给 chrome.* 打桩）
-  sidebar/          主界面（侧边栏）
   options/          设置页
   images/           图标
 pages/
-  folder.html/.ts   收藏文件夹阅读页（由特殊文件夹 pages/ 编译，路径即 pages/folder.html）
+  app.html/.ts      主界面（独立标签页；由特殊文件夹 pages/ 编译，路径即 pages/app.html）
+  folder.html/.ts   收藏文件夹阅读页（同上，路径即 pages/folder.html）
 tools/
   generate-icons.mjs 占位图标生成器（纯 Node，无第三方依赖）
   verify-build.mjs   产物自检
@@ -93,9 +93,9 @@ tools/
 
 1. **权限最小化**：当前不需要任何 `host_permissions`，也没有 content script。加功能时先问「能不能不加权限」，新增权限必须在 `docs/design.md` 里写理由，并同步 `tools/verify-build.mjs` 的 `EXPECTED_PERMISSIONS`。
 2. **只用 `chrome.*`**：MV3 下这些 API 原生返回 Promise，不再需要 `webextension-polyfill`。不要为了「保持中立」而引入 `browser.*` 或 polyfill。
-3. **依赖 `minimum_chrome_version: 114`**：`chrome.sidePanel` 与 `chrome.tabGroups` 因此可直接调用，不需要特征检测。若将来用到更新的 API，必须同步抬高此版本号。
+3. **`minimum_chrome_version: 114` 是保守下限，不要下调**：本项目实际用到的最高 API 要求是 `chrome.tabGroups`（89），移除 `sidePanel` 后 114 已无强制理由，但下调等于声明未经验证的旧版本兼容性。若将来用到更新的 API，必须同步抬高此版本号，并同步 `tools/verify-build.mjs` 的 `MIN_CHROME_VERSION`。
 4. **命名规则只在 `shared/naming.ts` 里实现**：界面层不得自己拼字符串。规则见 `docs/design.md`。
-5. **`shared/` 不允许 import `sidebar/`、`options/`、`pages/`**：依赖方向只能是从界面到核心。
+5. **`shared/` 不允许 import `pages/` 与 `options/`**：依赖方向只能是从界面到核心。
 6. **`bookmarks` API 的 id 是设备本地的**：同一账号在另一台设备上 id 不同。任何持久化数据都不要以书签 id 作为跨设备稳定的标识；id 只允许存在本地设置里（如 `archiveRootId`），且必须能重建。
 7. **写入书签前先过滤内部页面**（`chrome://`、`chrome-extension://`、`devtools://` 等），用 `isInternalUrl()`。
 8. **同名不覆盖**：建文件夹前先用 `dedupeName()` 对同级已有名字去重。

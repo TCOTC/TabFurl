@@ -96,7 +96,7 @@ TabFurl 只补这两块。它**不做**通用收藏管理：新增标签、笔�
 
 这带来了实质简化，不是单纯的偷懒：
 
-- `chrome.sidePanel`（114+）与 `chrome.tabGroups`（89+）可以直接调用，**不需要特征检测与降级分支**。
+- `chrome.tabGroups`（89+）可以直接调用，**不需要特征检测与降级分支**。
 - MV3 下 `chrome.*` 原生返回 Promise，**不需要 `webextension-polyfill`**，也不需要维护 `browser.*` / `chrome.*` 两套类型。
 - 清单是纯 MV3，**没有任何 browser-prefixed 字段**，减小了一半（含 `browser_action` / `sidebar_action` 的 MV2 形态）。
 
@@ -106,7 +106,6 @@ TabFurl 只补这两块。它**不做**通用收藏管理：新增标签、笔�
 | `tabs` | 读取标签标题 / URL / 分组，创建标签 |
 | `tabGroups` | 读取分组标题与颜色、创建分组 |
 | `storage` | 保存设置 |
-| `sidePanel` | 侧边栏面板 |
 | `host_permissions` | **无** |
 
 图标用主机名推导的占位色块，不申请 `favicon` 权限，也不请求 Google 的 favicon 服务。
@@ -128,13 +127,16 @@ src/shared/
   base.css        设计变量与基础组件
 ```
 
-依赖方向单向：界面（`sidebar/`、`options/`、`pages/`）→ 核心（`shared/`）。**`shared/` 不得 import 任何界面模块。**
+依赖方向单向：界面（`pages/`、`options/`）→ 核心（`shared/`）。**`shared/` 不得 import 任何界面模块。**
 
 界面：
 
-- `src/sidebar/` —— 主面板（工具栏图标直接打开）。保存当前窗口、撤销、选择文件夹、还原为窗口、各开一个标签页。
+- `pages/app.html` —— 主界面，点工具栏图标以**独立标签页**打开（已开着则切过去，不重复开）。
+  保存当前窗口、撤销、选择文件夹、还原为窗口、各开一个标签页。
+  主界面不放在 `src/` 下而放 `pages/`：它不再由清单（`side_panel`）引用，而 `pages/` 正是构建工具
+  为「未被清单声明的 HTML」设的特殊目录，产物路径即 `pages/app.html`。
 - `options/` —— 设置页。存档根位置、会话命名方式、还原行为。
-- `pages/folder.html` —— 文件夹阅读页，由 `?id=<folderId>` 指定文件夹；由 `pages/` 特殊文件夹机制编译，产物路径即 `pages/folder.html`。
+- `pages/folder.html` —— 文件夹阅读页，由 `?id=<folderId>` 指定文件夹；与主界面同属 `pages/` 特殊文件夹机制。
 
 ## 八、关键约定与已知取舍
 
@@ -153,7 +155,7 @@ src/shared/
 | 还原时分组颜色 | 保持默认色 / 按调色板循环分配 |
 | 深层嵌套（子文件夹的子文件夹） | 继续跳过 / 递归平铺进同一分组 / 建二级分组（Chrome 不支持嵌套分组，只能平铺） |
 | 是否会加 `favicon` 权限以显示真实图标 | 需要权衡权限提示语变长与观感 |
-| 侧边栏是否需要「新建文件夹」，还是只读 | 只读更简单，但用户在存档里手工整理时会来回切界面 |
+| 主界面是否需要「新建文件夹」，还是只读 | 只读更简单，但用户在存档里手工整理时会来回切界面 |
 
 ## 十、开发命令
 
@@ -169,7 +171,7 @@ pnpm icons        # 重新生成占位图标
 ```
 
 加载进 Chrome：`chrome://extensions` → 开启开发者模式 → 「加载已解压的扩展程序」→ 选 `dist/chrome`。
-`pnpm watch` 重建后，点扩展卡片上的刷新（↻）再重开侧边栏。
+`pnpm watch` 重建后，点扩展卡片上的刷新（↻）再重开主界面标签页。
 
 `pnpm watch` 是自己的脚本（`tools/watch.mjs`），只调 `extension build`，因此产物的权限与生产完全一致。
 没有用它自带的 `extension dev --no-browser`，因为那条路必然产出开发版清单（多出 `scripting` 与

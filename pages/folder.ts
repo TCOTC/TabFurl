@@ -67,7 +67,7 @@ async function render(): Promise<void> {
   const folderId = new URLSearchParams(location.search).get('id')
 
   if (!folderId) {
-    root.innerHTML = '<main class="app"><p class="empty">缺少文件夹参数，请从侧边栏打开。</p></main>'
+    root.innerHTML = '<main class="app"><p class="empty">缺少文件夹参数，请从 TabFurl 主界面打开。</p></main>'
     return
   }
 
