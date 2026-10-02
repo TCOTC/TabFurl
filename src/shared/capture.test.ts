@@ -125,7 +125,7 @@ test('分组元数据取不到时退化为空标题，不抛错', async () => {
 test('一个标签都存不了时不留下空文件夹', async () => {
   const {created} = stubChrome([plainTab(1, 'chrome://newtab'), plainTab(2, 'edge://settings')])
 
-  const result = await captureCurrentWindow(ARCHIVE_ROOT, 'datetime')
+  const result = await captureCurrentWindow(ARCHIVE_ROOT)
 
   assert.deepEqual(result, {
     folderId: '',
@@ -140,7 +140,7 @@ test('一个标签都存不了时不留下空文件夹', async () => {
 test('窗口内没有分组时，书签直接放进会话文件夹', async () => {
   const {created} = stubChrome([plainTab(1, 'https://a.com'), plainTab(2, 'https://b.com')])
 
-  const result = await captureCurrentWindow(ARCHIVE_ROOT, 'datetime')
+  const result = await captureCurrentWindow(ARCHIVE_ROOT)
 
   const folders = foldersOf(created)
   assert.equal(folders.length, 1, '只应有会话文件夹这一层')
@@ -171,7 +171,7 @@ test('未分组的标签按窗口顺序穿插在分组之间，不单独建文�
     {groups: {10: {title: '工作', color: 'blue'}, 11: {title: '阅读', color: 'red'}}}
   )
 
-  const result = await captureCurrentWindow(ARCHIVE_ROOT, 'datetime')
+  const result = await captureCurrentWindow(ARCHIVE_ROOT)
 
   const children = childrenOf(created, result.folderId)
   assert.deepEqual(
@@ -208,7 +208,7 @@ test('窗口开头的未分组标签排在第一个分组前面', async () => {
     {groups: {10: {title: '工作', color: 'blue'}}}
   )
 
-  const result = await captureCurrentWindow(ARCHIVE_ROOT, 'datetime')
+  const result = await captureCurrentWindow(ARCHIVE_ROOT)
 
   assert.deepEqual(shape(childrenOf(created, result.folderId)), [
     '书签:https://first.com',
@@ -222,7 +222,7 @@ test('两个同名标签分组不互相覆盖，第二个追加序号', async ()
     {groups: {10: {title: '工作', color: 'blue'}, 11: {title: '工作', color: 'red'}}}
   )
 
-  const result = await captureCurrentWindow(ARCHIVE_ROOT, 'datetime')
+  const result = await captureCurrentWindow(ARCHIVE_ROOT)
 
   const names = foldersOf(created)
     .filter((node) => node.parentId !== ARCHIVE_ROOT)
@@ -237,20 +237,51 @@ test('空标题分组用颜色消歧，未知颜色退化为「无颜色」', as
     {groups: {10: {title: '', color: 'blue'}, 11: {title: '', color: 'magenta'}}}
   )
 
-  await captureCurrentWindow(ARCHIVE_ROOT, 'datetime')
+  await captureCurrentWindow(ARCHIVE_ROOT)
 
   const names = foldersOf(created).map((node) => node.title)
   assert.ok(names.includes('未命名分组（蓝）'))
   assert.ok(names.includes('未命名分组（无颜色）'), '未知颜色不应拼出奇怪的名字')
 })
 
-test('datetimeSite 模式把活动标签的站点写进会话名', async () => {
-  const {created} = stubChrome([plainTab(1, 'https://www.github.com/user/repo')])
+test('会话名默认只有时间戳', async () => {
+  stubChrome([plainTab(1, 'https://www.github.com/user/repo')])
 
-  const result = await captureCurrentWindow(ARCHIVE_ROOT, 'datetimeSite')
+  const result = await captureCurrentWindow(ARCHIVE_ROOT)
 
-  assert.match(result.folderName, /^\d{4}-\d{2}-\d{2} \d{2}_\d{2} · github\.com$/u)
-  assert.equal(created.filter((node) => node.url === undefined).length, 1)
+  // 时间戳里的冒号会被清洗成下划线；不再把站点写进会话名。
+  assert.match(result.folderName, /^\d{4}-\d{2}-\d{2} \d{2}_\d{2}$/)
+  assert.ok(!result.folderName.includes('github'))
+})
+
+test('自定义名拼在时间戳前面，并过一遍清洗', async () => {
+  stubChrome([plainTab(1, 'https://a.com')])
+
+  const result = await captureCurrentWindow(ARCHIVE_ROOT, {name: '季度归档 / 一期'})
+
+  assert.match(result.folderName, /^季度归档 _ 一期 · \d{4}-\d{2}-\d{2} \d{2}_\d{2}$/)
+})
+
+test('自定义名只有空白时退回只用时间戳', async () => {
+  stubChrome([plainTab(1, 'https://a.com')])
+
+  const result = await captureCurrentWindow(ARCHIVE_ROOT, {name: '   '})
+
+  assert.match(result.folderName, /^\d{4}-\d{2}-\d{2} \d{2}_\d{2}$/)
+})
+
+test('带自定义名的会话重名时追加序号，时间戳不受影响', async (t) => {
+  t.mock.timers.enable({apis: ['Date'], now: new Date(2026, 9, 2, 14, 30)})
+  t.after(() => t.mock.timers.reset())
+
+  const {created} = stubChrome([plainTab(1, 'https://a.com')], {
+    seed: {[ARCHIVE_ROOT]: [{id: 'old', title: '会议 · 2026-10-02 14_30'}]}
+  })
+
+  const result = await captureCurrentWindow(ARCHIVE_ROOT, {name: '会议'})
+
+  assert.equal(result.folderName, '会议 · 2026-10-02 14_30 (2)')
+  assert.equal(created.length, 2, '会话文件夹 + 一个书签')
 })
 
 test('会话文件夹与已有文件夹重名时追加序号', async (t) => {
@@ -262,7 +293,7 @@ test('会话文件夹与已有文件夹重名时追加序号', async (t) => {
     seed: {[ARCHIVE_ROOT]: [{id: 'old', title: '2026-10-02 14_30'}]}
   })
 
-  const result = await captureCurrentWindow(ARCHIVE_ROOT, 'datetime')
+  const result = await captureCurrentWindow(ARCHIVE_ROOT)
 
   assert.equal(result.folderName, '2026-10-02 14_30 (2)')
   assert.equal(created.length, 2, '会话文件夹 + 一个书签')
@@ -310,7 +341,7 @@ test('captureCurrentWindow 只写入勾选的标签，整组勾掉就不建那�
     {groups: {10: {title: '工作', color: 'blue'}, 11: {title: '阅读', color: 'red'}}}
   )
 
-  const result = await captureCurrentWindow(ARCHIVE_ROOT, 'datetime', {
+  const result = await captureCurrentWindow(ARCHIVE_ROOT, {
     excludeTabIds: new Set([2, 4])
   })
 
@@ -325,7 +356,7 @@ test('captureCurrentWindow 只写入勾选的标签，整组勾掉就不建那�
 test('全部勾掉时不留下空文件夹', async () => {
   const {created} = stubChrome([plainTab(1, 'https://a.com')])
 
-  const result = await captureCurrentWindow(ARCHIVE_ROOT, 'datetime', {
+  const result = await captureCurrentWindow(ARCHIVE_ROOT, {
     excludeTabIds: new Set([1])
   })
 
@@ -334,15 +365,16 @@ test('全部勾掉时不留下空文件夹', async () => {
   assert.equal(created.length, 0)
 })
 
-test('会话命名不带被勾掉的活动标签，也不带内部页面', async () => {
-  // 存根里 query({active: true}) 返回 tabs[0]，所以第一枚就是活动标签。
+test('自定义名不受勾选影响，被勾掉的标签不会跑到会话名里', async () => {
+  // 存根里 query({active: true}) 返回 tabs[0]（活动标签），这里把它勾掉，
+  // 会话名仍应只有我们自己给的名字 + 时间戳。
   stubChrome([plainTab(1, 'https://www.github.com/user/repo'), plainTab(2, 'https://b.com')])
-  const excluded = await captureCurrentWindow(ARCHIVE_ROOT, 'datetimeSite', {
+
+  const result = await captureCurrentWindow(ARCHIVE_ROOT, {
+    name: '临时看的东西',
     excludeTabIds: new Set([1])
   })
-  assert.ok(!excluded.folderName.includes('·'), '活动标签没被保存就不该拿它命名')
 
-  stubChrome([plainTab(1, 'chrome://newtab'), plainTab(2, 'https://b.com')])
-  const internal = await captureCurrentWindow(ARCHIVE_ROOT, 'datetimeSite')
-  assert.ok(!internal.folderName.includes('·'), '内部页面不该拼出 `· newtab` 这种名字')
+  assert.match(result.folderName, /^临时看的东西 · \d{4}-/)
+  assert.ok(!result.folderName.includes('github'))
 })

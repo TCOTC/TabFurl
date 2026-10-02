@@ -29,18 +29,6 @@ const TEMPLATE = `
   </section>
 
   <section class="card">
-    <h3 class="panel__title">会话文件夹命名</h3>
-    <label class="check">
-      <input type="radio" name="session-name-mode" value="datetime" />
-      <span><code>2026-10-02 14:30</code><br /><span class="muted">本地日期时间，字典序即时间序</span></span>
-    </label>
-    <label class="check">
-      <input type="radio" name="session-name-mode" value="datetimeSite" />
-      <span><code>2026-10-02 14:30 · github.com</code><br /><span class="muted">额外带上当时活动标签的站点，便于分辨同一分钟保存的多个窗口</span></span>
-    </label>
-  </section>
-
-  <section class="card">
     <h3 class="panel__title">还原行为</h3>
     <div class="field">
       <span class="field__label">标签打开到</span>
@@ -69,7 +57,7 @@ const TEMPLATE = `
 /**
  * 「设置」面板。
  *
- * 存档位置改一下立刻落盘（它决定另外两个面板能不能用），命名与还原行为要点「保存设置」。
+ * 存档位置改一下立刻落盘（它决定另外两个面板能不能用），还原行为要点「保存设置」。
  */
 export function createSettingsPanel(events: AppEvents): Panel {
   const element = createPanelElement('settings')
@@ -141,8 +129,6 @@ export function createSettingsPanel(events: AppEvents): Panel {
   function readForm(): Settings {
     return {
       ...settings,
-      sessionNameMode:
-        radioValue('session-name-mode') === 'datetimeSite' ? 'datetimeSite' : 'datetime',
       restoreTarget: radioValue('restore-target') === 'currentWindow'
         ? 'currentWindow'
         : 'newWindow'
@@ -151,7 +137,6 @@ export function createSettingsPanel(events: AppEvents): Panel {
 
   async function refresh(): Promise<void> {
     settings = await loadSettings()
-    setRadio('session-name-mode', settings.sessionNameMode)
     setRadio('restore-target', settings.restoreTarget)
     await showRoot()
   }
@@ -186,7 +171,6 @@ export function createSettingsPanel(events: AppEvents): Panel {
     // 只重置偏好，不动已经选好的存档位置。
     settings = {...DEFAULT_SETTINGS, archiveRootId: settings.archiveRootId}
     await saveSettings(settings)
-    setRadio('session-name-mode', settings.sessionNameMode)
     setRadio('restore-target', settings.restoreTarget)
     setStatus(saveStatus, '已恢复默认（存档位置保留不变）。', 'ok')
     await events.settingsChanged()

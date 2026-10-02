@@ -1,20 +1,13 @@
 import {createBookmark, createFolder, getChildTitles} from './bookmarks'
-import {
-  dedupeName,
-  formatSessionName,
-  formatTimestamp,
-  groupFolderName,
-  sanitizeFolderName
-} from './naming'
+import {dedupeName, formatSessionName, groupFolderName} from './naming'
 import type {
   CaptureResult,
-  SessionNameMode,
   TabGroupBucket,
   TabGroupColor,
   TabSnapshot,
   WindowSnapshot
 } from './types'
-import {hostnameOf, isInternalUrl} from './urls'
+import {isInternalUrl} from './urls'
 
 const GROUP_COLORS: readonly TabGroupColor[] = [
   'grey',
@@ -107,19 +100,6 @@ export async function snapshotCurrentWindow(): Promise<WindowSnapshot> {
   }
 }
 
-/**
- * 当前活动标签的主机名，仅用于会话命名。
- *
- * 活动标签被排除在保存范围外时返回 undefined：不拿一枚没保存的标签给会话命名。
- * 内部页面同样返回 undefined，否则 `chrome://newtab` 会拼出 `· newtab` 这种名字。
- */
-async function activeSiteLabel(excludeTabIds: ReadonlySet<number>): Promise<string | undefined> {
-  const [tab] = await chrome.tabs.query({active: true, currentWindow: true})
-  if (tab?.id === undefined || excludeTabIds.has(tab.id)) return undefined
-  if (isInternalUrl(tab.url)) return undefined
-  return hostnameOf(tab.url)
-}
-
 /** 写入一组标签。返回实际写入数量。 */
 async function writeTabs(folderId: string, tabs: readonly TabSnapshot[]): Promise<number> {
   let written = 0
@@ -180,11 +160,12 @@ export function planSessionChildren(snapshot: WindowSnapshot): SessionChild[] {
  * ```
  * 会话文件夹的直接子级严格按窗口顺序排列。窗口里一个分组都没有时，结果就是
  * 一列散装书签——不需要额外的「未分组」层，所以「保存 → 还原」始终对称。
+ *
+ * @param options.name 会话的自定义名；留空时只用时间戳。
  */
 export async function captureCurrentWindow(
   archiveRootId: string,
-  sessionNameMode: SessionNameMode,
-  options: {excludeTabIds?: ReadonlySet<number>} = {}
+  options: {name?: string; excludeTabIds?: ReadonlySet<number>} = {}
 ): Promise<CaptureResult> {
   const excludeTabIds = options.excludeTabIds ?? new Set<number>()
   const snapshot = selectTabs(await snapshotCurrentWindow(), excludeTabIds)
@@ -196,10 +177,8 @@ export async function captureCurrentWindow(
   }
 
   const date = new Date(snapshot.capturedAt)
-  const site = sessionNameMode === 'datetimeSite' ? await activeSiteLabel(excludeTabIds) : undefined
-  const desired = formatSessionName(date, sessionNameMode, site)
   const sessionName = dedupeName(
-    sanitizeFolderName(desired, formatTimestamp(date)),
+    formatSessionName(date, options.name),
     await getChildTitles(archiveRootId)
   )
   const sessionFolder = await createFolder(archiveRootId, sessionName)

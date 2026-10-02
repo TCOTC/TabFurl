@@ -25,8 +25,8 @@ test('没有存储时返回默认设置', async () => {
 
 test('返回的是默认设置的新副本，不会污染默认值', async () => {
   const settings = await loadSettings()
-  settings.sessionNameMode = 'datetimeSite'
-  assert.equal(DEFAULT_SETTINGS.sessionNameMode, 'datetime')
+  settings.restoreTarget = 'currentWindow'
+  assert.equal(DEFAULT_SETTINGS.restoreTarget, 'newWindow')
 })
 
 test('存储里只有部分字段时与默认值合并', async () => {
@@ -36,7 +36,7 @@ test('存储里只有部分字段时与默认值合并', async () => {
 
   assert.equal(settings.archiveRootId, 'abc')
   assert.equal(settings.restoreTarget, 'currentWindow')
-  assert.equal(settings.sessionNameMode, DEFAULT_SETTINGS.sessionNameMode)
+  assert.equal(settings.lastSessionFolderId, undefined)
 })
 
 test('saveSettings 写入约定的存储键', async () => {
@@ -47,13 +47,12 @@ test('saveSettings 写入约定的存储键', async () => {
 })
 
 test('updateSettings 合并补丁并落盘', async () => {
-  store.settings = {archiveRootId: 'root-1', restoreTarget: 'currentWindow'}
+  store.settings = {archiveRootId: 'root-1', restoreTarget: 'newWindow'}
 
-  const next = await updateSettings({sessionNameMode: 'datetimeSite'})
+  const next = await updateSettings({restoreTarget: 'currentWindow'})
 
   assert.equal(next.archiveRootId, 'root-1', '未提及的字段必须保留')
   assert.equal(next.restoreTarget, 'currentWindow')
-  assert.equal(next.sessionNameMode, 'datetimeSite')
   assert.deepEqual(store.settings, next, '返回值应与落盘内容一致')
 })
 
@@ -69,9 +68,9 @@ test('updateSettings 可以写入撤销用的 lastSessionFolderId', async () => 
 test('loadSettings 原样透传存储里的值，不做校验', async () => {
   // 写入方必须保证合法（设置面板只写联合类型里的值）；读取方直接信任存储，
   // 不引入「纠正脏值」这类逻辑。
-  store.settings = {sessionNameMode: 'nonsense'}
+  store.settings = {restoreTarget: 'nonsense'}
 
   const settings = await loadSettings()
 
-  assert.equal(settings.sessionNameMode, 'nonsense' as typeof settings.sessionNameMode)
+  assert.equal(settings.restoreTarget, 'nonsense' as typeof settings.restoreTarget)
 })

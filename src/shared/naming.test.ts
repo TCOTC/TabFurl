@@ -41,17 +41,40 @@ test('formatTimestamp 零填充且字典序等于时间序', () => {
   assert.equal(formatTimestamp(new Date(2026, 11, 31, 23, 59)), '2026-12-31 23:59')
 })
 
-test('formatSessionName 按模式拼接站点后缀', () => {
+test('formatSessionName 没有自定义名时只有时间戳', () => {
   const date = new Date(2026, 9, 2, 14, 30)
-  assert.equal(formatSessionName(date, 'datetime'), '2026-10-02 14:30')
-  assert.equal(
-    formatSessionName(date, 'datetimeSite', 'github.com'),
-    '2026-10-02 14:30 · github.com'
-  )
-  // 开关打开但取不到站点时不留出空后缀。
-  assert.equal(formatSessionName(date, 'datetimeSite'), '2026-10-02 14:30')
-  // datetime 模式忽略站点。
-  assert.equal(formatSessionName(date, 'datetime', 'github.com'), '2026-10-02 14:30')
+  assert.equal(formatSessionName(date), '2026-10-02 14_30')
+  assert.equal(formatSessionName(date, ''), '2026-10-02 14_30')
+  assert.equal(formatSessionName(date, '   '), '2026-10-02 14_30')
+})
+
+test('formatSessionName 把自定义名拼在时间戳前面', () => {
+  const date = new Date(2026, 9, 2, 14, 30)
+  assert.equal(formatSessionName(date, '会议'), '会议 · 2026-10-02 14_30')
+  assert.equal(formatSessionName(date, '  会议  '), '会议 · 2026-10-02 14_30')
+})
+
+test('formatSessionName 返回的是最终名字（已清洗）', () => {
+  const date = new Date(2026, 9, 2, 14, 30)
+  // 冒号被换成下划线（为将来导出为文件路径留后路），界面可以直接拿它做预览。
+  assert.equal(formatSessionName(date, 'a/b:c'), 'a_b_c · 2026-10-02 14_30')
+  assert.ok(!formatSessionName(date, '项目/一期').includes('/'))
+})
+
+test('名字过长时只截名字，不吞掉后面的时间戳', () => {
+  const date = new Date(2026, 9, 2, 14, 30)
+  const name = '很长的名字'.repeat(40)
+
+  const result = formatSessionName(date, name)
+
+  assert.ok(result.endsWith('· 2026-10-02 14_30'), `时间戳必须完整保留：${result}`)
+  assert.ok(result.length <= MAX_FOLDER_NAME_LENGTH, `总长不能超上限：${result.length}`)
+})
+
+test('全是保留字符的名字清洗后为空，退回只用时间戳', () => {
+  const date = new Date(2026, 9, 2, 14, 30)
+  // `///` 会被替换成下划线，不是空；但控制字符会变成空白后被 trim 掉。
+  assert.equal(formatSessionName(date, '\u0000\u001f'), '2026-10-02 14_30')
 })
 
 test('groupFolderName 用分组标题原文，并清洗保留字符', () => {

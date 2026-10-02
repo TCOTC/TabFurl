@@ -108,8 +108,6 @@ export interface FolderOption {
   folderCount: number
 }
 
-export type SessionNameMode = 'datetime' | 'datetimeSite'
-
 export interface Settings {
   /**
    * 存档根文件夹在书签树中的 id；空字符串表示尚未指定。
@@ -118,7 +116,6 @@ export interface Settings {
    * 不再额外建一层，也不往「其他书签」里写任何东西。
    */
   archiveRootId: string
-  sessionNameMode: SessionNameMode
   restoreTarget: RestoreOptions['target']
   /** 最近一次保存创建的会话文件夹 id，用于撤销。 */
   lastSessionFolderId?: string
@@ -126,6 +123,5 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   archiveRootId: '',
-  sessionNameMode: 'datetime',
   restoreTarget: 'newWindow'
 }

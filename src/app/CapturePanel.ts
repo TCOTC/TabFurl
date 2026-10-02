@@ -8,6 +8,7 @@ import {
   type SessionChild
 } from '../shared/capture'
 import {loadSettings, updateSettings} from '../shared/settings'
+import {formatSessionName} from '../shared/naming'
 import {escapeHtml, tileMarkup} from '../shared/tile'
 import type {Settings, TabSnapshot, WindowSnapshot} from '../shared/types'
 import {hostnameOf} from '../shared/urls'
@@ -22,6 +23,12 @@ import {
 
 const TEMPLATE = `
   <h2 class="panel__title">保存当前窗口 <span class="badge" id="capture-count">0</span></h2>
+  <label class="field">
+    <span class="field__label">会话名（可选）</span>
+    <input type="text" class="input" id="session-name" autocomplete="off"
+           placeholder="留空则只用时间戳，例如：会议" />
+  </label>
+  <p class="muted" id="capture-preview"></p>
   <p class="muted" id="capture-hint"></p>
   <div class="row row--compact">
     <button type="button" class="btn btn--ghost btn--sm" id="tabs-all-btn">全选</button>
@@ -47,6 +54,8 @@ export function createCapturePanel(events: AppEvents): Panel {
   element.innerHTML = TEMPLATE
 
   const hint = q<HTMLParagraphElement>(element, '#capture-hint')
+  const preview = q<HTMLParagraphElement>(element, '#capture-preview')
+  const nameInput = q<HTMLInputElement>(element, '#session-name')
   const countBadge = q<HTMLSpanElement>(element, '#capture-count')
   const allButton = q<HTMLButtonElement>(element, '#tabs-all-btn')
   const noneButton = q<HTMLButtonElement>(element, '#tabs-none-btn')
@@ -156,6 +165,11 @@ export function createCapturePanel(events: AppEvents): Panel {
     updateBar()
   }
 
+  function updatePreview(): void {
+    // 直接用命名函数生成，所以预览与真正写入书签的名字完全一致（含清洗与截断）。
+    preview.textContent = `将存成：${formatSessionName(new Date(), nameInput.value)}`
+  }
+
   function updateBar(): void {
     const total = countSnapshotTabs(snapshot)
     const kept = countSnapshotTabs(selectTabs(snapshot, excluded))
@@ -197,6 +211,7 @@ export function createCapturePanel(events: AppEvents): Panel {
       ? `${parts.join('，')}。取消勾选即不保存。`
       : '需要先在「设置」里指定存档根文件夹。'
 
+    updatePreview()
     render()
   }
 
@@ -206,7 +221,8 @@ export function createCapturePanel(events: AppEvents): Panel {
     updateBar()
 
     try {
-      const result = await captureCurrentWindow(settings.archiveRootId, settings.sessionNameMode, {
+      const result = await captureCurrentWindow(settings.archiveRootId, {
+        name: nameInput.value,
         excludeTabIds: excluded
       })
       if (result.saved === 0) {
@@ -217,7 +233,8 @@ export function createCapturePanel(events: AppEvents): Panel {
         if (result.groups > 0) parts.push(`创建 ${result.groups} 个分组`)
         if (result.skipped > 0) parts.push(`跳过 ${result.skipped} 个内部页面`)
         setStatus(status, `${parts.join('，')}。`, 'ok')
-        // 这次勾选已经落盘了，下次从「全选」重新开始。
+        // 名字不记住：下次保存从空白开始；这次勾选已经落盘，也从「全选」重来。
+        nameInput.value = ''
         excluded.clear()
       }
     } catch (error) {
@@ -285,6 +302,7 @@ export function createCapturePanel(events: AppEvents): Panel {
 
   captureButton.addEventListener('click', () => void runCapture())
   undoButton.addEventListener('click', () => void runUndo())
+  nameInput.addEventListener('input', updatePreview)
 
   // 主界面是一个标签页，用户随时会去动标签；不跟着刷新的话清单会过期。
   // 面板不可见时不刷新，省下每次标签变化的 snapshot 开销。
