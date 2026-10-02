@@ -78,7 +78,7 @@ export function createArchivePanel(events: AppEvents): Panel {
       if (total === 0) return '没有可还原的标签页'
       const base =
         kept === 0
-          ? `未选中标签页（列表里共 ${total} 枚）`
+          ? `尚未勾选（列表里共 ${total} 枚标签页），勾选后才能还原`
           : `已选 ${kept} / ${total} 枚标签页 · ${targets().length} 个存档`
       return filtered ? `${base}（仅列表可见）` : base
     },
@@ -108,8 +108,14 @@ export function createArchivePanel(events: AppEvents): Panel {
    *
    * **只有这一个勾选维度**：一枚书签要么会被还原、要么不会。存档行与分组行都是它上面
    * 的聚合（三态），所以不存在「看着全选、但按钮说没选中」这种自相矛盾。
+   *
+   * 存档侧**默认一个都不勾**：还原是「要打开哪些」的动作，默认全开太危险。
+   * 实现上仍然用排除集（而不是选中集），配合下面的 `knownBookmarks`：
+   * 没见过的书签一律算排除。这样既满足「默认不勾」，重渲染又不会弄丢用户已做的勾选。
    */
   const excludedBookmarks = new Set<string>()
+  /** 已经出现过的书签 id。新出现的一律默认算排除。 */
+  const knownBookmarks = new Set<string>()
   const contentInputs = new Map<string, HTMLInputElement>()
   /** 容器 id（会话或分组）→ 它包含的书签 id，用于整组勾选与计数。 */
   const containerBookmarks = new Map<string, string[]>()
@@ -117,14 +123,26 @@ export function createArchivePanel(events: AppEvents): Panel {
   let pendingDeleteId: string | undefined
   let renaming: {id: string; committed: boolean} | undefined
 
+  /**
+   * 会话行的副文案。
+   *
+   * 默认一个都不勾，所以**不能**把「还会还原的枚数」直接写成「N 个标签」——
+   * 那会显示成「0 个标签」，看着像这个存档是空的。改成以「已选」为主。
+   */
   function sessionMetaText(view: SessionView): string {
     const bookmarks = view.plan.items.flatMap((item) => item.bookmarks)
-    const excluded = bookmarks.filter((bookmark) => excludedBookmarks.has(bookmark.id)).length
+    const total = bookmarks.length
+    const kept = bookmarks.filter((bookmark) => !excludedBookmarks.has(bookmark.id)).length
     const groups = view.plan.items.filter((item) => item.title !== '').length
 
-    const parts = [`${bookmarks.length - excluded} 个标签`]
+    const parts = [
+      kept === 0
+        ? `未勾选 · 共 ${total} 枚标签`
+        : kept === total
+          ? `已全选 ${total} 枚标签`
+          : `已选 ${kept} / ${total} 枚标签`
+    ]
     if (groups > 0) parts.push(`${groups} 个分组`)
-    if (excluded > 0) parts.push(`已勾掉 ${excluded}`)
     if (view.plan.skipped > 0) parts.push(`跳过 ${view.plan.skipped}`)
     return parts.join(' · ')
   }
@@ -372,7 +390,7 @@ export function createArchivePanel(events: AppEvents): Panel {
     const {kept, total} = visibleTotals()
     selectAll.update(kept, total, filtered)
 
-    // 数量写在按钮上：默认全选，一下会把所有东西都打开，得让人先看见数。
+    // 数量写在按钮上：得让人在点之前看见这一下会打开多少。
     openWindowButton.textContent = `还原为窗口（${tabs} 个标签页 / ${targetsCount} 个存档）`
     openTabsButton.textContent = `只开标签页（${tabs} 个标签页 / ${targetsCount} 个存档）`
     openViewersButton.textContent = `打开阅读页（${targetsCount} 个）`
@@ -400,6 +418,17 @@ export function createArchivePanel(events: AppEvents): Panel {
     const alive = new Set(
       sessions.flatMap((view) => view.plan.items.flatMap((item) => item.bookmarks.map((b) => b.id)))
     )
+    // 第一次见到的书签默认算排除（存档侧默认一个都不勾）。
+    // 新保存出来的存档同理：它里面的标签从一开始就不勾，免得「刚存完就被下一次还原顺手打开」。
+    for (const id of alive) {
+      if (!knownBookmarks.has(id)) {
+        knownBookmarks.add(id)
+        excludedBookmarks.add(id)
+      }
+    }
+    for (const id of [...knownBookmarks]) {
+      if (!alive.has(id)) knownBookmarks.delete(id)
+    }
     for (const id of [...excludedBookmarks]) {
       if (!alive.has(id)) excludedBookmarks.delete(id)
     }
