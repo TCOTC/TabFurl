@@ -1,6 +1,6 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {getBookmarksBarId, listArchiveRootCandidates, listFolders} from './bookmarks'
+import {getBookmarksBarId, getNodePath, listArchiveRootCandidates, listFolders} from './bookmarks'
 
 interface StubNode {
   id: string
@@ -14,8 +14,21 @@ interface StubNode {
  *
  * `get` 与真实 API 一致：不回填 `children`——只有 `getTree` 与 `getSubTree` 才带子孙。
  * 这一点很关键，靠 `get` 判「文件夹还在不在」的代码不会因为打桩而变得比真机宽松。
+ *
+ * 但 `parentId` 必须给：`getNodePath` 就是靠它在树里向上走的。
  */
 function stubChrome(tree: StubNode[]): void {
+  const parents = new Map<string, string>()
+
+  // 先走一遍把父子关系记全（根节点没有 parentId，与真实 API 一致）。
+  const recordParents = (nodes: StubNode[], parentId?: string): void => {
+    for (const node of nodes) {
+      if (parentId !== undefined) parents.set(node.id, parentId)
+      recordParents(node.children ?? [], node.id)
+    }
+  }
+  recordParents(tree)
+
   const find = (nodes: StubNode[], id: string): StubNode | undefined => {
     for (const node of nodes) {
       if (node.id === id) return node
@@ -25,7 +38,12 @@ function stubChrome(tree: StubNode[]): void {
     return undefined
   }
 
-  const shallow = (node: StubNode) => ({id: node.id, title: node.title, url: node.url})
+  const shallow = (node: StubNode): Record<string, unknown> => ({
+    id: node.id,
+    title: node.title,
+    url: node.url,
+    parentId: parents.get(node.id)
+  })
   const deep = (node: StubNode): Record<string, unknown> => ({
     ...shallow(node),
     children: (node.children ?? []).map(deep)
@@ -78,6 +96,42 @@ const TREE: StubNode[] = [
 test('getBookmarksBarId 按 id 认书签栏，而不是按位置', async () => {
   stubChrome(TREE)
   assert.equal(await getBookmarksBarId(), '1')
+})
+
+test('getNodePath 由浅到深给出祖先，含自身与 id', async () => {
+  stubChrome(TREE)
+
+  // 13 是「书签栏 / 存档 / 书签B」这枚书签，用来验证路径是逐层向上的。
+  assert.deepEqual(await getNodePath('13'), [
+    {id: '0', title: '书签'},
+    {id: '1', title: '书签栏'},
+    {id: '11', title: '存档'},
+    {id: '13', title: '书签B'}
+  ])
+})
+
+test('getNodePath 的根节点用「书签」兜底，不留空白格', async () => {
+  stubChrome(TREE)
+
+  const path = await getNodePath('1')
+  // 真实书签树里根的 title 是空串。
+  assert.equal(path[0].title, '书签')
+  assert.equal(path[0].id, '0')
+})
+
+test('getNodePath 取的是 id 而不只是标题，面包屑才能做成链接', async () => {
+  stubChrome(TREE)
+
+  const path = await getNodePath('12')
+  assert.deepEqual(
+    path.map((node) => node.id),
+    ['0', '1', '11', '12']
+  )
+})
+
+test('getNodePath 遇到不存在的节点返回空数组，不抛错', async () => {
+  stubChrome(TREE)
+  assert.deepEqual(await getNodePath('nope'), [])
 })
 
 test('getBookmarksBarId 认不出书签栏时报错，绝不退化为「其他书签」', async () => {

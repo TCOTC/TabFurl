@@ -103,22 +103,29 @@ async function render(): Promise<void> {
       0
     )
 
-  const crumbs = await getNodePath(folderId)
-  const crumbMarkup = crumbs
-    .slice(0, -1)
-    .map((title) => `<span>${escapeHtml(title)}</span>`)
+  // 面包屑：除当前这一层外都可点，点了就打开那一层文件夹。
+  // 当前层是这一页自身，做成链接只是噪声，所以留作纯文本。
+  const path = await getNodePath(folderId)
+  const ancestors = path.slice(0, -1)
+  const crumbMarkup = ancestors
+    .map((node) => `<a href="${escapeHtml(folderHref(node.id))}">${escapeHtml(node.title)}</a>`)
     .join('<span> / </span>')
 
   const isEmpty = subFolders.length === 0 && looseBookmarks.length === 0
 
-  document.title = `${folder.title} · TabFurl`
+  // 当前层的标题也走同一套兜底（`getNodePath` 会给空标题补「书签」）。
+  // 书签树的根节点标题就是空串，而它在面包屑里是可点的，所以这里必须一致——
+  // 否则点进根之后 h1 与面包屑会双双变成空白。
+  const currentTitle = path.at(-1)?.title ?? folder.title
+
+  document.title = `${currentTitle} · TabFurl`
 
   root.innerHTML = `
     <main class="app">
       <header class="app__header">
-        <h1 class="app__title">${escapeHtml(folder.title)}</h1>
+        <h1 class="app__title">${escapeHtml(currentTitle)}</h1>
         <p class="crumbs">${crumbMarkup ? `${crumbMarkup}<span> / </span>` : ''}<span>${escapeHtml(
-          folder.title
+          currentTitle
         )}</span></p>
         <p class="muted" id="count-hint">${subFolders.length} 个子文件夹 · ${totalBookmarks} 个书签</p>
       </header>

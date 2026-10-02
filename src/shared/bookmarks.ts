@@ -98,18 +98,23 @@ export async function getBookmarksBarId(): Promise<string> {
   return bar.id
 }
 
-/** 从节点一路向上收集标题，用于在界面上显示完整位置。 */
-export async function getNodePath(id: string): Promise<string[]> {
-  const titles: string[] = []
+/**
+ * 从节点一路向上收集祖先，**含自身**，顺序由浅到深（根在前）。
+ *
+ * 返回 id 而不只是标题：阅读页的面包屑要把每一层做成链接（`folder.html?id=…`）。
+ * 根节点的 `title` 是空串，所以兜底成「书签」——否则面包屑首项会是个空白格。
+ */
+export async function getNodePath(id: string): Promise<{id: string; title: string}[]> {
+  const nodes: {id: string; title: string}[] = []
   let current = await getNode(id)
 
   // 50 层足够，同时防止书签树出现环时死循环。
   for (let depth = 0; current && depth < 50; depth++) {
-    titles.unshift(current.title || '书签')
+    nodes.unshift({id: current.id, title: current.title || '书签'})
     if (!current.parentId) break
     current = await getNode(current.parentId)
   }
-  return titles
+  return nodes
 }
 
 /** 统计一个文件夹下的全部可收藏书签（递归，跳过内部页面）。 */

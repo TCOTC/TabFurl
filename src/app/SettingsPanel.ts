@@ -89,7 +89,9 @@ export function createSettingsPanel(events: AppEvents): Panel {
       rootStatus.textContent = '尚未指定。请从上面的列表里选一个书签栏下的文件夹。'
       return
     }
-    rootStatus.textContent = `当前存档根：${(await getNodePath(id)).join(' / ')}`
+    rootStatus.textContent = `当前存档根：${(await getNodePath(id))
+      .map((node) => node.title)
+      .join(' / ')}`
   }
 
   /** 第 0 项是书签栏自己，其余项的 path 不含书签栏，所以这里补上头部。 */
