@@ -1,14 +1,14 @@
 /**
- * 三个标签页的共同契约与共用小工具。
+ * 界面模块的共同契约与共用小工具。
  *
- * 面板之间不互相 import，只通过 `AppEvents` 通信，这样拆成三个文件也不会绕成环。
+ * 模块之间不互相 import，只通过 `AppEvents` 通信，这样拆成几个文件也不会绕成环。
  */
 
-/** 一个标签页面板。 */
+/** 界面里的一块。 */
 export interface Panel {
-  /** 面板根元素；由 `App` 负责插进 DOM 与显隐。 */
+  /** 根元素；由 `App` 负责插进 DOM。 */
   readonly element: HTMLElement
-  /** 重新读数据并重渲染。切到该标签页、或别处改了数据时调用。 */
+  /** 重新读数据并重渲染。别处改了数据时调用。 */
   refresh(): Promise<void>
 }
 
@@ -33,7 +33,7 @@ export function errorText(error: unknown): string {
 }
 
 export function setStatus(
-  element: HTMLParagraphElement,
+  element: HTMLElement,
   message: string,
   kind: StatusKind
 ): void {
@@ -47,13 +47,16 @@ export function setStatus(
   element.textContent = message
 }
 
-/** 建面板外壳。id 与 aria 指向由这里统一拼，免得三处写法不一致。 */
+/**
+ * 建界面外壳。
+ *
+ * **不再带 `role="tabpanel"`**：那是「顶部标签页切换」时代的语义，
+ * 现在只有一个两栏界面，标成 tabpanel 反而会指向一个并不存在的 `tab-*` 元素。
+ */
 export function createPanelElement(id: string): HTMLElement {
   const element = document.createElement('section')
   element.className = 'panel'
   element.id = `panel-${id}`
-  element.setAttribute('role', 'tabpanel')
-  element.setAttribute('aria-labelledby', `tab-${id}`)
   return element
 }
 

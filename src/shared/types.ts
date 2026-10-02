@@ -64,14 +64,21 @@ export interface WindowSnapshot {
   skipped: number
 }
 
-export interface CaptureResult {
-  /** 本次创建的会话文件夹；一条都没保存时为空字符串。 */
-  folderId: string
-  folderName: string
+/**
+ * 一次写入的结果。
+ *
+ * 两个 id 数组是「撤销上一次保存」的全部依据：没有会话层之后，
+ * 撤销就只能是「把这一次新建的东西删掉」，所以写入时必须把 id 收集起来。
+ */
+export interface SaveResult {
   saved: number
   skipped: number
   /** 创建的分组子文件夹数量。 */
   groups: number
+  /** 本次新建的文件夹 id（分组）。 */
+  folderIds: string[]
+  /** 本次新建的书签 id（顺序即写入顺序）。 */
+  bookmarkIds: string[]
 }
 
 export interface RestoreOptions {
@@ -122,8 +129,6 @@ export interface Settings {
    * 不再额外建一层，也不往「其他书签」里写任何东西。
    */
   archiveRootId: string
-  /** 最近一次保存创建的会话文件夹 id，用于撤销。 */
-  lastSessionFolderId?: string
 }
 
 export const DEFAULT_SETTINGS: Settings = {

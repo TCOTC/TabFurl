@@ -1,16 +1,26 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {captureCurrentWindow, selectTabs, snapshotCurrentWindow} from './capture'
+import {
+  mergeSaveResults,
+  planWindowChildren,
+  selectTabs,
+  snapshotCurrentWindow,
+  writeChildren
+} from './capture'
 
 interface StubTab {
+  /**
+   * 它同时被当作 `TabSnapshot` 用（分组里的标签直接来自快照），
+   * 所以字段取快照的形态、且都是必填。
+   */
+  tabId: number
   id: number
-  windowId?: number
-  groupId?: number
+  windowId: number
+  groupId: number
   index: number
-  pinned?: boolean
+  pinned: boolean
   title: string
   url: string
-  lastAccessed?: number
 }
 
 interface StubNode {
@@ -28,8 +38,7 @@ const ARCHIVE_ROOT = 'root-1'
 /**
  * 用内存书签树 + 固定标签列表替换 `chrome.*`。
  *
- * `bookmarks.create` 会把新节点挂回内存树，所以 `dedupeName` 能看到「同一轮里刚建好的同名文件夹」，
- * 不必依赖时间或人为预设。
+ * `bookmarks.create` 会把新节点挂回内存树，所以可以验证「写进已有文件夹」时是否真的落在正确的父级下。
  */
 function stubChrome(
   tabs: StubTab[],
@@ -44,10 +53,7 @@ function stubChrome(
   let seq = 0
 
   ;(globalThis as Record<string, unknown>).chrome = {
-    tabs: {
-      // activeSiteLabel 用 {active: true} 取当前活动标签。
-      query: async (query?: {active?: boolean}) => (query?.active ? [tabs[0]] : tabs)
-    },
+    tabs: {query: async () => tabs},
     tabGroups: {get: async (id: number) => options.groups?.[id]},
     windows: {WINDOW_ID_CURRENT: -2},
     bookmarks: {
@@ -71,25 +77,28 @@ function stubChrome(
 }
 
 const foldersOf = (created: CreatedNode[]) => created.filter((node) => node.url === undefined)
-const linksOf = (created: CreatedNode[]) => created.filter((node) => node.url !== undefined)
 
-/** 会话文件夹的直接子级，按写入顺序。 */
-const childrenOf = (created: CreatedNode[], sessionId: string) =>
-  created.filter((node) => node.parentId === sessionId)
+/** 某个文件夹的直接子级，按写入顺序。 */
+const childrenOf = (created: CreatedNode[], parentId: string) =>
+  created.filter((node) => node.parentId === parentId)
 
 /** 把子级压成可读的序列，便于断言穿插顺序。 */
 const shape = (children: CreatedNode[]) =>
   children.map((node) => (node.url ? `书签:${node.url}` : `文件夹:${node.title}`))
 
-const plainTab = (id: number, url: string, extra: Partial<StubTab> = {}): StubTab => ({
+const plainTab = (
+  id: number,
+  url: string,
+  extra: {groupId?: number; pinned?: boolean} = {}
+): StubTab => ({
+  tabId: id,
   id,
   windowId: 7,
-  groupId: -1,
+  groupId: extra.groupId ?? -1,
   index: id,
-  pinned: false,
+  pinned: extra.pinned ?? false,
   title: url,
-  url,
-  ...extra
+  url
 })
 
 test('snapshotCurrentWindow 按 groupId 分桶，不按标题合并', async () => {
@@ -122,44 +131,29 @@ test('分组元数据取不到时退化为空标题，不抛错', async () => {
   assert.equal(snapshot.groups[0].color, undefined)
 })
 
-test('一个标签都存不了时不留下空文件夹', async () => {
-  const {created} = stubChrome([plainTab(1, 'chrome://newtab'), plainTab(2, 'edge://settings')])
+test('内部页面在快照阶段就被过滤，写不进去', async () => {
+  stubChrome([plainTab(1, 'chrome://newtab'), plainTab(2, 'edge://settings')])
 
-  const result = await captureCurrentWindow(ARCHIVE_ROOT)
+  const snapshot = await snapshotCurrentWindow()
 
-  assert.deepEqual(result, {
-    folderId: '',
-    folderName: '',
-    saved: 0,
-    skipped: 2,
-    groups: 0
-  })
-  assert.equal(created.length, 0, '不应产生任何书签写入')
+  assert.equal(snapshot.groups.length, 0)
+  assert.equal(snapshot.ungrouped.length, 0)
+  assert.equal(snapshot.skipped, 2)
 })
 
-test('窗口内没有分组时，书签直接放进会话文件夹', async () => {
-  const {created} = stubChrome([plainTab(1, 'https://a.com'), plainTab(2, 'https://b.com')])
+test('窗口内没有分组时，子级就是一列散装标签，顺序即窗口顺序', async () => {
+  stubChrome([plainTab(1, 'https://a.com'), plainTab(2, 'https://b.com')])
 
-  const result = await captureCurrentWindow(ARCHIVE_ROOT)
+  const children = planWindowChildren(await snapshotCurrentWindow())
 
-  const folders = foldersOf(created)
-  assert.equal(folders.length, 1, '只应有会话文件夹这一层')
-  assert.equal(folders[0].parentId, ARCHIVE_ROOT)
-  // 名字保留原文，不做路径字符替换，所以时间戳里的冒号就是冒号。
-  assert.match(folders[0].title, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
-
-  assert.deepEqual(shape(childrenOf(created, result.folderId)), [
-    '书签:https://a.com',
-    '书签:https://b.com'
-  ])
-
-  assert.equal(result.saved, 2)
-  assert.equal(result.groups, 0)
-  assert.equal(result.folderId, folders[0].id)
+  assert.deepEqual(
+    children.map((child) => (child.kind === 'tab' ? child.tab.url : `组:${child.name}`)),
+    ['https://a.com', 'https://b.com']
+  )
 })
 
 test('未分组的标签按窗口顺序穿插在分组之间，不单独建文件夹', async () => {
-  const {created} = stubChrome(
+  stubChrome(
     [
       plainTab(1, 'https://a1.com', {groupId: 10}),
       plainTab(2, 'https://a2.com', {groupId: 10}),
@@ -170,131 +164,155 @@ test('未分组的标签按窗口顺序穿插在分组之间，不单独建文�
     {groups: {10: {title: '工作', color: 'blue'}, 11: {title: '阅读', color: 'red'}}}
   )
 
-  const result = await captureCurrentWindow(ARCHIVE_ROOT)
+  const children = planWindowChildren(await snapshotCurrentWindow())
 
-  const children = childrenOf(created, result.folderId)
   assert.deepEqual(
-    shape(children),
-    [
-      '文件夹:工作',
-      '书签:https://loose-1.com',
-      '文件夹:阅读',
-      '书签:https://loose-2.com'
-    ],
-    '会话文件夹的子级必须按窗口顺序穿插'
+    children.map((child) => (child.kind === 'tab' ? `书签:${child.tab.url}` : `文件夹:${child.name}`)),
+    ['文件夹:工作', '书签:https://loose-1.com', '文件夹:阅读', '书签:https://loose-2.com'],
+    '子级必须按窗口顺序穿插',
+    // 不再有「未分组」文件夹。
   )
+  assert.ok(!children.some((child) => child.kind === 'group' && child.name === '未分组'))
 
-  // 不再有「未分组」文件夹。
-  assert.ok(!children.some((node) => node.title === '未分组'))
-
-  // 分组内部的标签顺序与窗口一致。
-  const work = children.find((node) => node.title === '工作')
-  assert.deepEqual(shape(childrenOf(created, work?.id ?? '')), [
-    '书签:https://a1.com',
-    '书签:https://a2.com'
-  ])
-
-  assert.equal(result.saved, 5)
-  assert.equal(result.groups, 2)
+  const work = children.find((child) => child.kind === 'group' && child.name === '工作')
+  assert.deepEqual(
+    work?.kind === 'group' ? work.tabs.map((tab) => tab.url) : [],
+    ['https://a1.com', 'https://a2.com'],
+    '分组内部的标签顺序与窗口一致'
+  )
 })
 
 test('窗口开头的未分组标签排在第一个分组前面', async () => {
-  const {created} = stubChrome(
-    [
-      plainTab(1, 'https://first.com'),
-      plainTab(2, 'https://a.com', {groupId: 10})
-    ],
+  stubChrome(
+    [plainTab(1, 'https://first.com'), plainTab(2, 'https://a.com', {groupId: 10})],
     {groups: {10: {title: '工作', color: 'blue'}}}
   )
 
-  const result = await captureCurrentWindow(ARCHIVE_ROOT)
+  const children = planWindowChildren(await snapshotCurrentWindow())
 
-  assert.deepEqual(shape(childrenOf(created, result.folderId)), [
-    '书签:https://first.com',
-    '文件夹:工作'
-  ])
-})
-
-test('两个同名标签分组不互相覆盖，第二个追加序号', async () => {
-  const {created} = stubChrome(
-    [plainTab(1, 'https://a.com', {groupId: 10}), plainTab(2, 'https://b.com', {groupId: 11})],
-    {groups: {10: {title: '工作', color: 'blue'}, 11: {title: '工作', color: 'red'}}}
+  assert.deepEqual(
+    children.map((child) => (child.kind === 'tab' ? `书签:${child.tab.url}` : `文件夹:${child.name}`)),
+    ['书签:https://first.com', '文件夹:工作']
   )
-
-  const result = await captureCurrentWindow(ARCHIVE_ROOT)
-
-  const names = foldersOf(created)
-    .filter((node) => node.parentId !== ARCHIVE_ROOT)
-    .map((node) => node.title)
-  assert.deepEqual(names, ['工作', '工作 (2)'])
-  assert.equal(result.groups, 2)
 })
 
 test('空标题分组用颜色消歧，未知颜色退化为「无颜色」', async () => {
-  const {created} = stubChrome(
+  stubChrome(
     [plainTab(1, 'https://a.com', {groupId: 10}), plainTab(2, 'https://b.com', {groupId: 11})],
     {groups: {10: {title: '', color: 'blue'}, 11: {title: '', color: 'magenta'}}}
   )
 
-  await captureCurrentWindow(ARCHIVE_ROOT)
+  const names = planWindowChildren(await snapshotCurrentWindow())
+    .filter((child) => child.kind === 'group')
+    .map((child) => (child.kind === 'group' ? child.name : ''))
 
-  const names = foldersOf(created).map((node) => node.title)
   assert.ok(names.includes('未命名分组（蓝）'))
   assert.ok(names.includes('未命名分组（无颜色）'), '未知颜色不应拼出奇怪的名字')
 })
 
-test('会话名默认只有时间戳', async () => {
-  stubChrome([plainTab(1, 'https://www.github.com/user/repo')])
+test('writeChildren 把分组写成子文件夹，散装标签留在那一层', async () => {
+  const {created} = stubChrome([])
 
-  const result = await captureCurrentWindow(ARCHIVE_ROOT)
+  const result = await writeChildren(ARCHIVE_ROOT, [
+    {kind: 'group', name: '工作', tabs: [plainTab(1, 'https://a1.com'), plainTab(2, 'https://a2.com')]},
+    {kind: 'tab', tab: plainTab(3, 'https://loose.com')}
+  ])
 
-  // 不再把站点写进会话名；时间戳也不做字符替换。
-  assert.match(result.folderName, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
-  assert.ok(!result.folderName.includes('github'))
+  assert.deepEqual(shape(childrenOf(created, ARCHIVE_ROOT)), ['文件夹:工作', '书签:https://loose.com'])
+  const work = foldersOf(created)[0]
+  assert.deepEqual(shape(childrenOf(created, work.id)), [
+    '书签:https://a1.com',
+    '书签:https://a2.com'
+  ])
+  assert.equal(result.saved, 3)
+  assert.equal(result.groups, 1)
 })
 
-test('自定义名按手打原文拼在时间戳前面', async () => {
-  stubChrome([plainTab(1, 'https://a.com')])
+test('writeChildren 能写进任意一层——拖到某个分组文件夹上就进那一层', async () => {
+  const {created} = stubChrome([])
 
-  const result = await captureCurrentWindow(ARCHIVE_ROOT, {name: '季度归档 / 一期'})
+  await writeChildren('some-existing-folder', [{kind: 'tab', tab: plainTab(1, 'https://a.com')}])
 
-  assert.match(result.folderName, /^季度归档 \/ 一期 · \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
+  assert.deepEqual(
+    created.map((node) => `${node.parentId}:${node.title}`),
+    ['some-existing-folder:https://a.com'],
+    '父级必须是调用方给的文件夹，而不是存档根'
+  )
 })
 
-test('自定义名只有空白时退回只用时间戳', async () => {
-  stubChrome([plainTab(1, 'https://a.com')])
+test('拖一条标签过来就是只写一个 tab 子级', async () => {
+  const {created} = stubChrome([])
 
-  const result = await captureCurrentWindow(ARCHIVE_ROOT, {name: '   '})
+  const result = await writeChildren(ARCHIVE_ROOT, [{kind: 'tab', tab: plainTab(7, 'https://one.com')}])
 
-  assert.match(result.folderName, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
+  assert.equal(result.saved, 1)
+  assert.equal(result.groups, 0)
+  assert.equal(created.length, 1)
 })
 
-test('带自定义名的会话重名时追加序号，时间戳不受影响', async (t) => {
-  t.mock.timers.enable({apis: ['Date'], now: new Date(2026, 9, 2, 14, 30)})
-  t.after(() => t.mock.timers.reset())
+test('同名分组允许共存：不合并、也不追加序号', async () => {
+  const {created} = stubChrome([])
 
-  const {created} = stubChrome([plainTab(1, 'https://a.com')], {
-    seed: {[ARCHIVE_ROOT]: [{id: 'old', title: '会议 · 2026-10-02 14:30'}]}
+  await writeChildren(ARCHIVE_ROOT, [
+    {kind: 'group', name: '工作', tabs: [plainTab(1, 'https://a.com')]},
+    {kind: 'group', name: '工作', tabs: [plainTab(2, 'https://b.com')]}
+  ])
+
+  const names = foldersOf(created).map((node) => node.title)
+  assert.deepEqual(names, ['工作', '工作'], '两个同名文件夹各自独立')
+  assert.equal(new Set(foldersOf(created).map((node) => node.id)).size, 2, '不是同一个文件夹')
+})
+
+test('writeChildren 收集新建的 id，供撤销使用', async () => {
+  const {created} = stubChrome([])
+
+  const result = await writeChildren(ARCHIVE_ROOT, [
+    {kind: 'group', name: '工作', tabs: [plainTab(1, 'https://a.com')]},
+    {kind: 'tab', tab: plainTab(2, 'https://b.com')}
+  ])
+
+  const work = foldersOf(created)[0]
+  assert.deepEqual(result.folderIds, [work.id])
+  assert.deepEqual(
+    result.bookmarkIds,
+    created.filter((node) => node.url !== undefined).map((node) => node.id),
+    '书签 id 要与实际写入的一一对应'
+  )
+})
+
+test('什么都不拖时不写入任何东西', async () => {
+  const {created} = stubChrome([])
+
+  const result = await writeChildren(ARCHIVE_ROOT, [])
+
+  assert.deepEqual(result, {
+    saved: 0,
+    groups: 0,
+    skipped: 0,
+    folderIds: [],
+    bookmarkIds: []
   })
-
-  const result = await captureCurrentWindow(ARCHIVE_ROOT, {name: '会议'})
-
-  assert.equal(result.folderName, '会议 · 2026-10-02 14:30 (2)')
-  assert.equal(created.length, 2, '会话文件夹 + 一个书签')
+  assert.equal(created.length, 0)
 })
 
-test('会话文件夹与已有文件夹重名时追加序号', async (t) => {
-  t.mock.timers.enable({apis: ['Date'], now: new Date(2026, 9, 2, 14, 30)})
-  t.after(() => t.mock.timers.reset())
+test('mergeSaveResults 合并多次写入（一次动作可能写了好几处）', () => {
+  const a = {saved: 1, groups: 0, skipped: 0, folderIds: [], bookmarkIds: ['b1']}
+  const b = {saved: 2, groups: 1, skipped: 3, folderIds: ['f1'], bookmarkIds: ['b2', 'b3']}
 
-  const {created} = stubChrome([plainTab(1, 'https://a.com')], {
-    seed: {[ARCHIVE_ROOT]: [{id: 'old', title: '2026-10-02 14:30'}]}
+  assert.deepEqual(mergeSaveResults([a, b]), {
+    saved: 3,
+    groups: 1,
+    skipped: 3,
+    folderIds: ['f1'],
+    bookmarkIds: ['b1', 'b2', 'b3']
   })
-
-  const result = await captureCurrentWindow(ARCHIVE_ROOT)
-
-  assert.equal(result.folderName, '2026-10-02 14:30 (2)')
-  assert.equal(created.length, 2, '会话文件夹 + 一个书签')
+  assert.deepEqual(mergeSaveResults([]), {
+    saved: 0,
+    groups: 0,
+    skipped: 0,
+    folderIds: [],
+    bookmarkIds: []
+  })
 })
 
 test('selectTabs 剔除被勾掉的标签，并丢掉因此变空的分组', async () => {
@@ -328,8 +346,8 @@ test('没有排除项时 selectTabs 原样返回，不做无谓复制', async ()
   assert.equal(selectTabs(snapshot, new Set()), snapshot)
 })
 
-test('captureCurrentWindow 只写入勾选的标签，整组勾掉就不建那个文件夹', async () => {
-  const {created} = stubChrome(
+test('只写入勾选的标签，整组勾掉就不建那个文件夹', async () => {
+  stubChrome(
     [
       plainTab(1, 'https://a1.com', {groupId: 10}),
       plainTab(2, 'https://a2.com', {groupId: 10}),
@@ -339,40 +357,23 @@ test('captureCurrentWindow 只写入勾选的标签，整组勾掉就不建那�
     {groups: {10: {title: '工作', color: 'blue'}, 11: {title: '阅读', color: 'red'}}}
   )
 
-  const result = await captureCurrentWindow(ARCHIVE_ROOT, {
-    excludeTabIds: new Set([2, 4])
-  })
+  const snapshot = selectTabs(await snapshotCurrentWindow(), new Set([2, 4]))
+  const {created} = stubChrome([])
+  const result = await writeChildren(ARCHIVE_ROOT, planWindowChildren(snapshot))
 
-  assert.deepEqual(shape(childrenOf(created, result.folderId)), [
-    '文件夹:工作',
-    '书签:https://loose.com'
-  ])
+  assert.deepEqual(shape(childrenOf(created, ARCHIVE_ROOT)), ['文件夹:工作', '书签:https://loose.com'])
   assert.equal(result.saved, 2)
   assert.equal(result.groups, 1, '被勾掉的「阅读」不该建文件夹')
 })
 
-test('全部勾掉时不留下空文件夹', async () => {
-  const {created} = stubChrome([plainTab(1, 'https://a.com')])
+test('全部勾掉时不写入任何东西', async () => {
+  stubChrome([plainTab(1, 'https://a.com')])
 
-  const result = await captureCurrentWindow(ARCHIVE_ROOT, {
-    excludeTabIds: new Set([1])
-  })
+  const snapshot = selectTabs(await snapshotCurrentWindow(), new Set([1]))
+  const {created} = stubChrome([])
+  const result = await writeChildren(ARCHIVE_ROOT, planWindowChildren(snapshot))
 
   assert.equal(result.saved, 0)
-  assert.equal(result.folderId, '')
+  assert.equal(result.groups, 0)
   assert.equal(created.length, 0)
-})
-
-test('自定义名不受勾选影响，被勾掉的标签不会跑到会话名里', async () => {
-  // 存根里 query({active: true}) 返回 tabs[0]（活动标签），这里把它勾掉，
-  // 会话名仍应只有我们自己给的名字 + 时间戳。
-  stubChrome([plainTab(1, 'https://www.github.com/user/repo'), plainTab(2, 'https://b.com')])
-
-  const result = await captureCurrentWindow(ARCHIVE_ROOT, {
-    name: '临时看的东西',
-    excludeTabIds: new Set([1])
-  })
-
-  assert.match(result.folderName, /^临时看的东西 · \d{4}-/)
-  assert.ok(!result.folderName.includes('github'))
 })

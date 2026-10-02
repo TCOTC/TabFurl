@@ -30,12 +30,11 @@ test('返回的是默认设置的新副本，不会污染默认值', async () =>
 })
 
 test('存储里只有部分字段时与默认值合并', async () => {
-  store.settings = {lastSessionFolderId: 'session-1'}
+  store.settings = {}
 
   const settings = await loadSettings()
 
   assert.equal(settings.archiveRootId, '', '读不到的字段回落到默认值')
-  assert.equal(settings.lastSessionFolderId, 'session-1')
 })
 
 test('saveSettings 写入约定的存储键', async () => {
@@ -46,22 +45,12 @@ test('saveSettings 写入约定的存储键', async () => {
 })
 
 test('updateSettings 合并补丁并落盘', async () => {
-  store.settings = {archiveRootId: 'root-1', lastSessionFolderId: 'old'}
+  store.settings = {archiveRootId: 'root-1'}
 
   const next = await updateSettings({archiveRootId: 'root-2'})
 
-  assert.equal(next.lastSessionFolderId, 'old', '未提及的字段必须保留')
   assert.equal(next.archiveRootId, 'root-2')
   assert.deepEqual(store.settings, next, '返回值应与落盘内容一致')
-})
-
-test('updateSettings 可以写入撤销用的 lastSessionFolderId', async () => {
-  const next = await updateSettings({lastSessionFolderId: 'session-42'})
-  assert.equal(next.lastSessionFolderId, 'session-42')
-  assert.equal((store.settings as {lastSessionFolderId?: string}).lastSessionFolderId, 'session-42')
-
-  const cleared = await updateSettings({lastSessionFolderId: undefined})
-  assert.equal(cleared.lastSessionFolderId, undefined)
 })
 
 test('loadSettings 原样透传存储里的值，不做校验', async () => {

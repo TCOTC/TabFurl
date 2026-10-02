@@ -1,13 +1,11 @@
 /*
- * 主界面：顶部标签栏 + 两块面板。
- * 居中的外壳、宽度与四周留白在 base.css 的 `.app` 里（两个页面共用），
+ * 主界面：顶部存档位置，下面「保存 / 打开」两栏。
+ *
+ * 居中的外壳、宽度、四周留白与字号/间距尺度都在 base.css 的 `.app` 里（两个页面共用），
  * 这里只写这一页特有的部分。
  */
 
-/*
- * 两块面板都在这里，靠 `[hidden]` 退场，所以撑满剩余高度只会发生在可见的那一块上。
- * 中间那格高度会一路传给列表（见 `.pick-list` / `.tree` 的 `flex: 1`）。
- */
+/* 把剩余高度交给两栏，两栏各自的列表再自己滚（见下面的 `.box`）。 */
 .panels {
   display: flex;
   flex-direction: column;
@@ -15,10 +13,6 @@
   min-height: 0;
 }
 
-/*
- * 标签栏与存档位置同一行：前者切内容，后者是两块共用的上下文，所以它不属于任何一块面板。
- * 存档位置靠右（`margin-left: auto`）：它是个一次性选定的东西，不该抢标签栏的位置。
- */
 .topbar {
   display: flex;
   flex-wrap: wrap;
@@ -54,11 +48,9 @@
   font-size: var(--text-xs);
 }
 
-/* 刷新按钮里只有那个图标，所以要把行高让给它，免得图标把行撑得比下拉框高。 */
-.root-pick .btn--sm {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+/* 存档位置出错时的红字。正常状态下整块 UI 只有一个下拉框与一个刷新按钮。 */
+.root-pick .status {
+  max-width: 320px;
 }
 
 /* 内联 SVG 图标：字形做图标时各平台画得不一样，所以自己画，尺寸也由自己定。 */
@@ -75,187 +67,96 @@
   height: 12px;
 }
 
-/* 存档位置出错时的红字。正常状态下整块 UI 只有一个下拉框与一个刷新按钮。 */
-.root-pick .status {
-  max-width: 320px;
-}
-
-/* ———————————————— 顶部标签栏 ———————————————— */
+/* ———————————————— 两栏 ———————————————— */
 
 /*
- * 分段控件：选中的那一块像一颗微微凸起的按钮，而不是给文字刷一层底色。
+ * 左右两栏等宽、中间一条窄的操作列。
  *
- * 三个条件必须同时成立，少一个就会「说不上哪里怪」：
- *
- * 1. **外框不描边**，只用底色。它右边紧挨着同样有描边的存档位置下拉框，
- *    一行里出现两个明显的框就会互相打架；留底色同样能看出控件范围。
- * 2. **外圆角 = 内圆角 + 内边距**。内边距就是轨道与选中块之间那条缝，
- *    圆角必须按它算：以前外 7px 里放 7px、只隔 4px，内块的四个角顶在外框的弧线上，
- *    所以看着发紧。现在写成一个变量，两者不可能再对不上。
- * 3. **选中态用白底（`--bg-elevated`）+ 极淡阴影 + 描边**，而不是 `--accent-soft`。
- *    `--accent-soft` 压在 `--bg-subtle` 上对比度太低，远看像没选中；
- *    白底加阴影才是「凸起」的观感。描边是为了深色模式——那里阴影几乎看不见，
- *    得靠这根细线让选中块立住。文字用强调色，两种模式下都能一眼认出。
+ * 两栏装的是同一个东西的两侧（活会话 ↔ 已落盘的会话），所以宽度对等：
+ * 哪一边更宽都在暗示「哪一边更重要」，而它们同等重要。
  */
-.tabs {
-  --tab-inset: 2px;
-  display: flex;
-  gap: var(--tab-inset);
-  padding: var(--tab-inset);
-  border-radius: calc(var(--radius-sm) + var(--tab-inset));
-  background: var(--bg-subtle);
+.split {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: var(--space-4);
+  flex: 1;
+  min-height: 0;
 }
 
-.tab {
-  padding: var(--space-2) var(--space-4);
-  /* 透明描边占位，选中态换成实色时文字不会左右跳一格。 */
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-muted);
-  font-family: inherit;
-  /* 比同一行里的操作控件（12px 按钮、11px 下拉框）高一档：它是主导航，不是控件。 */
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+}
+
+.col__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.col__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
   font-size: var(--text-md);
   font-weight: 600;
-  cursor: pointer;
+  white-space: nowrap;
 }
 
-.tab:hover {
-  color: var(--text);
+.col__head .muted {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-
-.tab[aria-selected='true'] {
-  border-color: var(--border);
-  background: var(--bg-elevated);
-  color: var(--accent-strong);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
-}
-
-.tab:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
-/* ———————————————— 保存侧：标签勾选清单 ———————————————— */
 
 /*
- * 列表是全页唯一的滚动容器：页面锁在一屏内（`.app--shell`），列表吃掉剩余高度
- * 并从内部滚动，于是顶部工具行与底部操作按钮始终在视野里。
- * 以前这里还写着 `max-height: 42vh`，与页面滚动叠成了两条滚动条。
+ * 列表：两栏各有自己的滚动容器，页面本身不滚（`.app--shell`）。
+ *
+ * **不要给它加 max-height**：那会与页面滚动叠成两条滚动条，而且列表一长，
+ * 底部的按钮就被推出屏幕。
  */
-.pick-list {
+.box {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   margin: 0;
-  padding: 0;
+  padding: 0 0 var(--space-1);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
   list-style: none;
 }
 
-/* 行的排版全在 `.item` 里，这里只补列表特有的光标与悬停。 */
-.pick {
-  cursor: pointer;
-}
-
-.pick:hover {
-  background: var(--accent-soft);
-}
-
-/* 分组：整组一行 + 组内标签缩进在下面。 */
-.pick--group {
-  display: block;
-  padding: 0;
-  cursor: default;
-}
-
-.pick--group:hover {
-  background: transparent;
-}
-
-/* 分组标题行：与条目同一套排版，只是加粗。 */
-.pick__row {
+.group__head {
   font-weight: 600;
-  cursor: pointer;
 }
 
-.pick__row:hover {
-  background: var(--accent-soft);
-}
-
-/* 分组行的尾巴（「3 个标签」）推到最右。 */
-.pick__row .item__meta {
+/* 分组行右侧的枚数推到最右。 */
+.group__head .item__meta {
   margin-left: auto;
 }
 
-/*
- * 子级缩进 = 勾选框占位 + 行内间距，这样子级的勾选框与父级勾选框的左边缘对齐。
- * 勾选框宽度锁在 base.css 的 `input[type='checkbox']` 里（14px），所以这里能算得出来。
- */
-.pick__children {
+.kids {
   margin: 0;
   padding: 0 0 var(--space-1) calc(14px + var(--space-2));
   list-style: none;
 }
 
-/* 行内标记（「已固定」）：跟着标题走，所以得按文字的基线摆，不能按容器居中。 */
-.item__pin {
-  display: inline-block;
-  vertical-align: -0.08em;
-  margin-left: var(--space-1);
-  color: var(--text-muted);
-}
-
-/* ———————————————— 存档侧：会话树 ———————————————— */
-
-.tree {
-  /* 折叠按钮的占位与行内间距；子级缩进由它们算出（见 `.tree__children`）。 */
-  --tree-caret: 22px;
-  --tree-caret-inline: var(--space-3);
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  margin: 0;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  list-style: none;
-}
-
-.tree__node + .tree__node {
-  border-top: 1px solid var(--border);
-}
-
-/* 行的排版全在 `.item` 里；这里只把行内间距换成与折叠按钮同一档，缩进才对得上。 */
-.tree__row {
-  gap: var(--tree-caret-inline);
-}
-
-.tree__row--group,
-.tree__row--bookmark {
-  cursor: pointer;
-}
-
-.tree__row--group:hover,
-.tree__row--bookmark:hover {
-  background: var(--accent-soft);
-}
-
-.tree__row--group {
-  font-weight: 600;
+/* 存档栏里的子级缩进两级：一级给折叠三角，一级给父分组的存在感。 */
+.leaf--nested {
+  padding-left: calc(var(--space-3) + 14px);
 }
 
 .tree__caret {
   flex: 0 0 auto;
-  width: var(--tree-caret);
-  height: var(--tree-caret);
+  width: 22px;
+  height: 22px;
   padding: 0;
   border: 0;
   border-radius: var(--space-1);
@@ -264,7 +165,7 @@
   cursor: pointer;
 }
 
-/* 三角形自己画（见 ArchivePanel 的 caretSvg），所以这里只需居中，不用再哄字体。 */
+/* 三角形自己画（见 TransferPanel 的 caretSvg），所以这里只需居中。 */
 .tree__caret .caret {
   display: block;
   width: 14px;
@@ -277,22 +178,32 @@
   color: var(--accent-strong);
 }
 
-/* 存档行的尾巴（枚数 / 分组数）推到最右，改名的输入框与按钮接着它排。 */
-.tree__meta {
-  margin-left: auto;
-}
-
 .tree__actions {
   display: flex;
   flex: 0 0 auto;
   gap: var(--space-1);
 }
 
-/*
- * 分隔线：Maya Studios 约定的那个占位书签。它不是可勾选的标签，只是一个记号，
- * 所以没有勾选框、没有悬停态、也不可点——留着它只是为了让人看清存档是怎么分段的。
- */
-.tree__divider {
+/* 分组行里「标题 + 枚数」那一段自己成行：它是可拖的，所以要能整体抓起来。 */
+.item__main--row {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.item__main--row .item__meta {
+  margin-left: auto;
+}
+
+.input--rename {
+  flex: 1;
+  min-width: 120px;
+  max-width: 280px;
+  width: auto;
+}
+
+/* 分隔线是记号，不是书签：没有勾选框，画成一条横线。 */
+.divider {
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -302,39 +213,59 @@
   font-weight: 600;
 }
 
-.tree__divider::before,
-.tree__divider::after {
+.divider::before,
+.divider::after {
   content: '';
   flex: 1;
   height: 1px;
   background: var(--border-strong);
 }
 
-.tree__divider--plain::after {
+.divider--plain::after {
   display: none;
 }
 
+/* ———————————————— 中间那列 ———————————————— */
+
+.mid {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+}
+
+/* 方向按钮把箭头放在文字上方：它表达的是「往哪边送」，箭头要够显眼。 */
+.btn--move {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: var(--space-3) var(--space-4);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.move__arrow {
+  font-size: var(--text-lg);
+  line-height: 1;
+}
+
+/* ———————————————— 拖拽 ———————————————— */
+
+.is-dragging {
+  opacity: 0.5;
+}
+
 /*
- * 子级缩进 = 折叠按钮宽 + 行内间距，这样子级的折叠按钮正好落在父级勾选框的位置上，
- * 形成一眼能看出层级的一级台阶。必须用 calc 而不是写死数字：
- * 按钮一改尺寸，写死的缩进就会悄悄错位。
+ * 落点提示：整栏用底色，格子（分组文件夹）用描边——两者的可见范围不同，
+ * 用同一种提示会让人分不清「落在这一格里」还是「落在这一栏里」。
  */
-.tree__children {
-  margin: 0;
-  padding: 0 0 var(--space-1) calc(var(--tree-caret) + var(--tree-caret-inline));
-  list-style: none;
+.box.is-drop-active {
+  background: var(--accent-soft);
 }
 
-.input--search {
-  flex: 1;
-  min-width: 160px;
-  max-width: 320px;
-  width: auto;
-}
-
-.input--rename {
-  flex: 1;
-  min-width: 120px;
-  max-width: 280px;
-  width: auto;
+.group.is-drop-active {
+  box-shadow: inset 0 0 0 2px var(--accent);
+  border-radius: var(--radius-sm);
 }

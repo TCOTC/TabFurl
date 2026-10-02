@@ -1,7 +1,7 @@
-import {createBookmark, createFolder, getChildTitles} from './bookmarks'
-import {dedupeName, formatSessionName, groupFolderName} from './naming'
+import {createBookmark, createFolder} from './bookmarks'
+import {groupFolderName} from './naming'
 import type {
-  CaptureResult,
+  SaveResult,
   TabGroupBucket,
   TabGroupColor,
   TabSnapshot,
@@ -100,34 +100,25 @@ export async function snapshotCurrentWindow(): Promise<WindowSnapshot> {
   }
 }
 
-/** 写入一组标签。返回实际写入数量。 */
-async function writeTabs(folderId: string, tabs: readonly TabSnapshot[]): Promise<number> {
-  let written = 0
-  for (const tab of tabs) {
-    await createBookmark(folderId, tab.title, tab.url)
-    written++
-  }
-  return written
-}
-
 /**
- * 会话文件夹的直接子级：分组建成子文件夹，未分组的标签是散装书签。
+ * 窗口里的一个直接子级：分组是子文件夹，未分组的标签是散装书签。
  *
- * 导出给界面用：勾选清单必须按同一顺序渲染，否则「看到的」与「存下的」会不一致。
+ * 导出给界面用：勾选清单必须按同一顺序渲染，否则「看到的」与「存下的」会不一致；
+ * 拖拽也用它——拖一条标签就是拖一个 `kind: 'tab'` 的子级。
  */
-export type SessionChild =
+export type WindowChild =
   | {kind: 'group'; name: string; tabs: readonly TabSnapshot[]}
   | {kind: 'tab'; tab: TabSnapshot}
 
 /**
- * 按窗口顺序排列会话文件夹的子级。
+ * 按窗口顺序排列这一层的子级。
  *
  * 分组的次序取组内第一个标签的 index；Chrome 的标签栏里同一分组的标签必定连续，
  * 所以按 index 归并得到的就是窗口里「未分组段 / 分组 / 未分组段 …」的真实次序。
  * 这样未分组的标签会留在原位，而不会被集中挑到末尾。
  */
-export function planSessionChildren(snapshot: WindowSnapshot): SessionChild[] {
-  const ordered: {index: number; child: SessionChild}[] = []
+export function planWindowChildren(snapshot: WindowSnapshot): WindowChild[] {
+  const ordered: {index: number; child: WindowChild}[] = []
 
   for (const bucket of snapshot.groups) {
     const first = bucket.tabs[0]
@@ -147,65 +138,63 @@ export function planSessionChildren(snapshot: WindowSnapshot): SessionChild[] {
   return ordered.map((entry) => entry.child)
 }
 
-/**
- * 把当前窗口存成书签文件夹。
- *
- * 结构约定（详见 docs/design.md）：
- * ```
- * 标签页存档/
- *   2026-10-02 14:30/     ← 会话文件夹
- *     工作/               ← 标签分组
- *     wikipedia.org       ← 窗口里没进分组的标签，散装书签
- *     阅读/
- * ```
- * 会话文件夹的直接子级严格按窗口顺序排列。窗口里一个分组都没有时，结果就是
- * 一列散装书签——不需要额外的「未分组」层，所以「保存 → 还原」始终对称。
- *
- * @param options.name 会话的自定义名；留空时只用时间戳。
- */
-export async function captureCurrentWindow(
-  archiveRootId: string,
-  options: {name?: string; excludeTabIds?: ReadonlySet<number>} = {}
-): Promise<CaptureResult> {
-  const excludeTabIds = options.excludeTabIds ?? new Set<number>()
-  const snapshot = selectTabs(await snapshotCurrentWindow(), excludeTabIds)
-  const total = countSnapshotTabs(snapshot)
-
-  // 一条都存不了就不要留下空文件夹。
-  if (total === 0) {
-    return {folderId: '', folderName: '', saved: 0, skipped: snapshot.skipped, groups: 0}
+/** 写入一组标签，收集新建的书签 id（撤销要用）。 */
+async function writeTabs(
+  folderId: string,
+  tabs: readonly TabSnapshot[],
+  result: SaveResult
+): Promise<void> {
+  for (const tab of tabs) {
+    const created = await createBookmark(folderId, tab.title, tab.url)
+    result.bookmarkIds.push(created.id)
+    result.saved++
   }
+}
 
-  const date = new Date(snapshot.capturedAt)
-  const sessionName = dedupeName(
-    formatSessionName(date, options.name),
-    await getChildTitles(archiveRootId)
-  )
-  const sessionFolder = await createFolder(archiveRootId, sessionName)
+/**
+ * 把一串子级写进**指定的**文件夹。
+ *
+ * 结构（详见 `docs/design.md` 三）：分组建成子文件夹，未分组的标签在那一层就地成散装书签，
+ * 顺序即传入顺序。**同名文件夹允许共存**，不合并、也不追加序号——
+ * 书签树本来就允许同级同名，而且用户在不同窗口里可能真的有两个叫「工作」的分组。
+ *
+ * 它是保存侧唯一的写入入口，所以整窗保存与「拖一条标签过去」走的是同一条路径。
+ *
+ * @param parentId 目标文件夹（可以是存档根，也可以是它下面的某个分组文件夹）。
+ */
+export async function writeChildren(
+  parentId: string,
+  children: readonly WindowChild[]
+): Promise<SaveResult> {
+  const result: SaveResult = {saved: 0, groups: 0, skipped: 0, folderIds: [], bookmarkIds: []}
 
-  let saved = 0
-  let groups = 0
-
-  for (const child of planSessionChildren(snapshot)) {
+  for (const child of children) {
     if (child.kind === 'tab') {
-      await createBookmark(sessionFolder.id, child.tab.title, child.tab.url)
-      saved++
+      await writeTabs(parentId, [child.tab], result)
       continue
     }
 
-    const name = dedupeName(child.name, await getChildTitles(sessionFolder.id))
-    const folder = await createFolder(sessionFolder.id, name)
-    groups++
-    saved += await writeTabs(folder.id, child.tabs)
+    const folder = await createFolder(parentId, child.name)
+    result.folderIds.push(folder.id)
+    result.groups++
+    await writeTabs(folder.id, child.tabs, result)
   }
 
-  return {
-    folderId: sessionFolder.id,
-    folderName: sessionFolder.title,
-    saved,
-    skipped: snapshot.skipped,
-    groups
-  }
+  return result
+}
+
+/** 合并多次写入的结果（界面上一次动作可能写了好几处）。 */
+export function mergeSaveResults(results: readonly SaveResult[]): SaveResult {
+  return results.reduce<SaveResult>(
+    (sum, item) => ({
+      saved: sum.saved + item.saved,
+      groups: sum.groups + item.groups,
+      skipped: sum.skipped + item.skipped,
+      folderIds: [...sum.folderIds, ...item.folderIds],
+      bookmarkIds: [...sum.bookmarkIds, ...item.bookmarkIds]
+    }),
+    {saved: 0, groups: 0, skipped: 0, folderIds: [], bookmarkIds: []}
+  )
 }
 
 /** 快照里的标签总数（已被过滤掉的内部页面不算）。 */

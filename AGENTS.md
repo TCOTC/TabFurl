@@ -60,26 +60,29 @@ pnpm icons          # 重新生成占位图标
 2. **只用 `chrome.*`**：MV3 下这些 API 原生返回 Promise，不再需要 `webextension-polyfill`。不要为了「保持中立」而引入 `browser.*` 或 polyfill。
 3. **`minimum_chrome_version: 114` 是保守下限，不要下调**：本项目实际用到的最高 API 要求是 `chrome.tabGroups`（89），移除 `sidePanel` 后 114 已无强制理由，但下调等于声明未经验证的旧版本兼容性。若将来用到更新的 API，必须同步抬高此版本号，并同步 `tools/verify-build.mjs` 的 `MIN_CHROME_VERSION`。
 4. **命名规则只在 `shared/naming.ts` 里实现**：界面层不得自己拼字符串。规则见 `docs/design.md`。
-5. **依赖方向单向，且面板之间不互相 import**：`pages/` → `src/app/` → `src/shared/`。`shared/` 不得 import 任何界面模块；
-   `src/app/` 下的两个面板只通过 `dom.ts` 的 `AppEvents` 通信（谁该刷新由 `App.ts` 决定），互不引用，免得绕成环。
-   存档位置选择器不是面板（它不被 `AppEvents` 驱动，而是驱动 `settingsChanged`），由 `App.ts` 直接挂在标签栏旁边。
+5. **依赖方向单向，模块之间不互相 import**：`pages/` → `src/app/` → `src/shared/`。`shared/` 不得 import 任何界面模块；
+   `src/app/` 里只有 `TransferPanel` 一个界面模块，它不 import `ArchiveRootPicker`，两者只通过 `dom.ts` 的 `AppEvents` 通信（谁该刷新由 `App.ts` 决定）。
+   存档位置选择器不是面板：它不读 `AppEvents`，而是**触发** `settingsChanged`（选中即落盘），由 `App.ts` 挂在顶栏。
 6. **`bookmarks` API 的 id 是设备本地的**：同一账号在另一台设备上 id 不同。任何持久化数据都不要以书签 id 作为跨设备稳定的标识；id 只允许存在本地设置里（如 `archiveRootId`），且必须能重建。
 7. **写入书签前先过滤内部页面**（`chrome://`、`chrome-extension://`、`devtools://` 等），用 `isInternalUrl()`。
-8. **同名不覆盖**：建文件夹前先用 `dedupeName()` 对同级已有名字去重。
+8. **同名文件夹允许共存**：建文件夹**前不要**去重、不要合并、也不要追加 ` (2)` 序号（`dedupeName` 已删）。
+   书签树本就允许同级同名，而且用户在不同窗口里可能真的有两个叫「工作」的分组。代价是存档里会出现多个同名文件夹，靠位置区分。
+   同理，**保存不做去重**：同一个窗口存两次就是真的两份。
 9. **样式**：颜色、字号、间距一律走 `base.css` 的变量（`--space-1..6`、`--text-xs/sm/md/lg`），不写死数值；深色模式靠 `prefers-color-scheme`，不单独维护两套。
    一行条目（前置控件/图标 + 标题 + 副文案 + 尾部说明）用 `base.css` 的 `.item` / `.item__main` / `.item__title` / `.item__meta`，
    别在页面样式里重写一遍 flex 与省略号——那种重复每多一处就会漏掉一次 `min-width: 0`（省略号就失效了）。
    **盒子套盒子时，外圆角 = 内圆角 + 内边距**（写成 `calc(内圆角 + 内边距)`，别各写一个值）：差值不对，内块的四个角就会顶到外框的弧线上。
 10. **测试只用 `node:test`**：不引入 vitest / jest / tsx 等框架。测试文件与实现同目录（`naming.test.ts`），`chrome.*` 靠给 `globalThis.chrome` 赋值来打桩，不给产品代码加依赖注入。
-11. **会话文件夹的直接子级必须按窗口顺序排列**：标签分组建子文件夹，未分组的标签建成散装书签插在原位，**不要**把它们收进「未分组」文件夹。
-    两个实现是逆运算，改一处必须同步另一处：`capture.ts` 的 `planSessionChildren()` ↔ `restore.ts` 的 `planRestore()`
+11. **存档直接写进存档根（或它的某个子文件夹），没有会话层**：标签分组建子文件夹，未分组的标签建成散装书签就地在原位，**不要**把它们收进「未分组」文件夹。
+    两个实现是逆运算，改一处必须同步另一处：`capture.ts` 的 `planWindowChildren()` ↔ `restore.ts` 的 `planRestore()`
     （前者按 `TabSnapshot.index` 归并，后者按子级数组顺序还原）。规则与理由见 `docs/design.md` 三、五。
+    写入只有一个入口：`writeChildren(parentId, children)`，整窗保存与「拖一条标签过去」都走它。
 12. **界面不得自己遍历标签／书签树**：勾选清单直接用 `planSessionChildren()` / `planRestore()` 的产物渲染，
     「将保存／将还原 N 个」也由 `countSnapshotTabs(selectTabs(...))` / `applyExclusions()` 算。
     一旦界面自己走一遍树，顺序或过滤口径就会与写入/还原脱钩——这是第 11 条那一对函数新增消费方时最容易出的错。
-13. **存档位置由用户在书签栏里指定，扩展不建文件夹**：候选**只**来自 `getBookmarksBarId()`（认 id `1`，认不出就报错），
+13. **存档位置由用户在书签栏里指定，扩展不建根文件夹**：候选**只**来自 `getBookmarksBarId()`（认 id `1`，认不出就报错），
     **绝不退化为「其他书签」**，也不要加「自动创建 / 迁移存档根」这类行为。
-    它由 `src/app/ArchiveRootPicker.ts` 提供，**挂在标签栏旁边（不在面板里）**，选中即落盘。理由见 `docs/design.md` 三。
+    它由 `src/app/ArchiveRootPicker.ts` 提供，**挂在顶栏（不在任何一栏里）**，选中即落盘。理由见 `docs/design.md` 三。
 14. **还原去向是按钮，不是存起来的偏好**：**不要把它加回 `Settings`**，也不要为了省一个按钮而合并它们。
     「只开标签页」固定开新窗口：它与「还原到新窗口」是同一件事的轻重两档，都不打断正在用的窗口。
     阅读页（`pages/folder.ts`）同样给出这两个按钮。理由见 `docs/design.md` 五。
@@ -101,9 +104,17 @@ pnpm icons          # 重新生成占位图标
     **不计入任何枚数、没有勾选框、还原时跳过**，也不算 `skipped`。
     **新增任何「数标签」的地方都必须走 `restorableBookmarks()`**，否则枚数会在分隔线上对不上。
     两个最容易被「顺手简化」掉的细节：判定要看**主机名 + 路径**（不是只认主机名）；清洗要把**首尾的横杠与空白一起去掉**（不是只剥横杠再 `trim()`）。
-21. **主界面只允许有一个滚动容器**：`.app--shell` 把整页锁在一屏内（`100dvh`），滚动交给 `.pick-list` / `.tree`（`flex: 1; min-height: 0; overflow-y: auto`），
-    这样顶部标签栏与底部按钮始终可见。**不要给列表加 `max-height`**——那会与页面滚动叠成两条滚动条，而且列表一长，底部按钮就被推出屏幕。
+21. **主界面只允许有一条滚动条**：`.app--shell` 把整页锁在一屏内（`100dvh`），滚动交给两栏各自的 `.box`（`flex: 1; min-height: 0; overflow-y: auto`），
+    这样顶栏与底部按钮始终可见。**不要给列表加 `max-height`**——那会与页面滚动叠成两条滚动条。
     阅读页（`folder.html`）不加 `app--shell`：它就是要整页往下读的文档。
+22. **没有会话层，所以撤销是内存态的**：存档直接写进存档根，每次保存只是追加，没有一个「刚建的那棵子树」可删。
+    撤销靠 `writeChildren` 返回的 `SaveResult`（新建的 `folderIds` / `bookmarkIds`），**只存在内存里，关掉界面就失效**。
+    删除顺序不能反：**先删书签、再删文件夹**（反过来会连书签一起删掉，让后面的 id 全部失效）；
+    单个删除失败要吞掉，否则一次撤销会被中间的失败卡住。
+23. **拖拽是本项目的主要入口之一，不要把它当成可选的锦上添花**：左栏的标签/分组可拖到右栏保存（落在文件夹行上就进那一层），
+    右栏的书签/文件夹可拖到左栏打开。载荷用自有的 `application/x-tabfurl` 区分「内部拖动」与「从网页拖来的链接」；
+    `dragover` 里读不到 `data`（只有 `types`），所以另用一个变量记住「正在拖什么」来决定收不收。
+    按钮只是拖拽的可点版本，**两者必须共用同一条写入/打开路径**（`writeChildren` / `restoreFolder`），否则口径会分叉。
 
 ## 提交前自检
 
