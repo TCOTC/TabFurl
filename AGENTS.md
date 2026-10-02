@@ -110,6 +110,7 @@ tools/
 9. **样式**：颜色、字号、间距一律走 `base.css` 的变量（`--space-1..6`、`--text-xs/sm/md/lg`），不写死数值；深色模式靠 `prefers-color-scheme`，不单独维护两套。
    一行条目（前置控件/图标 + 标题 + 副文案 + 尾部说明）用 `base.css` 的 `.item` / `.item__main` / `.item__title` / `.item__meta`，
    别在页面样式里重写一遍 flex 与省略号——那种重复每多一处就会漏掉一次 `min-width: 0`（省略号就失效了）。
+   **盒子套盒子时，外圆角 = 内圆角 + 内边距**（写成 `calc(内圆角 + 内边距)`，别各写一个值）：差值不对，内块的四个角就会顶到外框的弧线上。
 10. **测试只用 `node:test`**：不引入 vitest / jest / tsx 等框架。测试文件与实现同目录（`naming.test.ts`），`chrome.*` 靠给 `globalThis.chrome` 赋值来打桩，不给产品代码加依赖注入。
 11. **会话文件夹的直接子级必须按窗口顺序排列**：标签分组建子文件夹，未分组的标签建成散装书签插在原位，**不要**把它们收进「未分组」文件夹。两个实现是逆运算，改一处必须同步另一处：`capture.ts` 的 `planSessionChildren()` ↔ `restore.ts` 的 `planRestore()`（前者按 `TabSnapshot.index` 归并，后者按子级数组顺序还原）。
 12. **界面不得自己遍历标签／书签树**：勾选清单直接用 `planSessionChildren()` / `planRestore()` 的产物渲染，

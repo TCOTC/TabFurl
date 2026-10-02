@@ -80,38 +80,55 @@
   max-width: 320px;
 }
 
-/* ———————————————— 顶部标签页 ———————————————— */
+/* ———————————————— 顶部标签栏 ———————————————— */
 
+/*
+ * 分段控件：选中的那一块像一颗微微凸起的按钮，而不是给文字刷一层底色。
+ *
+ * 三个条件必须同时成立，少一个就会「说不上哪里怪」：
+ *
+ * 1. **外框不描边**，只用底色。它右边紧挨着同样有描边的存档位置下拉框，
+ *    一行里出现两个明显的框就会互相打架；留底色同样能看出控件范围。
+ * 2. **外圆角 = 内圆角 + 内边距**。内边距就是轨道与选中块之间那条缝，
+ *    圆角必须按它算：以前外 7px 里放 7px、只隔 4px，内块的四个角顶在外框的弧线上，
+ *    所以看着发紧。现在写成一个变量，两者不可能再对不上。
+ * 3. **选中态用白底（`--bg-elevated`）+ 极淡阴影 + 描边**，而不是 `--accent-soft`。
+ *    `--accent-soft` 压在 `--bg-subtle` 上对比度太低，远看像没选中；
+ *    白底加阴影才是「凸起」的观感。描边是为了深色模式——那里阴影几乎看不见，
+ *    得靠这根细线让选中块立住。文字用强调色，两种模式下都能一眼认出。
+ */
 .tabs {
+  --tab-inset: 2px;
   display: flex;
-  align-self: flex-start;
-  gap: var(--space-1);
-  padding: var(--space-1);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  gap: var(--tab-inset);
+  padding: var(--tab-inset);
+  border-radius: calc(var(--radius-sm) + var(--tab-inset));
   background: var(--bg-subtle);
 }
 
 .tab {
-  min-width: 68px;
   padding: var(--space-2) var(--space-4);
-  border: 0;
+  /* 透明描边占位，选中态换成实色时文字不会左右跳一格。 */
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
   font-family: inherit;
-  font-size: var(--text-sm);
+  /* 比同一行里的操作控件（12px 按钮、11px 下拉框）高一档：它是主导航，不是控件。 */
+  font-size: var(--text-md);
   font-weight: 600;
   cursor: pointer;
 }
 
 .tab:hover {
-  color: var(--accent-strong);
+  color: var(--text);
 }
 
 .tab[aria-selected='true'] {
-  background: var(--accent-soft);
+  border-color: var(--border);
+  background: var(--bg-elevated);
   color: var(--accent-strong);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
 }
 
 .tab:focus-visible {

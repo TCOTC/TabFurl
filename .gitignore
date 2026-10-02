@@ -21,3 +21,6 @@ yarn-error.log*
 # 锁文件（本仓库只使用 pnpm）
 yarn.lock
 package-lock.json
+
+# 验证过程中产生的临时截图/文件（.tmp- 前缀），不要提交
+.tmp-*
