@@ -187,11 +187,15 @@
   border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
-  /* 三角形字形本身就比字身小，所以字号要给得比「看起来想要的大小」再大一点。 */
-  font-family: inherit;
-  font-size: 16px;
-  line-height: 1;
   cursor: pointer;
+}
+
+/* 三角形自己画（见 ArchivePanel 的 caretSvg），所以这里只需居中，不用再哄字体。 */
+.tree__caret .caret {
+  display: block;
+  width: 14px;
+  height: 14px;
+  margin: 0 auto;
 }
 
 .tree__caret:hover {

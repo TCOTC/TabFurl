@@ -27,6 +27,29 @@ import {
 /** Chrome 本地 favicon 缓存端点：读缓存、不联网（配合 `tileMarkup` 使用）。 */
 const FAVICON_BASE = chrome.runtime.getURL('_favicon/')
 
+/**
+ * 折叠三角。
+ *
+ * 用 SVG 而不是 `▸` / `▾` 这个字形：三角形在字体里比字身小得多，大小与粗细全看
+ * 系统字体怎么画（Windows 与 macOS 差得很明显），想调只能动字号、连带着撑高行。
+ * SVG 的量级由我们说了算，而且能靠 `currentColor` 跟主题走。
+ *
+ * 顶点朝下表示「已展开」（再点会收起），朝右表示「已收起」。
+ */
+function caretSvg(open: boolean): string {
+  // 两个三角形的**包围盒中心**都落在 viewBox 正中（7,7），切换时不会跳动。
+  //  收起（顶点朝右）：x∈[3,11] y∈[2,12] → 中心 (7,7)
+  //  展开（顶点朝下）：x∈[2,12] y∈[3,11] → 中心 (7,7)
+  // 按包围盒居中（而不是三角形形心）是图标集里的通行做法：形心会随朝向偏移，
+  // 视觉上反而像没对齐。
+  const points = open ? '2,3 12,3 7,11' : '3,2 11,7 3,12'
+  return (
+    '<svg class="caret" viewBox="0 0 14 14" aria-hidden="true">' +
+    `<polygon points="${points}" fill="currentColor" />` +
+    '</svg>'
+  )
+}
+
 /** 一个存档会话 + 它的还原计划。计划既是勾选清单的数据源，也是还原的依据。 */
 interface SessionView {
   node: BookmarkNode
@@ -231,7 +254,7 @@ export function createArchivePanel(events: AppEvents): Panel {
         <div class="tree__row">
           <button type="button" class="tree__caret" data-toggle="${escapeHtml(id)}"
                   aria-expanded="${open}" aria-label="${open ? '折叠' : '展开'}"
-                  title="${open ? '折叠' : '展开'}">${open ? '▾' : '▸'}</button>
+                  title="${open ? '折叠' : '展开'}">${caretSvg(open)}</button>
           <input type="checkbox" data-content="${escapeHtml(id)}"
                  title="这个存档里哪些标签要还原" />
           ${title}
@@ -599,7 +622,8 @@ export function createArchivePanel(events: AppEvents): Panel {
       const open = !expanded.has(sessionId)
       if (open) expanded.add(sessionId)
       else expanded.delete(sessionId)
-      toggle.textContent = open ? '▾' : '▸'
+      // 换掉整个 SVG，而不是改 textContent。
+      toggle.innerHTML = caretSvg(open)
       toggle.setAttribute('aria-expanded', String(open))
       toggle.title = open ? '折叠' : '展开'
       if (children) children.hidden = !open
