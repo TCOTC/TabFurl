@@ -24,7 +24,7 @@ TabFurl 只补这两块，不做通用收藏管理：书签树仍然是唯一存
 ## 环境要求
 
 - Chrome 114 或更高（扩展用到 `sidePanel`）
-- Node.js >= 22.12
+- Node.js >= 22.12（构建）；跑单元测试需要 >= 23.6
 - pnpm
 
 ## 常用命令
@@ -36,12 +36,25 @@ pnpm dev            # 开发模式（自动启动 Chrome 并加载扩展）
 
 pnpm build          # 生产构建 → dist/chrome/
 
+pnpm test           # 单元测试（node:test）
 pnpm typecheck      # tsc --noEmit
 pnpm verify         # 产物自检（需先 build）
 pnpm icons          # 重新生成 src/images/ 下的占位图标
 ```
 
 构建产物在 `dist/chrome/`，可在 `chrome://extensions` 用「加载已解压的扩展程序」加载。
+
+注意 `pnpm build` 要排在 `pnpm typecheck` 之前：`chrome` 全局类型与 `*.css` 模块声明的来源 `extension-env.d.ts` 由构建生成、不入库，新 clone 后直接跑 `typecheck` 会报一堆 `Cannot find name 'chrome'`。
+
+## 测试
+
+`pnpm test` 用 Node 内置的 `node:test` 跑 `src/shared/*.test.ts`，不引入任何测试框架：
+
+- Node 原生执行 TypeScript，`tools/ts-hooks.mjs` 负责给源码里无扩展名的相对导入补 `.ts`。
+- `chrome.*` 靠给 `globalThis.chrome` 赋值来打桩，不需要给产品代码加依赖注入。
+- 覆盖的是命名规则、URL 判定、占位卡片转义、还原计划、窗口采集、设置读写这些之前没有测过的核心逻辑。
+
+需要真实 Chrome 才能确认的部分（`chrome.tabGroups` 的实际行为、侧边栏布局、跨设备同步后书签 id 变化）仍需手工测。
 
 ## 文档
 

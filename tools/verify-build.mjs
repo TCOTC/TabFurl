@@ -2,9 +2,9 @@
  * 构建产物自检：`pnpm verify`（需先 `pnpm build`）。
  *
  * 检查的都是「构建能过、但装到浏览器里才发现」的问题：
- * 权限漂移、混进 host 权限、清单残留 Firefox 字段、入口文件缺失、中文被写坏。
+ * 权限漂移、混进 host 权限、清单残留 Firefox 字段、入口文件缺失、中文被写坏、测试文件泄漏进产物。
  */
-import {existsSync, readFileSync} from 'node:fs'
+import {existsSync, readdirSync, readFileSync} from 'node:fs'
 
 const DIST = 'dist/chrome'
 
@@ -98,6 +98,13 @@ check(
 
 for (const file of EXPECTED_FILES) {
   check(existsSync(`${DIST}/${file}`), `缺少产物 ${file}`)
+}
+
+// `*.test.ts` 只给 `node --test` 用。它们没被任何入口引用，理应不进产物；
+// 一旦出现在这里，说明有人从界面代码里 import 了测试文件。
+const packaged = readdirSync(DIST, {recursive: true}).map(String)
+for (const file of packaged) {
+  check(!/\.test\.[cm]?[jt]s$/.test(file), `产物里混进了测试文件：${file}`)
 }
 
 // 中文描述被写坏时构建不会报错，装到浏览器里才会显形。

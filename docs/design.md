@@ -62,6 +62,10 @@ TabFurl 只补这两块。它**不做**通用收藏管理：新增标签、笔�
 | 空标题分组 | `未命名分组（蓝）`，用颜色消歧 | `未命名分组（蓝）` |
 | 未分组 | `未分组` | `未分组` |
 
+> 上表是**清洗前**的命名意图。写进书签前所有名字都会走一遍 `sanitizeFolderName`，
+> 所以冒号会被换成下划线：会话文件夹在书签树里的实际名字是 `2026-10-02 14_30`，而不是 `2026-10-02 14:30`。
+> 这一步纯为将来「导出为文件路径」留后路（见下面的清洗规则），不影响按字典序排序。
+
 **为什么日期前缀值得加**：`bookmarks.create()` 不传 `index` 时追加到末尾，所以同一个浏览器内不加前缀也能保持创建顺序；但跨设备同步、手动拖动排序、导出到别的工具之后顺序不再保证。日期前缀是排序保险，代价只是名字长一点。
 
 **清洗规则**（`sanitizeFolderName`）：
@@ -153,8 +157,9 @@ src/shared/
 ```bash
 pnpm install
 pnpm dev          # 开发模式（Chrome）
-pnpm build        # → dist/chrome/
-pnpm typecheck    # 构建不做类型检查，必须单独跑
-pnpm verify       # 产物自检：权限漂移 / host 权限 / Firefox 残留 / 入口缺失 / 中文编码
+pnpm build        # → dist/chrome/（同时生成 extension-env.d.ts）
+pnpm test         # 单元测试（node:test；需要 Node >= 23.6）
+pnpm typecheck    # 构建不做类型检查，必须单独跑，且需先 build
+pnpm verify       # 产物自检：权限漂移 / host 权限 / Firefox 残留 / 入口缺失 / 中文编码 / 测试文件泄漏
 pnpm icons        # 重新生成占位图标
 ```

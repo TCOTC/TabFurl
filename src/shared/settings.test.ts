@@ -1,0 +1,79 @@
+import {beforeEach, test} from 'node:test'
+import assert from 'node:assert/strict'
+import {loadSettings, saveSettings, updateSettings} from './settings'
+import {DEFAULT_SETTINGS} from './types'
+
+let store: Record<string, unknown>
+
+beforeEach(() => {
+  store = {}
+  ;(globalThis as Record<string, unknown>).chrome = {
+    storage: {
+      local: {
+        get: async (key: string) => (key in store ? {[key]: store[key]} : {}),
+        set: async (items: Record<string, unknown>) => {
+          Object.assign(store, items)
+        }
+      }
+    }
+  }
+})
+
+test('没有存储时返回默认设置', async () => {
+  assert.deepEqual(await loadSettings(), DEFAULT_SETTINGS)
+})
+
+test('返回的是默认设置的新副本，不会污染默认值', async () => {
+  const settings = await loadSettings()
+  settings.archiveRootName = '被改坏了'
+  assert.equal(DEFAULT_SETTINGS.archiveRootName, '标签页存档')
+})
+
+test('存储里只有部分字段时与默认值合并', async () => {
+  store.settings = {archiveRootId: 'abc', groupUngrouped: true}
+
+  const settings = await loadSettings()
+
+  assert.equal(settings.archiveRootId, 'abc')
+  assert.equal(settings.groupUngrouped, true)
+  assert.equal(settings.sessionNameMode, DEFAULT_SETTINGS.sessionNameMode)
+  assert.equal(settings.restoreTarget, DEFAULT_SETTINGS.restoreTarget)
+  assert.equal(settings.archiveRootName, DEFAULT_SETTINGS.archiveRootName)
+})
+
+test('saveSettings 写入约定的存储键', async () => {
+  const settings = {...DEFAULT_SETTINGS, archiveRootId: 'root-9'}
+  await saveSettings(settings)
+
+  assert.deepEqual(store.settings, settings)
+})
+
+test('updateSettings 合并补丁并落盘', async () => {
+  store.settings = {archiveRootId: 'root-1', restoreTarget: 'currentWindow'}
+
+  const next = await updateSettings({groupUngrouped: true})
+
+  assert.equal(next.archiveRootId, 'root-1', '未提及的字段必须保留')
+  assert.equal(next.restoreTarget, 'currentWindow')
+  assert.equal(next.groupUngrouped, true)
+  assert.deepEqual(store.settings, next, '返回值应与落盘内容一致')
+})
+
+test('updateSettings 可以写入撤销用的 lastSessionFolderId', async () => {
+  const next = await updateSettings({lastSessionFolderId: 'session-42'})
+  assert.equal(next.lastSessionFolderId, 'session-42')
+  assert.equal((store.settings as {lastSessionFolderId?: string}).lastSessionFolderId, 'session-42')
+
+  const cleared = await updateSettings({lastSessionFolderId: undefined})
+  assert.equal(cleared.lastSessionFolderId, undefined)
+})
+
+test('已知契约：loadSettings 不校验存储里的取值', async () => {
+  // 写入方必须保证合法（设置页只写联合类型里的值）。
+  // 这里锁住当前行为：改 storage 不会被静默纠正，读取方需要容忍脏值。
+  store.settings = {sessionNameMode: 'nonsense'}
+
+  const settings = await loadSettings()
+
+  assert.equal(settings.sessionNameMode, 'nonsense' as typeof settings.sessionNameMode)
+})

@@ -13,7 +13,7 @@
 | 目标浏览器 | **仅 Chrome**（未做 Firefox 兼容，不要加 gecko 目标） |
 | 最低 Chrome | 114（`sidePanel` 的要求，写在 `minimum_chrome_version`） |
 | 构建工具 | `extension` **4.1.30**（精确版本，勿升级） |
-| Node | >= 22.12（extension 4.x 要求） |
+| Node | >= 22.12（extension 4.x 要求）；`pnpm test` 需要 >= 23.6（原生 TypeScript 执行 + `module.registerHooks`） |
 | 包管理器 | pnpm |
 | 语言 | TypeScript，无 UI 框架，纯 DOM |
 | API 风格 | 直接用 `chrome.*`，MV3 原生返回 Promise；**不引入 polyfill** |
@@ -26,9 +26,10 @@
 
 ```bash
 pnpm dev            # 开发模式
-pnpm build          # 构建 → dist/chromium/
-pnpm typecheck      # 必须通过；构建本身不做类型检查
-pnpm verify         # 产物自检（需先 build）：权限、host 权限、入口文件、中文编码
+pnpm build          # 构建 → dist/chrome/
+pnpm typecheck      # 必须通过；构建本身不做类型检查，且需先 build 生成 extension-env.d.ts
+pnpm test           # 单元测试（node:test，无额外依赖）
+pnpm verify         # 产物自检（需先 build）：权限、host 权限、入口文件、中文编码、测试文件泄漏
 pnpm icons          # 重新生成占位图标
 ```
 
@@ -48,6 +49,7 @@ src/
     settings.ts     Chrome storage 读写
     tile.ts         占位块 HTML 生成
     base.css        全站共用的设计变量与基础组件
+    *.test.ts       与实际文件同目录的单元测试（node:test，给 chrome.* 打桩）
   sidebar/          主界面（侧边栏）
   options/          设置页
   images/           图标
@@ -56,6 +58,7 @@ pages/
 tools/
   generate-icons.mjs 占位图标生成器（纯 Node，无第三方依赖）
   verify-build.mjs   产物自检
+  ts-hooks.mjs       测试专用的 TS 解析钩子（给无扩展名的相对导入补 .ts）
 ```
 
 ## 不可破坏的约定
@@ -69,12 +72,15 @@ tools/
 7. **写入书签前先过滤内部页面**（`chrome://`、`chrome-extension://`、`devtools://` 等），用 `isInternalUrl()`。
 8. **同名不覆盖**：建文件夹前先用 `dedupeName()` 对同级已有名字去重。
 9. **样式**：所有颜色和间距走 `base.css` 的 CSS 变量，不写死色值；深色模式靠 `prefers-color-scheme`，不要单独维护两套。
+10. **测试只用 `node:test`**：不引入 vitest / jest / tsx 等框架。测试文件与实现同目录（`naming.test.ts`），`chrome.*` 靠给 `globalThis.chrome` 赋值来打桩，不给产品代码加依赖注入。
 
 ## 提交前自检
 
 ```bash
-pnpm typecheck && pnpm build && pnpm verify
+pnpm test && pnpm build && pnpm typecheck && pnpm verify
 ```
+
+`build` 必须排在 `typecheck` 前面：`extension-env.d.ts`（`chrome` 全局类型与 `*.css` 模块声明的来源）由构建生成且不入库。新 clone 后直接跑 `pnpm typecheck` 会报一堆 `Cannot find name 'chrome'`。
 
 `pnpm verify` 里有一份期望的权限集（`tools/verify-build.mjs` 的 `EXPECTED_PERMISSIONS`），并会主动拦截 Firefox 字段残留。**动权限就必须同时改它和 `docs/design.md` 的权限表**，两处不一致会被自检挡下来。
 
