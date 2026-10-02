@@ -9,7 +9,7 @@ import {existsSync, readdirSync, readFileSync} from 'node:fs'
 const DIST = 'dist/chrome'
 
 /** 期望的权限集：多一个都算漂移，必须同步更新 docs/design.md。 */
-const EXPECTED_PERMISSIONS = ['bookmarks', 'tabs', 'tabGroups', 'storage']
+const EXPECTED_PERMISSIONS = ['bookmarks', 'tabs', 'tabGroups', 'storage', 'favicon']
 
 /** 清单里必须指向这些文件的入口。 */
 const EXPECTED_ENTRIES = {

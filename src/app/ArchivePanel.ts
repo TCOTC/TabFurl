@@ -9,7 +9,7 @@ import {
   type RestorePlan
 } from '../shared/restore'
 import {loadSettings, updateSettings} from '../shared/settings'
-import {escapeHtml, tileMarkup} from '../shared/tile'
+import {decorateTiles, escapeHtml, tileMarkup} from '../shared/tile'
 import type {BookmarkNode, Settings} from '../shared/types'
 import {hostnameOf} from '../shared/urls'
 import {
@@ -20,6 +20,9 @@ import {
   type AppEvents,
   type Panel
 } from './dom'
+
+/** Chrome 本地 favicon 缓存端点：读缓存、不联网（配合 `tileMarkup` 使用）。 */
+const FAVICON_BASE = chrome.runtime.getURL('_favicon/')
 
 /** 一个存档会话 + 它的还原计划。计划既是勾选清单的数据源，也是还原的依据。 */
 interface SessionView {
@@ -119,7 +122,7 @@ export function createArchivePanel(events: AppEvents): Panel {
       <li class="tree__node">
         <label class="tree__row tree__row--bookmark">
           <input type="checkbox" data-content="${escapeHtml(bookmark.id)}" />
-          ${tileMarkup(bookmark.title, bookmark.url)}
+          ${tileMarkup(bookmark.title, bookmark.url, FAVICON_BASE)}
           <span class="tree__title">${escapeHtml(bookmark.title || bookmark.url)}</span>
           <span class="tree__meta">${escapeHtml(host)}</span>
         </label>
@@ -256,6 +259,7 @@ export function createArchivePanel(events: AppEvents): Panel {
       if (id) contentInputs.set(id, input)
     }
 
+    decorateTiles(sessionList)
     applyContainerStates()
     updateBulkBar()
 

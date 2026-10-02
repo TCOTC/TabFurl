@@ -309,8 +309,9 @@ body {
   text-decoration: underline;
 }
 
-/* 占位图标：色相由 URL 推导，不发任何请求、不需要 favicon 权限。 */
+/* 占位图标：色相由 URL 推导出的首字母色块；上面再盖一层 Chrome 本地缓存里的真实图标。 */
 .tile {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -323,6 +324,20 @@ body {
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
+}
+
+/*
+ * 图标盖住字母。加载失败时 decorateTiles 会把这个元素移掉，字母自然露出来。
+ * 必须绝对定位：.tile 是 flex 容器，两者同在流内会被并排排开。
+ */
+.tile__icon {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  /* contain 而非 cover：图标通常带透明边，裁掉会缺角。 */
+  object-fit: contain;
 }
 
 @media (prefers-color-scheme: dark) {

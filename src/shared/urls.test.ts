@@ -1,6 +1,6 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {hostnameOf, isInternalUrl, tileHue, tileInitial} from './urls'
+import {FAVICON_SIZE, faviconUrl, hostnameOf, isInternalUrl, tileHue, tileInitial} from './urls'
 
 test('isInternalUrl 把空值与内部页面判为不可收藏', () => {
   assert.equal(isInternalUrl(undefined), true)
@@ -64,4 +64,26 @@ test('tileHue 稳定且落在 0–359', () => {
     assert.ok(hue >= 0 && hue <= 359, `色相越界：${hue}`)
   }
   assert.equal(tileHue(''), 0)
+})
+
+test('faviconUrl 拼在 _favicon 端点上并带上 size', () => {
+  const url = new URL(faviconUrl('https://example.com/page', 'chrome-extension://abc/_favicon/'))
+
+  assert.equal(url.pathname, '/_favicon/')
+  assert.equal(url.searchParams.get('pageUrl'), 'https://example.com/page')
+  assert.equal(url.searchParams.get('size'), String(FAVICON_SIZE))
+})
+
+test('faviconUrl 会转义 pageUrl 里的保留字符', () => {
+  const pageUrl = 'https://example.com/a b?q=1&r=2#frag'
+  const result = faviconUrl(pageUrl, 'chrome-extension://abc/_favicon/')
+
+  // 参数字面量本身不能带着 & 与空白跑出来，否则会被拆成两个参数。
+  assert.ok(!result.includes(' '), '空白必须被转义')
+  assert.ok(!result.includes('?q=1&r=2'), 'pageUrl 里的 & 必须被转义')
+  assert.equal(
+    new URL(result).searchParams.get('pageUrl'),
+    pageUrl,
+    '取回来必须与传进去的完全相同（含 fragment）'
+  )
 })

@@ -1,11 +1,14 @@
 import {getNodePath, getSubTree} from '../src/shared/bookmarks'
 import {restoreFolder} from '../src/shared/restore'
 import {loadSettings} from '../src/shared/settings'
-import {escapeHtml, tileMarkup} from '../src/shared/tile'
+import {decorateTiles, escapeHtml, tileMarkup} from '../src/shared/tile'
 import type {BookmarkNode} from '../src/shared/types'
 import {hostnameOf} from '../src/shared/urls'
 import '../src/shared/base.css'
 import './folder.css'
+
+/** Chrome 本地 favicon 缓存端点：读缓存、不联网（配合 `tileMarkup` 使用）。 */
+const FAVICON_BASE = chrome.runtime.getURL('_favicon/')
 
 function q<T extends Element>(selector: string): T {
   const element = document.querySelector(selector)
@@ -20,7 +23,7 @@ function bookmarkMarkup(node: BookmarkNode): string {
   return `
     <a class="bookmark" href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener"
        data-search="${escapeHtml(`${title} ${host}`.toLowerCase())}">
-      ${tileMarkup(title, url)}
+      ${tileMarkup(title, url, FAVICON_BASE)}
       <span class="bookmark__main">
         <span class="bookmark__title">${escapeHtml(title)}</span>
         <span class="bookmark__host">${escapeHtml(host)}</span>
@@ -134,6 +137,8 @@ async function render(): Promise<void> {
   const searchInput = q<HTMLInputElement>('#search')
   const status = q<HTMLSpanElement>('#status')
   const openWindowButton = q<HTMLButtonElement>('#open-window-btn')
+
+  decorateTiles(root)
 
   searchInput.addEventListener('input', () => {
     const term = searchInput.value.trim().toLowerCase()

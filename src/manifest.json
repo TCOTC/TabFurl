@@ -12,7 +12,7 @@
     "64": "images/icon-64.png",
     "128": "images/icon-128.png"
   },
-  "permissions": ["bookmarks", "tabs", "tabGroups", "storage"],
+  "permissions": ["bookmarks", "tabs", "tabGroups", "storage", "favicon"],
   "action": {
     "default_icon": {
       "16": "images/icon-16.png",

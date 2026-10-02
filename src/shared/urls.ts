@@ -43,3 +43,21 @@ export function tileHue(seed: string): number {
   }
   return hash
 }
+
+/** 网站图标的像素尺寸。色块是 22px，取 32 是为了在 @2x 屏上也清楚。 */
+export const FAVICON_SIZE = 32
+
+/**
+ * 拼出 `_favicon` 端点的地址：`chrome-extension://<id>/_favicon/?pageUrl=…&size=32`。
+ *
+ * 它读的是 Chrome **本地**的 favicon 缓存，不发任何网络请求（需要 `favicon` 权限）；
+ * 与 `tabs.Tab.favIconUrl` 不同——后者指向网站服务器，渲染时等于向该站点发请求。
+ *
+ * @param faviconBase `chrome.runtime.getURL('_favicon/')`。
+ */
+export function faviconUrl(pageUrl: string, faviconBase: string): string {
+  const url = new URL(faviconBase)
+  url.searchParams.set('pageUrl', pageUrl)
+  url.searchParams.set('size', String(FAVICON_SIZE))
+  return url.toString()
+}
