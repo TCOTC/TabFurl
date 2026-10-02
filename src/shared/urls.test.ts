@@ -6,7 +6,8 @@ import {
   faviconUrl,
   hostnameOf,
   isInternalUrl,
-  isSeparatorUrl
+  isSeparatorUrl,
+  separatorTitle
 } from './urls'
 
 test('isInternalUrl 把空值与内部页面判为不可收藏', () => {
@@ -69,6 +70,26 @@ test('isSeparatorUrl 不误伤同名域名下的其他页面与普通书签', ()
   assert.equal(isSeparatorUrl(undefined), false)
   assert.equal(isSeparatorUrl(''), false)
   assert.equal(isSeparatorUrl('not a url'), false)
+})
+
+test('separatorTitle 剔除首尾手画的横杠，并收掉留下的空白', () => {
+  assert.equal(separatorTitle('──── 工作 ────'), '工作')
+  assert.equal(separatorTitle('─阅读─'), '阅读')
+  assert.equal(separatorTitle('─ 阅读'), '阅读')
+  assert.equal(separatorTitle('阅读 ─'), '阅读')
+  assert.equal(separatorTitle('  阅读  '), '阅读')
+  assert.equal(separatorTitle('阅读'), '阅读')
+})
+
+test('separatorTitle 只动首尾，中间的横杠是标题的一部分', () => {
+  assert.equal(separatorTitle('2020 ─ 2024'), '2020 ─ 2024')
+  assert.equal(separatorTitle('─── A ─ B ───'), 'A ─ B')
+})
+
+test('整条都是横杠时标题为空，分隔线退化成只画一条线', () => {
+  assert.equal(separatorTitle('───────'), '')
+  assert.equal(separatorTitle('─ ─ ─'), '', '剥完只剩空白，也算无标题')
+  assert.equal(separatorTitle(''), '')
 })
 
 test('hostnameOf 去掉 www 前缀', () => {

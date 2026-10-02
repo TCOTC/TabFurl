@@ -49,6 +49,25 @@ export function isSeparatorUrl(url: string | undefined): boolean {
   }
 }
 
+/** 分隔线标题两端的手画横杠（`─`）与空白，一起去掉。 */
+const SEPARATOR_EDGES = /^[\s─]+|[\s─]+$/g
+
+/**
+ * 分隔线标题的清洗：去掉首尾的 `─`。
+ *
+ * 分隔线标题常被写成 `──── 工作 ────`——那两道横杠是**手画的线**。而界面已经用 CSS 画了线，
+ * 留着它们就成了第二条线：长度写死、跟容器宽度对不上，看着像排版坏了。所以首尾的横杠一律剔除。
+ *
+ * 横杠与空白**当成同一类字符一起剥**，而不是只剥横杠再 `trim()`：写成 `─ ─ ─` 那种
+ * 拿横杠和空格拼出来的假线，只剥一层会剩下中间那根，看着还是一条坏线。合成一个字符集就不会漏。
+ * 好处是整条都是横杠、或横杠加空格时结果为空串，于是走「无标题」那条路，只画一条线——正是想要的。
+ *
+ * 只动首尾：`2020 ─ 2024` 中间那根是标题的一部分。
+ */
+export function separatorTitle(title: string): string {
+  return title.replace(SEPARATOR_EDGES, '').trim()
+}
+
 /** 取主机名，去掉 `www.`。取不到时返回 undefined。 */
 export function hostnameOf(url: string | undefined): string | undefined {
   if (!url) return undefined

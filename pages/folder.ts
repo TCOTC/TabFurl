@@ -3,7 +3,7 @@ import {restoreFolder} from '../src/shared/restore'
 import {loadSettings} from '../src/shared/settings'
 import {escapeHtml, faviconMarkup} from '../src/shared/tile'
 import type {BookmarkNode} from '../src/shared/types'
-import {hostnameOf, isSeparatorUrl} from '../src/shared/urls'
+import {hostnameOf, isSeparatorUrl, separatorTitle} from '../src/shared/urls'
 import '../src/shared/base.css'
 import './folder.css'
 
@@ -54,9 +54,11 @@ function bookmarkMarkup(node: BookmarkNode): string {
  *
  * `data-search` 也给它一份：搜索时它会跟着被藏起来，列表就被压平了——
  * 无标题的分隔线永远匹配不上任何词，正是想要的效果。
+ *
+ * 标题首尾手画的横杠会先剥掉（见 `separatorTitle`）：那个位置已经有一条真线了。
  */
 function separatorMarkup(node: BookmarkNode): string {
-  const title = node.title.trim()
+  const title = separatorTitle(node.title)
   if (!title) return '<hr class="separator separator--plain" data-search="" />'
   return `
     <div class="separator" role="separator" aria-orientation="horizontal"

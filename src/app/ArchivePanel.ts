@@ -12,7 +12,7 @@ import {
 import {loadSettings, updateSettings} from '../shared/settings'
 import {escapeHtml, faviconMarkup} from '../shared/tile'
 import type {BookmarkNode, Settings} from '../shared/types'
-import {hostnameOf} from '../shared/urls'
+import {hostnameOf, separatorTitle} from '../shared/urls'
 import {
   createPanelElement,
   createSelectAll,
@@ -186,7 +186,8 @@ export function createArchivePanel(events: AppEvents): Panel {
   function bookmarkMarkup(bookmark: PlannedBookmark): string {
     // 分隔线不是可勾选的书签，只是一个记号：留在原位渲染，但不参与勾选、不计入枚数、不会被打开。
     if (bookmark.separator) {
-      const title = bookmark.title.trim()
+      // 标题首尾手画的横杠先剥掉（见 `separatorTitle`）：那个位置已经有一条真线了。
+      const title = separatorTitle(bookmark.title)
       return title
         ? `<li class="tree__divider"><span>${escapeHtml(title)}</span></li>`
         : '<li class="tree__divider tree__divider--plain"></li>'
