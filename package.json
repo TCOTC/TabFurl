@@ -1,0 +1,23 @@
+{
+  "private": true,
+  "name": "tabfurl",
+  "description": "把浏览器窗口的标签页收进书签文件夹，也能把文件夹还原成带分组的窗口。",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "extension dev",
+    "start": "extension start",
+    "preview": "extension preview",
+    "build": "extension build",
+    "typecheck": "tsc --noEmit",
+    "verify": "node tools/verify-build.mjs",
+    "icons": "node tools/generate-icons.mjs"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.3.4",
+    "extension": "4.1.30",
+    "typescript": "7.0.2"
+  },
+  "packageManager": "pnpm@10.33.3"
+}

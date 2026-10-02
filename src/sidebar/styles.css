@@ -1,0 +1,14 @@
+/* 侧边栏面板很窄，只做必要的收窄调整。 */
+
+.app {
+  padding: 12px;
+  gap: 10px;
+}
+
+.list {
+  max-height: none;
+}
+
+.panel--folders .list {
+  max-height: 46vh;
+}

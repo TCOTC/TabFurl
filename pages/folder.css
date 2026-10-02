@@ -1,0 +1,83 @@
+/* 文件夹阅读页：整页打开，卡片式网格。 */
+
+.app {
+  max-width: 1120px;
+  padding: 20px;
+  gap: 14px;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.section__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.section__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+}
+
+.bookmark {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: inherit;
+  text-decoration: none;
+}
+
+.bookmark:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.bookmark__main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.bookmark__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookmark__host {
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crumbs {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.crumbs a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.crumbs a:hover {
+  color: var(--accent-strong);
+  text-decoration: underline;
+}

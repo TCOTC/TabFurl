@@ -1,0 +1,23 @@
+# 依赖
+node_modules
+
+# 构建产物
+dist
+.extension-js
+
+# Extension.js 自动生成的类型声明，不要手改
+extension-env.d.ts
+
+# 日志与临时文件
+*.log
+npm-debug.log*
+yarn-error.log*
+.DS_Store
+
+# 本地环境变量
+.env.local
+.env.*.local
+
+# 锁文件（本仓库只使用 pnpm）
+yarn.lock
+package-lock.json
