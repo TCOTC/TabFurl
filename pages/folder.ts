@@ -161,15 +161,15 @@ async function render(): Promise<void> {
 
   openWindowButton.addEventListener('click', async () => {
     openWindowButton.disabled = true
+    // 这一句必须留：舍弃前要等导航提交（最多 2 秒），没有它界面看起来就是卡住的。
+    status.className = 'status status--ok'
+    status.textContent = '正在打开…'
     try {
       const settings = await loadSettings()
-      const result = await restoreFolder(folderId, {target: settings.restoreTarget})
-      status.className = 'status status--ok'
-      const parts = [`已打开 ${result.opened} 个标签页`]
-      // 明说未加载的枚数，否则用户看到一排灰标签会以为还原出错了。
-      if (result.discarded > 0) parts.push(`其中 ${result.discarded} 个未加载（点开才加载）`)
-      if (result.groups > 0) parts.push(`创建 ${result.groups} 个分组`)
-      status.textContent = `${parts.join('，')}。`
+      await restoreFolder(folderId, {target: settings.restoreTarget})
+      // 成功不留报账式提示：窗口已经打开，看得见。
+      status.className = 'status'
+      status.textContent = ''
     } catch (error) {
       status.className = 'status status--error'
       status.textContent = error instanceof Error ? error.message : String(error)

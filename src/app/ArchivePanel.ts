@@ -474,32 +474,19 @@ export function createArchivePanel(events: AppEvents): Panel {
 
     busy = true
     updateBulkBar()
+    // 这一句必须留：舍弃前要等导航提交（最多 2 秒），没有它界面看起来就是卡住的。
     setStatus(status, '正在打开…', 'ok')
 
     try {
-      let opened = 0
-      let groups = 0
-      let skipped = 0
-      let discarded = 0
       for (const folderId of folderIds) {
-        const result = await restoreFolder(folderId, {
+        await restoreFolder(folderId, {
           target: settings.restoreTarget,
           groupTabs,
           excludeBookmarkIds: excludedBookmarks
         })
-        opened += result.opened
-        groups += result.groups
-        skipped += result.skipped
-        discarded += result.discarded
       }
-
-      const parts = [`已打开 ${opened} 个标签页`]
-      // 明说未加载的枚数，否则用户看到一排灰标签会以为还原出错了。
-      if (discarded > 0) parts.push(`其中 ${discarded} 个未加载（点开才加载）`)
-      if (groups > 0) parts.push(`创建 ${groups} 个分组`)
-      if (!groupTabs) parts.push('未建分组')
-      if (skipped > 0) parts.push(`跳过 ${skipped} 项`)
-      setStatus(status, `${parts.join('，')}。`, 'ok')
+      // 成功不留报账式提示：标签/窗口已经打开，看得见；数字写在按钮上，点之前就看到了。
+      setStatus(status, '', 'ok')
     } catch (error) {
       setStatus(status, `打开失败：${errorText(error)}`, 'error')
     } finally {
@@ -508,7 +495,7 @@ export function createArchivePanel(events: AppEvents): Panel {
     }
   }
 
-  async function runOpenViewers(folderIds: readonly string[], label: string): Promise<void> {
+  async function runOpenViewers(folderIds: readonly string[]): Promise<void> {
     if (busy || folderIds.length === 0) return
 
     busy = true
@@ -516,8 +503,8 @@ export function createArchivePanel(events: AppEvents): Panel {
     setStatus(status, '正在打开…', 'ok')
 
     try {
-      const opened = await openFolderViewers(folderIds)
-      setStatus(status, `已打开 ${opened} 个${label}。`, 'ok')
+      await openFolderViewers(folderIds)
+      setStatus(status, '', 'ok')
     } catch (error) {
       setStatus(status, `打开失败：${errorText(error)}`, 'error')
     } finally {
@@ -698,16 +685,13 @@ export function createArchivePanel(events: AppEvents): Panel {
   })
 
   openRootButton.addEventListener('click', () => {
-    if (settings?.archiveRootId) void runOpenViewers([settings.archiveRootId], '阅读页')
+    if (settings?.archiveRootId) void runOpenViewers([settings.archiveRootId])
   })
 
   openWindowButton.addEventListener('click', () => void runRestore(true))
   openTabsButton.addEventListener('click', () => void runRestore(false))
   openViewersButton.addEventListener('click', () =>
-    void runOpenViewers(
-      targets().map((view) => view.node.id),
-      '阅读页'
-    )
+    void runOpenViewers(targets().map((view) => view.node.id))
   )
 
   return {element, refresh}
