@@ -42,7 +42,8 @@ export function App(): void {
   if (!host) return
 
   const shell = document.createElement('main')
-  shell.className = 'app'
+  // `app--shell`：主界面是一屏应用，只让列表自己滚，页面不滚（理由见 base.css）。
+  shell.className = 'app app--shell'
   shell.innerHTML = SHELL_TEMPLATE
   host.replaceChildren(shell)
 

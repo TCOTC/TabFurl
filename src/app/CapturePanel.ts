@@ -27,6 +27,19 @@ import {
 /** Chrome 本地 favicon 缓存端点：读缓存、不联网（配合 `tileMarkup` 使用）。 */
 const FAVICON_BASE = chrome.runtime.getURL('_favicon/')
 
+/**
+ * 「已固定」标记。
+ *
+ * 与折叠三角同一个理由：`📌` 是 emoji，各平台配色与大小都不一样，
+ * 在一列灰字里就是一个突如其来的彩色块。换成与文件夹、刷新按钮同一套描边的内联 SVG。
+ */
+const PIN_ICON = `
+  <svg class="icon icon--xs item__pin" viewBox="0 0 24 24" role="img" aria-label="已固定">
+    <path d="M16 9V4h1a1 1 0 0 0 0-2H7a1 1 0 0 0 0 2h1v5a3 3 0 0 1-3 3v2h5.97v7l1 1 1-1v-7H19v-2a3 3 0 0 1-3-3Z"
+          fill="currentColor" />
+  </svg>
+`
+
 const TEMPLATE = `
   <h2 class="panel__title">保存当前窗口 <span class="badge" id="capture-count">0</span></h2>
   <label class="field">
@@ -35,7 +48,6 @@ const TEMPLATE = `
            placeholder="留空则只用时间戳，例如：会议" />
   </label>
   <p class="muted" id="capture-preview"></p>
-  <p class="muted" id="capture-hint"></p>
   <div class="row row--compact" id="tabs-all-host"></div>
   <ul class="pick-list" id="tab-list"></ul>
   <div class="row">
@@ -55,7 +67,6 @@ export function createCapturePanel(events: AppEvents): Panel {
   const element = createPanelElement('capture')
   element.innerHTML = TEMPLATE
 
-  const hint = q<HTMLParagraphElement>(element, '#capture-hint')
   const preview = q<HTMLParagraphElement>(element, '#capture-preview')
   const nameInput = q<HTMLInputElement>(element, '#session-name')
   const countBadge = q<HTMLSpanElement>(element, '#capture-count')
@@ -114,16 +125,16 @@ export function createCapturePanel(events: AppEvents): Panel {
   function tabMarkup(tab: TabSnapshot): string {
     const host = hostnameOf(tab.url) ?? tab.url
     return `
-      <li class="pick">
+      <li class="item pick">
         <input type="checkbox" data-tab="${tab.tabId}"${
           excluded.has(tab.tabId) ? '' : ' checked'
         } />
         ${faviconMarkup(tab.url, FAVICON_BASE)}
-        <span class="pick__main">
-          <span class="pick__title">${escapeHtml(tab.title || tab.url)}${
-            tab.pinned ? '<span class="pick__pin" title="已固定">📌</span>' : ''
+        <span class="item__main">
+          <span class="item__title">${escapeHtml(tab.title || tab.url)}${
+            tab.pinned ? PIN_ICON : ''
           }</span>
-          <span class="pick__meta">${escapeHtml(host)}</span>
+          <span class="item__meta">${escapeHtml(host)}</span>
         </span>
       </li>
     `
@@ -136,10 +147,10 @@ export function createCapturePanel(events: AppEvents): Panel {
     )
     return `
       <li class="pick pick--group">
-        <label class="pick__row">
+        <label class="item pick__row">
           <input type="checkbox" data-group="${index}" />
-          <span class="pick__title">${escapeHtml(child.name)}</span>
-          <span class="pick__meta">${child.tabs.length} 个标签</span>
+          <span class="item__title">${escapeHtml(child.name)}</span>
+          <span class="item__meta">${child.tabs.length} 个标签</span>
         </label>
         <ul class="pick__children">${child.tabs.map(tabMarkup).join('')}</ul>
       </li>
@@ -186,9 +197,23 @@ export function createCapturePanel(events: AppEvents): Panel {
     updateBar()
   }
 
+  /**
+   * 「将存成什么」与「这一存有哪些边角情况」合成一行。
+   *
+   * 以前是上下两行灰字：一行预览名字，一行报「窗口里有 N 个可保存的标签页，M 个分组，
+   * 跳过 K 个内部页面」。但标签页总数在同一屏里已经出现两次（标题旁的数字、
+   * 勾选框旁的「已全选 N 个」），那两行里实际只有一行带新信息。
+   * 合成一行后列表多出约 30px，小窗口下正好多显一行标签。
+   */
   function updatePreview(): void {
-    // 直接用命名函数生成，所以预览与真正写入书签的名字完全一致（含清洗与截断）。
-    preview.textContent = `将存成：${formatSessionName(new Date(), nameInput.value)}`
+    if (!archiveAvailable) {
+      preview.textContent = '先在上方选一个存档位置。'
+      return
+    }
+    const parts = [`将存成：${formatSessionName(new Date(), nameInput.value)}`]
+    if (snapshot.groups.length > 0) parts.push(`${snapshot.groups.length} 个标签分组`)
+    if (snapshot.skipped > 0) parts.push(`跳过 ${snapshot.skipped} 个内部页面`)
+    preview.textContent = parts.join(' · ')
   }
 
   function updateBar(): void {
@@ -222,12 +247,7 @@ export function createCapturePanel(events: AppEvents): Panel {
       if (!alive.has(tabId)) excluded.delete(tabId)
     }
 
-    const parts = [`主界面所在窗口有 ${alive.size} 个可保存的标签页`]
-    if (snapshot.groups.length > 0) parts.push(`${snapshot.groups.length} 个标签分组`)
-    if (snapshot.skipped > 0) parts.push(`跳过 ${snapshot.skipped} 个内部页面`)
-    // 存档位置就在上面的标签栏旁边，所以文案里不再写「去设置里选」这类指路。
-    hint.textContent = archiveAvailable ? `${parts.join('，')}。` : '先在上方选一个存档位置。'
-
+    // 上面那行 alive 只用于修剪勾选集合；给用户看的数字在角标、勾选框与预览行里。
     updatePreview()
     render()
   }

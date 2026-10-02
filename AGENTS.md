@@ -107,7 +107,9 @@ tools/
 6. **`bookmarks` API 的 id 是设备本地的**：同一账号在另一台设备上 id 不同。任何持久化数据都不要以书签 id 作为跨设备稳定的标识；id 只允许存在本地设置里（如 `archiveRootId`），且必须能重建。
 7. **写入书签前先过滤内部页面**（`chrome://`、`chrome-extension://`、`devtools://` 等），用 `isInternalUrl()`。
 8. **同名不覆盖**：建文件夹前先用 `dedupeName()` 对同级已有名字去重。
-9. **样式**：所有颜色和间距走 `base.css` 的 CSS 变量，不写死色值；深色模式靠 `prefers-color-scheme`，不要单独维护两套。
+9. **样式**：颜色、字号、间距一律走 `base.css` 的变量（`--space-1..6`、`--text-xs/sm/md/lg`），不写死数值；深色模式靠 `prefers-color-scheme`，不单独维护两套。
+   一行条目（前置控件/图标 + 标题 + 副文案 + 尾部说明）用 `base.css` 的 `.item` / `.item__main` / `.item__title` / `.item__meta`，
+   别在页面样式里重写一遍 flex 与省略号——那种重复每多一处就会漏掉一次 `min-width: 0`（省略号就失效了）。
 10. **测试只用 `node:test`**：不引入 vitest / jest / tsx 等框架。测试文件与实现同目录（`naming.test.ts`），`chrome.*` 靠给 `globalThis.chrome` 赋值来打桩，不给产品代码加依赖注入。
 11. **会话文件夹的直接子级必须按窗口顺序排列**：标签分组建子文件夹，未分组的标签建成散装书签插在原位，**不要**把它们收进「未分组」文件夹。两个实现是逆运算，改一处必须同步另一处：`capture.ts` 的 `planSessionChildren()` ↔ `restore.ts` 的 `planRestore()`（前者按 `TabSnapshot.index` 归并，后者按子级数组顺序还原）。
 12. **界面不得自己遍历标签／书签树**：勾选清单直接用 `planSessionChildren()` / `planRestore()` 的产物渲染，
@@ -138,6 +140,9 @@ tools/
     渲染标题前过一道 `separatorTitle()`：**首尾的 `─` 与空白一起去掉**（`──── 工作 ────` 这类手画的线会与 CSS 画的线打架），
     整条都是横杠时退化成无标题、只画一根线。别只剥横杠再 `trim()`——`─ ─ ─` 会剩下中间那根。
     实现在两处界面 + `restore.ts` 的 `PlannedBookmark.separator`；新增任何「数标签」的地方都必须走 `restorableBookmarks()`，否则枚数会在分隔线上对不上。
+21. **主界面只允许有一个滚动容器**：`.app--shell` 把整页锁在一屏内（`100dvh`），滚动交给 `.pick-list` / `.tree`（`flex: 1; min-height: 0; overflow-y: auto`），
+    这样顶部标签栏与底部按钮始终可见。**不要给列表加 `max-height`**——那会与页面滚动叠成两条滚动条，而且列表一长，底部按钮就被推出屏幕。
+    阅读页（`folder.html`）不加 `app--shell`：它就是要整页往下读的文档。
 
 ## 提交前自检
 

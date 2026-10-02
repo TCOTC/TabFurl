@@ -34,12 +34,12 @@ function bookmarkMarkup(node: BookmarkNode): string {
   const title = node.title.trim() || url
   const host = hostnameOf(url) ?? url
   return `
-    <a class="bookmark" href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener"
+    <a class="item bookmark" href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener"
        data-search="${escapeHtml(`${title} ${host}`.toLowerCase())}">
       ${faviconMarkup(url, FAVICON_BASE)}
-      <span class="bookmark__main">
-        <span class="bookmark__title">${escapeHtml(title)}</span>
-        <span class="bookmark__host">${escapeHtml(host)}</span>
+      <span class="item__main">
+        <span class="item__title">${escapeHtml(title)}</span>
+        <span class="item__meta">${escapeHtml(host)}</span>
       </span>
     </a>
   `
@@ -97,11 +97,11 @@ function subfolderCardMarkup(folder: BookmarkNode): string {
   )
   const folderCount = (folder.children ?? []).filter((child) => !child.url).length
   return `
-    <a class="bookmark" href="${escapeHtml(folderHref(folder.id))}">
+    <a class="item bookmark" href="${escapeHtml(folderHref(folder.id))}">
       <span class="folder-tile" aria-hidden="true">${FOLDER_ICON}</span>
-      <span class="bookmark__main">
-        <span class="bookmark__title">${escapeHtml(folder.title)}</span>
-        <span class="bookmark__host">${bookmarks.length} 个书签${
+      <span class="item__main">
+        <span class="item__title">${escapeHtml(folder.title)}</span>
+        <span class="item__meta">${bookmarks.length} 个书签${
           folderCount > 0 ? ` · ${folderCount} 个子文件夹` : ''
         }</span>
       </span>

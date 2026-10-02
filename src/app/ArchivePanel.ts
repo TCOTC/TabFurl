@@ -197,11 +197,11 @@ export function createArchivePanel(events: AppEvents): Panel {
     const host = hostnameOf(bookmark.url) ?? bookmark.url
     return `
       <li class="tree__node">
-        <label class="tree__row tree__row--bookmark">
+        <label class="item tree__row tree__row--bookmark">
           <input type="checkbox" data-content="${escapeHtml(bookmark.id)}" />
           ${faviconMarkup(bookmark.url, FAVICON_BASE)}
-          <span class="tree__title">${escapeHtml(bookmark.title || bookmark.url)}</span>
-          <span class="tree__meta">${escapeHtml(host)}</span>
+          <span class="item__title">${escapeHtml(bookmark.title || bookmark.url)}</span>
+          <span class="item__meta tree__meta">${escapeHtml(host)}</span>
         </label>
       </li>
     `
@@ -215,10 +215,12 @@ export function createArchivePanel(events: AppEvents): Panel {
     const containerId = item.folderId
     return `
       <li class="tree__node tree__node--group">
-        <label class="tree__row tree__row--group">
+        <label class="item tree__row tree__row--group">
           <input type="checkbox" data-content="${escapeHtml(containerId)}" />
-          <span class="tree__title">${escapeHtml(item.title)}</span>
-          <span class="tree__meta">${restorableBookmarks(item.bookmarks).length} 个标签</span>
+          <span class="item__title">${escapeHtml(item.title)}</span>
+          <span class="item__meta tree__meta">${restorableBookmarks(
+            item.bookmarks
+          ).length} 个标签</span>
         </label>
         <ul class="tree__children">${item.bookmarks.map(bookmarkMarkup).join('')}</ul>
       </li>
@@ -233,7 +235,7 @@ export function createArchivePanel(events: AppEvents): Panel {
       renaming?.id === id
         ? `<input type="text" class="input input--rename" data-rename-input="${escapeHtml(id)}"
                   value="${escapeHtml(view.node.title)}" aria-label="重命名存档" />`
-        : `<span class="tree__title">${escapeHtml(view.node.title)}</span>`
+        : `<span class="item__title">${escapeHtml(view.node.title)}</span>`
 
     const actions =
       renaming?.id === id
@@ -262,14 +264,14 @@ export function createArchivePanel(events: AppEvents): Panel {
 
     return `
       <li class="tree__node" data-session="${escapeHtml(id)}">
-        <div class="tree__row">
+        <div class="item tree__row">
           <button type="button" class="tree__caret" data-toggle="${escapeHtml(id)}"
                   aria-expanded="${open}" aria-label="${open ? '折叠' : '展开'}"
                   title="${open ? '折叠' : '展开'}">${caretSvg(open)}</button>
           <input type="checkbox" data-content="${escapeHtml(id)}"
                  title="这个存档里哪些标签要还原" />
           ${title}
-          <span class="tree__meta" data-meta="${escapeHtml(id)}">${escapeHtml(
+          <span class="item__meta tree__meta" data-meta="${escapeHtml(id)}">${escapeHtml(
             sessionMetaText(view)
           )}</span>
           ${actions}

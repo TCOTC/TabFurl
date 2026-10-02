@@ -17,9 +17,33 @@
   --danger: #b42318;
   --ok: #067647;
 
+  /*
+   * 尺度只有下面这些档位，页面样式一律从这里取值。
+   *
+   * 之前字号散落在 10/11/12/13/15px、间距散落在 2/4/5/6/8/9/10/12/14/20px，
+   * 到处都是一次性数字，于是同一层级的元素在不同面板里长得不一样。
+   *
+   * 字号四档：副文案 → 次要正文与控件 → 正文 → 标题。
+   * 区块标题用 `--text-md` 加粗，不靠再大一号来撑：13px 与 15px 摆在一起时，
+   * 谁也说不清哪个更重要。
+   */
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 15px;
+
+  /* 间距六档，相邻两档肉眼可辨。 */
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 24px;
+
   --radius: 10px;
   --radius-sm: 7px;
-  --gap: 12px;
+  /* 两个页面共用同一内容宽度，不再各写一个数。 */
+  --content-max: 1080px;
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
     'Hiragino Sans GB', sans-serif;
 }
@@ -52,29 +76,43 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
-  font-size: 13px;
+  font-size: var(--text-md);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
+/* 页面外壳：内容居中、四周留白。主界面与阅读页共用同一宽度与留白。 */
 .app {
   display: flex;
   flex-direction: column;
-  gap: var(--gap);
-  padding: 14px;
-  max-width: 980px;
+  gap: var(--space-4);
+  max-width: var(--content-max);
   margin: 0 auto;
+  padding: var(--space-5);
+}
+
+/*
+ * 主界面是「一屏的应用」，不是一篇文章：整页锁在一屏内，只让列表自己滚动。
+ *
+ * 以前是「页面滚动 + 列表内部滚动」两层：两个列表各自写着 `max-height: 42vh` / `52vh`，
+ * 于是同一个窗口里真正能看到两处滚动条，而列表一长，底部的操作按钮就被推到屏幕外，
+ * 得先滚到底才能点。现在列表自己滚，顶部标签栏与底部按钮始终在视野里。
+ *
+ * 阅读页不加这个类：那本来就是一篇要顺着往下读的文档，页面滚动才对。
+ */
+.app--shell {
+  height: 100dvh;
 }
 
 .app__header {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .app__title {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--text-lg);
   font-weight: 600;
 }
 
@@ -82,32 +120,81 @@ body {
 .muted {
   margin: 0;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
-.app__footer {
+/*
+ * 勾选框：锁死尺寸与外边距。
+ * 原生勾选框的尺寸随平台与 DPI 变（Windows / macOS / 高 DPI 各不相同），
+ * 而列表的子级缩进是拿它算的；不锁死，父级与子级的勾选框就会差一两个像素，
+ * 看着像没对齐。
+ */
+input[type='checkbox'] {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/*
+ * 一行条目：前置控件或图标 + 主列（标题 / 副文案）+ 尾部说明。
+ *
+ * 保存清单、存档树、阅读页卡片三处本来各写了一遍同样的排版，现在合成一份。
+ * 页面样式只补差异（间距、描边、悬停态），不再重复写 flex 与省略号——
+ * 这种重复每多一处就会悄悄跑偏一次（比如只有一处记得带 `min-width: 0`，
+ * 那一处的省略号就会失效）。
+ */
+.item {
   display: flex;
-  gap: 12px;
-  padding-top: 4px;
-  border-top: 1px solid var(--border);
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
 }
 
+.item__main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.item__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.item__meta {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * 面板只是一个布局容器：`flex: 1` 是为了让当前可见的那一块撑满剩余高度。
+ *
+ * 它以前有灰底 + 描边 + 内边距，而它里面装的列表同样是白底 + 描边，
+ * 同一个区域叠了两层「框」。现在底与框只留给真正需要它的那一层（列表），
+ * 面板自己完全不呈现。
+ */
 .panel {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  gap: var(--space-3);
+  flex: 1;
+  min-height: 0;
 }
 
 .panel__title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-md);
   font-weight: 600;
 }
 
@@ -115,28 +202,22 @@ body {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .row--compact {
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 /* 顶层三态勾选框：原生 checkbox 的 indeterminate 就是第三种状态。 */
 .select-all {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 0;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
   cursor: pointer;
-}
-
-.select-all input {
-  margin: 0;
-  flex: 0 0 auto;
-  accent-color: var(--accent);
 }
 
 .select-all:hover {
@@ -150,22 +231,22 @@ body {
 }
 
 .badge {
-  padding: 1px 7px;
+  padding: 1px var(--space-3);
   border-radius: 999px;
   background: var(--accent-soft);
   color: var(--accent-strong);
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
 }
 
 .btn {
-  padding: 6px 12px;
+  padding: var(--space-2) var(--space-4);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
   color: var(--text);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--text-sm);
   cursor: pointer;
 }
 
@@ -210,19 +291,19 @@ body {
 }
 
 .btn--sm {
-  padding: 3px 8px;
-  font-size: 11px;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
 }
 
 .input {
   width: 100%;
-  padding: 6px 9px;
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
   color: var(--text);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .input:focus {
@@ -234,81 +315,18 @@ body {
 .field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .field__label {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
-}
-
-.check {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.check input {
-  margin: 2px 0 0;
-  accent-color: var(--accent);
-}
-
-.list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  max-height: 320px;
-  overflow-y: auto;
-  list-style: none;
-}
-
-.list__item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.list__item:hover {
-  background: var(--accent-soft);
-}
-
-.list__item input {
-  margin: 0;
-  accent-color: var(--accent);
-}
-
-.list__main {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  flex: 1;
-}
-
-.list__title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.list__meta {
-  color: var(--text-muted);
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .status {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .status--ok {
@@ -320,20 +338,10 @@ body {
 }
 
 .empty {
-  padding: 14px 8px;
+  padding: var(--space-5) var(--space-3);
   color: var(--text-muted);
   text-align: center;
-  font-size: 12px;
-}
-
-.link {
-  color: var(--accent-strong);
-  cursor: pointer;
-  text-decoration: none;
-}
-
-.link:hover {
-  text-decoration: underline;
+  font-size: var(--text-sm);
 }
 
 /* 网站图标：Chrome 本地 favicon 缓存里的真图标；缓存未命中时端点给的是默认地球。 */
@@ -341,7 +349,7 @@ body {
   flex: 0 0 auto;
   width: 22px;
   height: 22px;
-  border-radius: 5px;
+  border-radius: var(--space-1);
   /* contain 而非 cover：图标通常带透明边，裁掉会缺角。 */
   object-fit: contain;
 }
