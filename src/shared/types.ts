@@ -22,6 +22,13 @@ export type TabGroupColor =
 
 /** 采集到的一个标签页。 */
 export interface TabSnapshot {
+  /**
+   * `chrome.tabs.Tab.id`。
+   *
+   * 界面里「保留哪几枚标签」用它做标识：标签 id 在标签存活期间不变，
+   * 而 `index` 会因为别的标签关闭而整体前移，不能拿它记住用户的勾选。
+   */
+  tabId: number
   title: string
   url: string
   pinned: boolean
@@ -70,6 +77,15 @@ export interface CaptureResult {
 export interface RestoreOptions {
   /** 打开的标签放到新窗口还是当前窗口。 */
   target: 'newWindow' | 'currentWindow'
+  /**
+   * 为存档里的子文件夹建标签分组。
+   *
+   * 显式传 `false` 时只按顺序开标签、不建分组——用于「只想看看这些页面」的场合。
+   * 默认开启；散装书签任何时候都不建分组。
+   */
+  groupTabs?: boolean
+  /** 不还原的书签 id（界面里取消勾选的项）。默认全部还原。 */
+  excludeBookmarkIds?: ReadonlySet<string>
 }
 
 export interface RestoreResult {

@@ -1,6 +1,6 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {captureCurrentWindow, snapshotCurrentWindow} from './capture'
+import {captureCurrentWindow, selectTabs, snapshotCurrentWindow} from './capture'
 
 interface StubTab {
   id: number
@@ -266,4 +266,83 @@ test('会话文件夹与已有文件夹重名时追加序号', async (t) => {
 
   assert.equal(result.folderName, '2026-10-02 14_30 (2)')
   assert.equal(created.length, 2, '会话文件夹 + 一个书签')
+})
+
+test('selectTabs 剔除被勾掉的标签，并丢掉因此变空的分组', async () => {
+  stubChrome(
+    [
+      plainTab(1, 'https://a1.com', {groupId: 10}),
+      plainTab(2, 'https://a2.com', {groupId: 10}),
+      plainTab(3, 'https://loose.com'),
+      plainTab(4, 'https://b1.com', {groupId: 11})
+    ],
+    {groups: {10: {title: '工作', color: 'blue'}, 11: {title: '阅读', color: 'red'}}}
+  )
+
+  const snapshot = await snapshotCurrentWindow()
+  const kept = selectTabs(snapshot, new Set([2, 4, 3]))
+
+  assert.equal(kept.groups.length, 1, '「阅读」整组被勾掉后应消失')
+  assert.equal(kept.groups[0].title, '工作')
+  assert.deepEqual(kept.groups[0].tabs.map((tab) => tab.url), ['https://a1.com'])
+  assert.deepEqual(kept.ungrouped, [], '散装标签也被勾掉了')
+
+  assert.equal(snapshot.groups.length, 2, 'selectTabs 不改动传入的快照')
+  assert.equal(snapshot.ungrouped.length, 1)
+})
+
+test('没有排除项时 selectTabs 原样返回，不做无谓复制', async () => {
+  stubChrome([plainTab(1, 'https://a.com')])
+
+  const snapshot = await snapshotCurrentWindow()
+
+  assert.equal(selectTabs(snapshot, new Set()), snapshot)
+})
+
+test('captureCurrentWindow 只写入勾选的标签，整组勾掉就不建那个文件夹', async () => {
+  const {created} = stubChrome(
+    [
+      plainTab(1, 'https://a1.com', {groupId: 10}),
+      plainTab(2, 'https://a2.com', {groupId: 10}),
+      plainTab(3, 'https://loose.com'),
+      plainTab(4, 'https://b1.com', {groupId: 11})
+    ],
+    {groups: {10: {title: '工作', color: 'blue'}, 11: {title: '阅读', color: 'red'}}}
+  )
+
+  const result = await captureCurrentWindow(ARCHIVE_ROOT, 'datetime', {
+    excludeTabIds: new Set([2, 4])
+  })
+
+  assert.deepEqual(shape(childrenOf(created, result.folderId)), [
+    '文件夹:工作',
+    '书签:https://loose.com'
+  ])
+  assert.equal(result.saved, 2)
+  assert.equal(result.groups, 1, '被勾掉的「阅读」不该建文件夹')
+})
+
+test('全部勾掉时不留下空文件夹', async () => {
+  const {created} = stubChrome([plainTab(1, 'https://a.com')])
+
+  const result = await captureCurrentWindow(ARCHIVE_ROOT, 'datetime', {
+    excludeTabIds: new Set([1])
+  })
+
+  assert.equal(result.saved, 0)
+  assert.equal(result.folderId, '')
+  assert.equal(created.length, 0)
+})
+
+test('会话命名不带被勾掉的活动标签，也不带内部页面', async () => {
+  // 存根里 query({active: true}) 返回 tabs[0]，所以第一枚就是活动标签。
+  stubChrome([plainTab(1, 'https://www.github.com/user/repo'), plainTab(2, 'https://b.com')])
+  const excluded = await captureCurrentWindow(ARCHIVE_ROOT, 'datetimeSite', {
+    excludeTabIds: new Set([1])
+  })
+  assert.ok(!excluded.folderName.includes('·'), '活动标签没被保存就不该拿它命名')
+
+  stubChrome([plainTab(1, 'chrome://newtab'), plainTab(2, 'https://b.com')])
+  const internal = await captureCurrentWindow(ARCHIVE_ROOT, 'datetimeSite')
+  assert.ok(!internal.folderName.includes('·'), '内部页面不该拼出 `· newtab` 这种名字')
 })

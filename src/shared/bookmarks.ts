@@ -69,9 +69,19 @@ export async function createBookmark(
   return toNode(await chrome.bookmarks.create({parentId, title, url}))
 }
 
-/** 删除整个子树，用于「撤销本次保存」。 */
+/** 删除整个子树，用于「撤销本次保存」与删除存档。 */
 export async function removeSubTree(id: string): Promise<void> {
   await chrome.bookmarks.removeTree(id)
+}
+
+/**
+ * 重命名文件夹或书签。
+ *
+ * 清洗与去重都不在这里做：名字由用户在界面上直接输入，`sanitizeFolderName` 负责清洗，
+ * 重名则按浏览器自己的语义放行（Chrome 允许同级重名，界面以位置区分）。
+ */
+export async function renameNode(id: string, title: string): Promise<BookmarkNode> {
+  return toNode(await chrome.bookmarks.update(id, {title}))
 }
 
 /**

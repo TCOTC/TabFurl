@@ -69,6 +69,8 @@ export async function snapshotCurrentWindow(): Promise<WindowSnapshot> {
     }
 
     const snapshot: TabSnapshot = {
+      // MV3 下 query 回来的标签一定有 id（与下面 url 的断言同理）：界面里勾选它靠这个值。
+      tabId: tab.id as number,
       title: (tab.title || tab.url || '').trim(),
       url: tab.url as string,
       pinned: tab.pinned ?? false,
@@ -105,10 +107,17 @@ export async function snapshotCurrentWindow(): Promise<WindowSnapshot> {
   }
 }
 
-/** 当前活动标签的主机名，仅用于会话命名。 */
-async function activeSiteLabel(): Promise<string | undefined> {
+/**
+ * 当前活动标签的主机名，仅用于会话命名。
+ *
+ * 活动标签被排除在保存范围外时返回 undefined：不拿一枚没保存的标签给会话命名。
+ * 内部页面同样返回 undefined，否则 `chrome://newtab` 会拼出 `· newtab` 这种名字。
+ */
+async function activeSiteLabel(excludeTabIds: ReadonlySet<number>): Promise<string | undefined> {
   const [tab] = await chrome.tabs.query({active: true, currentWindow: true})
-  return hostnameOf(tab?.url)
+  if (tab?.id === undefined || excludeTabIds.has(tab.id)) return undefined
+  if (isInternalUrl(tab.url)) return undefined
+  return hostnameOf(tab.url)
 }
 
 /** 写入一组标签。返回实际写入数量。 */
@@ -121,8 +130,12 @@ async function writeTabs(folderId: string, tabs: readonly TabSnapshot[]): Promis
   return written
 }
 
-/** 会话文件夹的直接子级：分组建成子文件夹，未分组的标签是散装书签。 */
-type SessionChild =
+/**
+ * 会话文件夹的直接子级：分组建成子文件夹，未分组的标签是散装书签。
+ *
+ * 导出给界面用：勾选清单必须按同一顺序渲染，否则「看到的」与「存下的」会不一致。
+ */
+export type SessionChild =
   | {kind: 'group'; name: string; tabs: readonly TabSnapshot[]}
   | {kind: 'tab'; tab: TabSnapshot}
 
@@ -133,7 +146,7 @@ type SessionChild =
  * 所以按 index 归并得到的就是窗口里「未分组段 / 分组 / 未分组段 …」的真实次序。
  * 这样未分组的标签会留在原位，而不会被集中挑到末尾。
  */
-function planSessionChildren(snapshot: WindowSnapshot): SessionChild[] {
+export function planSessionChildren(snapshot: WindowSnapshot): SessionChild[] {
   const ordered: {index: number; child: SessionChild}[] = []
 
   for (const bucket of snapshot.groups) {
@@ -170,11 +183,12 @@ function planSessionChildren(snapshot: WindowSnapshot): SessionChild[] {
  */
 export async function captureCurrentWindow(
   archiveRootId: string,
-  sessionNameMode: SessionNameMode
+  sessionNameMode: SessionNameMode,
+  options: {excludeTabIds?: ReadonlySet<number>} = {}
 ): Promise<CaptureResult> {
-  const snapshot = await snapshotCurrentWindow()
-  const total = snapshot.groups.reduce((sum, bucket) => sum + bucket.tabs.length, 0) +
-    snapshot.ungrouped.length
+  const excludeTabIds = options.excludeTabIds ?? new Set<number>()
+  const snapshot = selectTabs(await snapshotCurrentWindow(), excludeTabIds)
+  const total = countSnapshotTabs(snapshot)
 
   // 一条都存不了就不要留下空文件夹。
   if (total === 0) {
@@ -182,7 +196,7 @@ export async function captureCurrentWindow(
   }
 
   const date = new Date(snapshot.capturedAt)
-  const site = sessionNameMode === 'datetimeSite' ? await activeSiteLabel() : undefined
+  const site = sessionNameMode === 'datetimeSite' ? await activeSiteLabel(excludeTabIds) : undefined
   const desired = formatSessionName(date, sessionNameMode, site)
   const sessionName = dedupeName(
     sanitizeFolderName(desired, formatTimestamp(date)),
@@ -215,10 +229,32 @@ export async function captureCurrentWindow(
   }
 }
 
-/** 主界面里「将保存 N 个标签页」的计数，不产生任何写入。 */
-export async function countCapturableTabs(): Promise<{saveable: number; skipped: number}> {
-  const snapshot = await snapshotCurrentWindow()
-  const saveable = snapshot.groups.reduce((sum, bucket) => sum + bucket.tabs.length, 0) +
+/** 快照里的标签总数（已被过滤掉的内部页面不算）。 */
+export function countSnapshotTabs(snapshot: WindowSnapshot): number {
+  return snapshot.groups.reduce((sum, bucket) => sum + bucket.tabs.length, 0) +
     snapshot.ungrouped.length
-  return {saveable, skipped: snapshot.skipped}
+}
+
+/**
+ * 按勾选结果裁剪快照：剔除被排除的标签，并丢掉因此变空的标签分组。
+ *
+ * 窗口顺序原样保留，所以裁剪后的快照写出来仍是「未分组段 / 分组 / …」的交替。
+ * 界面用它与 `countSnapshotTabs` 算「将保存 N 个标签页」，与真正写入的是同一份数据。
+ */
+export function selectTabs(
+  snapshot: WindowSnapshot,
+  excludeTabIds: ReadonlySet<number>
+): WindowSnapshot {
+  if (excludeTabIds.size === 0) return snapshot
+
+  return {
+    ...snapshot,
+    groups: snapshot.groups
+      .map((bucket) => ({
+        ...bucket,
+        tabs: bucket.tabs.filter((tab) => !excludeTabIds.has(tab.tabId))
+      }))
+      .filter((bucket) => bucket.tabs.length > 0),
+    ungrouped: snapshot.ungrouped.filter((tab) => !excludeTabIds.has(tab.tabId))
+  }
 }

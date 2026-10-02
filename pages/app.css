@@ -1,10 +1,191 @@
-/* 主界面以独立标签页打开：版面比侧边栏宽裕，列表不必挤在很矮的滚动区里。 */
+/* 主界面以独立标签页打开：版面宽裕，两块清单各自滚动，不挤在很矮的区域里。 */
 
 .app {
   padding: 20px;
 }
 
-/* base.css 里 320px 的固定高度是按窄面板定的，这里改按视口高度收口。 */
-.panel--folders .list {
-  max-height: 55vh;
+/* ———————————————— 保存侧：标签勾选清单 ———————————————— */
+
+.pick-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  max-height: 42vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  list-style: none;
+}
+
+.pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
+.pick:hover {
+  background: var(--accent-soft);
+}
+
+/* 分组：整组一行 + 组内标签缩进在下面。 */
+.pick--group {
+  display: block;
+  padding: 0;
+  cursor: default;
+}
+
+.pick--group:hover {
+  background: transparent;
+}
+
+.pick__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pick__row:hover {
+  background: var(--accent-soft);
+}
+
+.pick__row .pick__meta {
+  margin-left: auto;
+}
+
+.pick__children {
+  margin: 0;
+  padding: 0 0 2px 22px;
+  list-style: none;
+}
+
+.pick__main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.pick__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pick__pin {
+  margin-left: 4px;
+  font-size: 10px;
+}
+
+.pick__meta {
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ———————————————— 存档侧：会话树 ———————————————— */
+
+.tree {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  max-height: 52vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  list-style: none;
+}
+
+.tree__node + .tree__node {
+  border-top: 1px solid var(--border);
+}
+
+.tree__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+}
+
+.tree__row--group,
+.tree__row--bookmark {
+  cursor: pointer;
+}
+
+.tree__row--group:hover,
+.tree__row--bookmark:hover {
+  background: var(--accent-soft);
+}
+
+.tree__row--group {
+  font-weight: 600;
+}
+
+.tree__caret {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tree__caret:hover {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.tree__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree__meta {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.tree__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.tree__children {
+  margin: 0;
+  padding: 0 0 4px 26px;
+  list-style: none;
+}
+
+.input--search {
+  flex: 1;
+  min-width: 160px;
+  max-width: 320px;
+  width: auto;
+}
+
+.input--rename {
+  flex: 1;
+  min-width: 120px;
+  max-width: 280px;
+  width: auto;
 }

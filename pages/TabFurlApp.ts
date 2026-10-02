@@ -1,11 +1,33 @@
-import {getNode, listFolders, removeSubTree} from '../src/shared/bookmarks'
-import {captureCurrentWindow, countCapturableTabs} from '../src/shared/capture'
-import {openFolderViewers, restoreFolder} from '../src/shared/restore'
+import {getSubTree, removeSubTree, renameNode} from '../src/shared/bookmarks'
+import {
+  captureCurrentWindow,
+  countSnapshotTabs,
+  planSessionChildren,
+  selectTabs,
+  snapshotCurrentWindow,
+  type SessionChild
+} from '../src/shared/capture'
+import {sanitizeFolderName} from '../src/shared/naming'
+import {
+  openFolderViewers,
+  planRestore,
+  restoreFolder,
+  type PlannedBookmark,
+  type PlannedItem,
+  type RestorePlan
+} from '../src/shared/restore'
 import {loadSettings, updateSettings} from '../src/shared/settings'
-import {escapeHtml} from '../src/shared/tile'
-import type {FolderOption, Settings} from '../src/shared/types'
+import {escapeHtml, tileMarkup} from '../src/shared/tile'
+import type {BookmarkNode, Settings, TabSnapshot, WindowSnapshot} from '../src/shared/types'
+import {hostnameOf} from '../src/shared/urls'
 
 type StatusKind = 'ok' | 'error'
+
+/** 一个存档会话 + 它的还原计划。计划既是勾选清单的数据源，也是还原的依据。 */
+interface SessionView {
+  node: BookmarkNode
+  plan: RestorePlan
+}
 
 const ROOT_TEMPLATE = `
   <main class="app">
@@ -15,27 +37,37 @@ const ROOT_TEMPLATE = `
     </header>
 
     <section class="panel">
-      <h2 class="panel__title">保存当前窗口</h2>
+      <h2 class="panel__title">保存当前窗口 <span class="badge" id="tab-count">0</span></h2>
       <p class="muted" id="capture-hint"></p>
+      <div class="row row--compact">
+        <button type="button" class="btn btn--ghost btn--sm" id="tabs-all-btn">全选</button>
+        <button type="button" class="btn btn--ghost btn--sm" id="tabs-none-btn">清空</button>
+        <span class="muted" id="tabs-selected"></span>
+      </div>
+      <ul class="pick-list" id="tab-list"></ul>
       <div class="row">
         <button type="button" class="btn btn--primary" id="capture-btn">保存当前窗口</button>
-        <button type="button" class="btn btn--ghost" id="undo-btn" hidden>撤销</button>
+        <button type="button" class="btn btn--ghost" id="undo-btn" hidden>撤销上次保存</button>
       </div>
       <p class="status" id="capture-status" hidden></p>
     </section>
 
-    <section class="panel panel--folders">
-      <h2 class="panel__title">存档文件夹 <span class="badge" id="folder-count">0</span></h2>
-      <input type="search" class="input" id="search" placeholder="搜索文件夹…" autocomplete="off" />
+    <section class="panel">
+      <h2 class="panel__title">存档 <span class="badge" id="session-count">0</span></h2>
       <div class="row row--compact">
-        <button type="button" class="btn btn--ghost btn--sm" id="select-all-btn">全选</button>
-        <button type="button" class="btn btn--ghost btn--sm" id="select-none-btn">清空</button>
-        <span class="muted" id="selected-count">未选中</span>
+        <input type="search" class="input input--search" id="search"
+               placeholder="搜索存档（名称或里面的标签页）" autocomplete="off" />
+        <button type="button" class="btn btn--ghost btn--sm" id="expand-all-btn">全部展开</button>
+        <button type="button" class="btn btn--ghost btn--sm" id="collapse-all-btn">全部折叠</button>
+        <button type="button" class="btn btn--ghost btn--sm" id="sessions-all-btn">全选</button>
+        <button type="button" class="btn btn--ghost btn--sm" id="sessions-none-btn">清空</button>
       </div>
-      <ul class="list" id="folder-list"></ul>
+      <ul class="tree" id="session-list"></ul>
       <div class="row">
-        <button type="button" class="btn btn--primary" id="open-window-btn" disabled>打开为窗口</button>
-        <button type="button" class="btn" id="open-tabs-btn" disabled>各开一个标签页</button>
+        <button type="button" class="btn btn--primary" id="open-window-btn" disabled>还原为窗口</button>
+        <button type="button" class="btn" id="open-tabs-btn" disabled>只开标签页</button>
+        <button type="button" class="btn" id="open-viewers-btn" disabled>打开阅读页</button>
+        <span class="muted" id="sessions-selected"></span>
       </div>
       <p class="status" id="restore-status" hidden></p>
     </section>
@@ -53,31 +85,75 @@ function q<T extends Element>(root: ParentNode, selector: string): T {
   return element as T
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 function TabFurlApp(): void {
   const root = document.getElementById('root')
   if (!root) return
   root.innerHTML = ROOT_TEMPLATE
 
   const captureHint = q<HTMLParagraphElement>(root, '#capture-hint')
+  const tabCountBadge = q<HTMLSpanElement>(root, '#tab-count')
+  const tabsAllButton = q<HTMLButtonElement>(root, '#tabs-all-btn')
+  const tabsNoneButton = q<HTMLButtonElement>(root, '#tabs-none-btn')
+  const tabsSelected = q<HTMLSpanElement>(root, '#tabs-selected')
+  const tabList = q<HTMLUListElement>(root, '#tab-list')
   const captureButton = q<HTMLButtonElement>(root, '#capture-btn')
   const undoButton = q<HTMLButtonElement>(root, '#undo-btn')
   const captureStatus = q<HTMLParagraphElement>(root, '#capture-status')
-  const folderCount = q<HTMLSpanElement>(root, '#folder-count')
+
+  const sessionCountBadge = q<HTMLSpanElement>(root, '#session-count')
   const searchInput = q<HTMLInputElement>(root, '#search')
-  const selectAllButton = q<HTMLButtonElement>(root, '#select-all-btn')
-  const selectNoneButton = q<HTMLButtonElement>(root, '#select-none-btn')
-  const selectedCount = q<HTMLSpanElement>(root, '#selected-count')
-  const folderList = q<HTMLUListElement>(root, '#folder-list')
+  const expandAllButton = q<HTMLButtonElement>(root, '#expand-all-btn')
+  const collapseAllButton = q<HTMLButtonElement>(root, '#collapse-all-btn')
+  const sessionsAllButton = q<HTMLButtonElement>(root, '#sessions-all-btn')
+  const sessionsNoneButton = q<HTMLButtonElement>(root, '#sessions-none-btn')
+  const sessionList = q<HTMLUListElement>(root, '#session-list')
   const openWindowButton = q<HTMLButtonElement>(root, '#open-window-btn')
   const openTabsButton = q<HTMLButtonElement>(root, '#open-tabs-btn')
+  const openViewersButton = q<HTMLButtonElement>(root, '#open-viewers-btn')
+  const sessionsSelected = q<HTMLSpanElement>(root, '#sessions-selected')
   const restoreStatus = q<HTMLParagraphElement>(root, '#restore-status')
+
   const optionsLink = q<HTMLAnchorElement>(root, '#options-link')
   const docsLink = q<HTMLAnchorElement>(root, '#docs-link')
 
   let settings: Settings | undefined
-  let folders: FolderOption[] = []
-  const selected = new Set<string>()
+  let archiveAvailable = false
   let busy = false
+
+  // —— 保存侧 ——
+  let snapshot: WindowSnapshot = emptySnapshot()
+  let captureChildren: SessionChild[] = []
+  const captureGroupTabIds = new Map<number, number[]>()
+  /** 被勾掉的标签 id。默认什么都不排除，所以用「排除集」而不是「选中集」。 */
+  const excludedTabs = new Set<number>()
+
+  // —— 存档侧 ——
+  let sessions: SessionView[] = []
+  let rendered: SessionView[] = []
+  const expanded = new Set<string>()
+  const selectedSessions = new Set<string>()
+  /** 被勾掉的书签 id（跨存档共用一个集合，书签 id 本身全局唯一）。 */
+  const excludedBookmarks = new Set<string>()
+  const contentInputs = new Map<string, HTMLInputElement>()
+  /** 容器 id（会话或分组）→ 它包含的书签 id，用于整组勾选与计数。 */
+  const containerBookmarks = new Map<string, string[]>()
+  const sessionMetas = new Map<string, HTMLElement>()
+  let pendingDeleteId: string | undefined
+  let renaming: {id: string; committed: boolean} | undefined
+
+  function emptySnapshot(): WindowSnapshot {
+    return {
+      windowId: chrome.windows.WINDOW_ID_CURRENT,
+      capturedAt: Date.now(),
+      groups: [],
+      ungrouped: [],
+      skipped: 0
+    }
+  }
 
   function setStatus(
     element: HTMLParagraphElement,
@@ -94,213 +170,749 @@ function TabFurlApp(): void {
     element.textContent = message
   }
 
-  function errorText(error: unknown): string {
-    return error instanceof Error ? error.message : String(error)
+  // —————————————————————————— 保存侧 ——————————————————————————
+
+  /** 勾选清单按与写入完全相同的顺序渲染（`planSessionChildren` 是唯一来源）。 */
+  function renderCapture(): void {
+    captureChildren = planSessionChildren(snapshot)
+    captureGroupTabIds.clear()
+
+    tabCountBadge.textContent = String(countSnapshotTabs(snapshot))
+
+    if (captureChildren.length === 0) {
+      tabList.innerHTML = '<li class="empty">当前窗口没有可保存的标签页。</li>'
+      syncCaptureStates()
+      return
+    }
+
+    tabList.innerHTML = captureChildren
+      .map((child, index) => (child.kind === 'tab' ? tabMarkup(child.tab) : groupMarkup(child, index)))
+      .join('')
+
+    syncCaptureStates()
   }
 
-  function visibleFolders(): FolderOption[] {
-    const term = searchInput.value.trim().toLowerCase()
-    if (!term) return folders
-    return folders.filter((folder) =>
-      `${folder.path.join(' ')} ${folder.title}`.toLowerCase().includes(term)
+  function tabMarkup(tab: TabSnapshot): string {
+    const host = hostnameOf(tab.url) ?? tab.url
+    return `
+      <li class="pick">
+        <input type="checkbox" data-tab="${tab.tabId}"${
+          excludedTabs.has(tab.tabId) ? '' : ' checked'
+        } />
+        ${tileMarkup(tab.title, tab.url)}
+        <span class="pick__main">
+          <span class="pick__title">${escapeHtml(tab.title || tab.url)}${
+            tab.pinned ? '<span class="pick__pin" title="已固定">📌</span>' : ''
+          }</span>
+          <span class="pick__meta">${escapeHtml(host)}</span>
+        </span>
+      </li>
+    `
+  }
+
+  function groupMarkup(child: Extract<SessionChild, {kind: 'group'}>, index: number): string {
+    captureGroupTabIds.set(
+      index,
+      child.tabs.map((tab) => tab.tabId)
+    )
+    return `
+      <li class="pick pick--group">
+        <label class="pick__row">
+          <input type="checkbox" data-group="${index}" />
+          <span class="pick__title">${escapeHtml(child.name)}</span>
+          <span class="pick__meta">${child.tabs.length} 个标签</span>
+        </label>
+        <ul class="pick__children">${child.tabs.map(tabMarkup).join('')}</ul>
+      </li>
+    `
+  }
+
+  function syncCaptureStates(): void {
+    for (const input of tabList.querySelectorAll<HTMLInputElement>('[data-tab]')) {
+      const tabId = Number(input.dataset.tab)
+      input.checked = !excludedTabs.has(tabId)
+    }
+
+    for (const [index, tabIds] of captureGroupTabIds) {
+      const input = tabList.querySelector<HTMLInputElement>(`[data-group="${index}"]`)
+      if (!input) continue
+      const kept = tabIds.filter((tabId) => !excludedTabs.has(tabId)).length
+      input.checked = kept > 0
+      input.indeterminate = kept > 0 && kept < tabIds.length
+    }
+
+    updateCaptureBar()
+  }
+
+  function updateCaptureBar(): void {
+    const total = countSnapshotTabs(snapshot)
+    const kept = countSnapshotTabs(selectTabs(snapshot, excludedTabs))
+
+    tabsSelected.textContent =
+      total === 0 ? '' : kept === total ? `已全选 ${total} 个` : `已选 ${kept} / ${total} 个`
+
+    captureButton.textContent = busy
+      ? '保存中…'
+      : kept === total ? '保存整个窗口' : `保存选中的 ${kept} 个标签页`
+    captureButton.disabled = busy || kept === 0 || !archiveAvailable
+    tabsAllButton.disabled = busy || total === 0
+    tabsNoneButton.disabled = busy || total === 0
+    undoButton.disabled = busy
+  }
+
+  async function refreshCapture(): Promise<void> {
+    snapshot = await snapshotCurrentWindow()
+
+    // 标签被关掉之后，它的 tabId 不会再出现在快照里；留着只会让集合越涨越大。
+    const alive = new Set([
+      ...snapshot.groups.flatMap((bucket) => bucket.tabs.map((tab) => tab.tabId)),
+      ...snapshot.ungrouped.map((tab) => tab.tabId)
+    ])
+    for (const tabId of [...excludedTabs]) {
+      if (!alive.has(tabId)) excludedTabs.delete(tabId)
+    }
+
+    const parts = [`主界面所在窗口有 ${alive.size} 个可保存的标签页`]
+    if (snapshot.groups.length > 0) parts.push(`${snapshot.groups.length} 个标签分组`)
+    if (snapshot.skipped > 0) parts.push(`跳过 ${snapshot.skipped} 个内部页面`)
+    captureHint.textContent = archiveAvailable
+      ? `${parts.join('，')}。取消勾选即不保存。`
+      : '需要先在设置页指定存档根文件夹。'
+
+    renderCapture()
+  }
+
+  // —————————————————————————— 存档侧 ——————————————————————————
+
+  function sessionMetaText(view: SessionView): string {
+    const bookmarks = view.plan.items.flatMap((item) => item.bookmarks)
+    const excluded = bookmarks.filter((bookmark) => excludedBookmarks.has(bookmark.id)).length
+    const groups = view.plan.items.filter((item) => item.title !== '').length
+
+    const parts = [`${bookmarks.length - excluded} 个标签`]
+    if (groups > 0) parts.push(`${groups} 个分组`)
+    if (excluded > 0) parts.push(`已勾掉 ${excluded}`)
+    if (view.plan.skipped > 0) parts.push(`跳过 ${view.plan.skipped}`)
+    return parts.join(' · ')
+  }
+
+  function matches(view: SessionView, term: string): boolean {
+    if (!term) return true
+    if (view.node.title.toLowerCase().includes(term)) return true
+    return view.plan.items.some(
+      (item) =>
+        item.title.toLowerCase().includes(term) ||
+        item.bookmarks.some((bookmark) =>
+          `${bookmark.title} ${bookmark.url}`.toLowerCase().includes(term)
+        )
     )
   }
 
-  function updateSelectionUi(): void {
-    const count = selected.size
-    selectedCount.textContent = count === 0 ? '未选中' : `已选 ${count} 个`
-    openWindowButton.disabled = busy || count === 0
-    openTabsButton.disabled = busy || count === 0
+  function bookmarkMarkup(bookmark: PlannedBookmark): string {
+    const host = hostnameOf(bookmark.url) ?? bookmark.url
+    return `
+      <li class="tree__node">
+        <label class="tree__row tree__row--bookmark">
+          <input type="checkbox" data-content="${escapeHtml(bookmark.id)}" />
+          ${tileMarkup(bookmark.title, bookmark.url)}
+          <span class="tree__title">${escapeHtml(bookmark.title || bookmark.url)}</span>
+          <span class="tree__meta">${escapeHtml(host)}</span>
+        </label>
+      </li>
+    `
   }
 
-  function renderFolders(): void {
-    const items = visibleFolders()
-    folderCount.textContent = String(folders.length)
+  function itemMarkup(item: PlannedItem): string {
+    // 散装书签项（title 为空）没有分组可建，直接铺成一列。
+    // 分组项理论上一定有 folderId；万一没有，也不该造出一个 id 为空的勾选框。
+    if (item.title === '' || !item.folderId) return item.bookmarks.map(bookmarkMarkup).join('')
 
-    if (items.length === 0) {
-      folderList.innerHTML = `<li class="empty">${
-        folders.length === 0 ? '存档里还没有文件夹，先保存一次当前窗口。' : '没有匹配的文件夹。'
-      }</li>`
-      updateSelectionUi()
-      return
-    }
+    const containerId = item.folderId
+    return `
+      <li class="tree__node tree__node--group">
+        <label class="tree__row tree__row--group">
+          <input type="checkbox" data-content="${escapeHtml(containerId)}" />
+          <span class="tree__title">${escapeHtml(item.title)}</span>
+          <span class="tree__meta">${item.bookmarks.length} 个标签</span>
+        </label>
+        <ul class="tree__children">${item.bookmarks.map(bookmarkMarkup).join('')}</ul>
+      </li>
+    `
+  }
 
-    folderList.innerHTML = items
-      .map((folder) => {
-        const indent = folder.path.length * 12
-        const parent = folder.path.length === 0 ? '存档根下' : folder.path.join(' / ')
-        const parts: string[] = []
-        if (folder.folderCount > 0) parts.push(`${folder.folderCount} 个子文件夹`)
-        if (folder.totalBookmarkCount > 0) parts.push(`${folder.totalBookmarkCount} 个书签`)
-        return `
-          <li class="list__item" style="padding-left:${8 + indent}px">
-            <input type="checkbox" data-folder-id="${escapeHtml(folder.id)}"${
-              selected.has(folder.id) ? ' checked' : ''
-            } />
-            <span class="list__main">
-              <span class="list__title">${escapeHtml(folder.title)}</span>
-              <span class="list__meta">${escapeHtml(parent)}${
-                parts.length > 0 ? ` · ${escapeHtml(parts.join('，'))}` : ''
-              }</span>
-            </span>
-          </li>
+  function sessionMarkup(view: SessionView): string {
+    const id = view.node.id
+    const open = expanded.has(id)
+    const title =
+      renaming?.id === id
+        ? `<input type="text" class="input input--rename" data-rename-input="${escapeHtml(id)}"
+                  value="${escapeHtml(view.node.title)}" aria-label="重命名存档" />`
+        : `<span class="tree__title">${escapeHtml(view.node.title)}</span>`
+
+    const actions =
+      renaming?.id === id
+        ? '<span class="tree__meta">回车保存，Esc 取消</span>'
+        : `
+          <span class="tree__actions">
+            <button type="button" class="btn btn--ghost btn--sm" data-rename="${escapeHtml(id)}"
+                    title="重命名这个存档文件夹">改名</button>
+            ${
+              pendingDeleteId === id
+                ? `<button type="button" class="btn btn--danger btn--sm" data-confirm-delete="${escapeHtml(
+                    id
+                  )}" title="连同里面的书签一起删除">确认删除</button>
+                   <button type="button" class="btn btn--ghost btn--sm" data-cancel-delete="">取消</button>`
+                : `<button type="button" class="btn btn--ghost btn--sm" data-delete="${escapeHtml(
+                    id
+                  )}" title="删除这个存档">删除</button>`
+            }
+          </span>
         `
-      })
-      .join('')
 
-    updateSelectionUi()
+    const body =
+      view.plan.items.length > 0
+        ? view.plan.items.map(itemMarkup).join('')
+        : '<li class="empty">这个存档里没有可还原的标签页。</li>'
+
+    return `
+      <li class="tree__node" data-session="${escapeHtml(id)}">
+        <div class="tree__row">
+          <button type="button" class="tree__caret" data-toggle="${escapeHtml(id)}"
+                  aria-expanded="${open}" aria-label="${open ? '折叠' : '展开'}"
+                  title="${open ? '折叠' : '展开'}">${open ? '▾' : '▸'}</button>
+          <input type="checkbox" data-select="${escapeHtml(id)}"${
+            selectedSessions.has(id) ? ' checked' : ''
+          } title="选中这个存档，再用下方的按钮批量打开" />
+          ${title}
+          <span class="tree__meta" data-meta="${escapeHtml(id)}">${escapeHtml(
+            sessionMetaText(view)
+          )}</span>
+          ${actions}
+        </div>
+        <ul class="tree__children" data-children="${escapeHtml(id)}"${open ? '' : ' hidden'}>
+          ${body}
+        </ul>
+      </li>
+    `
   }
 
-  function updateCaptureHint(counts: {saveable: number; skipped: number}): void {
-    if (counts.saveable === 0) {
-      captureHint.textContent = '当前窗口没有可保存的标签页。'
-      return
-    }
-    const suffix = counts.skipped > 0 ? `，跳过 ${counts.skipped} 个内部页面` : ''
-    captureHint.textContent = `将保存 ${counts.saveable} 个标签页${suffix}`
-  }
+  function renderArchive(): void {
+    sessionCountBadge.textContent = String(sessions.length)
+    contentInputs.clear()
+    containerBookmarks.clear()
+    sessionMetas.clear()
 
-  async function refresh(): Promise<void> {
-    settings = await loadSettings()
-
-    if (!settings.archiveRootId || !(await getNode(settings.archiveRootId))) {
-      folders = []
-      folderList.innerHTML =
+    if (!archiveAvailable) {
+      rendered = []
+      sessionList.innerHTML =
         '<li class="empty">还没有指定存档根文件夹，请到设置页选择。</li>'
-      folderCount.textContent = '0'
-      docsLink.hidden = true
-      captureButton.disabled = true
-      captureHint.textContent = '需要先在设置页指定存档根文件夹。'
-      updateSelectionUi()
+      updateBulkBar()
       return
     }
 
-    captureButton.disabled = busy
-    folders = await listFolders(settings.archiveRootId)
-    docsLink.hidden = false
-    docsLink.onclick = (event) => {
-      event.preventDefault()
-      if (settings?.archiveRootId) void openFolderViewers([settings.archiveRootId])
+    const term = searchInput.value.trim().toLowerCase()
+    rendered = sessions.filter((view) => matches(view, term))
+
+    // 只有「命中在里面的标签页」时才替用户展开，否则搜索还得再点一次。
+    for (const view of rendered) {
+      if (term && !view.node.title.toLowerCase().includes(term)) expanded.add(view.node.id)
     }
 
-    renderFolders()
-    updateCaptureHint(await countCapturableTabs())
+    if (rendered.length === 0) {
+      sessionList.innerHTML = `<li class="empty">${
+        sessions.length === 0 ? '存档里还没有文件夹，先保存一次当前窗口。' : '没有匹配的存档。'
+      }</li>`
+      updateBulkBar()
+      return
+    }
 
-    undoButton.hidden = !settings.lastSessionFolderId
-    setStatus(captureStatus, '', 'ok')
+    sessionList.innerHTML = rendered.map(sessionMarkup).join('')
+
+    for (const view of rendered) {
+      containerBookmarks.set(
+        view.node.id,
+        view.plan.items.flatMap((item) => item.bookmarks.map((bookmark) => bookmark.id))
+      )
+      for (const item of view.plan.items) {
+        if (item.folderId) {
+          containerBookmarks.set(
+            item.folderId,
+            item.bookmarks.map((bookmark) => bookmark.id)
+          )
+        }
+      }
+      const meta = sessionList.querySelector<HTMLElement>(`[data-meta="${view.node.id}"]`)
+      if (meta) sessionMetas.set(view.node.id, meta)
+    }
+
+    for (const input of sessionList.querySelectorAll<HTMLInputElement>('[data-content]')) {
+      const id = input.dataset.content
+      if (id) contentInputs.set(id, input)
+    }
+
+    applyContainerStates()
+    updateBulkBar()
+
+    if (renaming) {
+      const input = sessionList.querySelector<HTMLInputElement>(
+        `[data-rename-input="${renaming.id}"]`
+      )
+      input?.focus()
+      input?.select()
+    }
   }
 
-  searchInput.addEventListener('input', renderFolders)
+  /** 让每个勾选框反映 `excludedBookmarks`：全选 / 半选 / 全不选。 */
+  function applyContainerStates(): void {
+    for (const [containerId, bookmarkIds] of containerBookmarks) {
+      const input = contentInputs.get(containerId)
+      if (!input) continue
+      const kept = bookmarkIds.filter((id) => !excludedBookmarks.has(id)).length
+      input.checked = kept > 0
+      input.indeterminate = kept > 0 && kept < bookmarkIds.length
+    }
 
-  folderList.addEventListener('change', (event) => {
+    for (const view of rendered) {
+      const meta = sessionMetas.get(view.node.id)
+      if (meta) meta.textContent = sessionMetaText(view)
+    }
+  }
+
+  function selectedBookmarkCount(): number {
+    let total = 0
+    for (const id of selectedSessions) {
+      const bookmarkIds = containerBookmarks.get(id) ?? []
+      total += bookmarkIds.filter((bookmarkId) => !excludedBookmarks.has(bookmarkId)).length
+    }
+    return total
+  }
+
+  function updateBulkBar(): void {
+    const count = selectedSessions.size
+    const tabs = selectedBookmarkCount()
+
+    sessionsSelected.textContent =
+      count === 0 ? '未选中存档' : `已选 ${count} 个存档 · ${tabs} 个标签页`
+
+    const disabled = busy || count === 0
+    openWindowButton.disabled = disabled
+    openTabsButton.disabled = disabled
+    openViewersButton.disabled = disabled
+    sessionsAllButton.disabled = busy || rendered.length === 0
+    sessionsNoneButton.disabled = busy || count === 0
+    expandAllButton.disabled = busy || sessions.length === 0
+    collapseAllButton.disabled = busy || sessions.length === 0
+  }
+
+  async function refreshArchive(): Promise<void> {
+    if (!archiveAvailable || !settings?.archiveRootId) {
+      sessions = []
+      renderArchive()
+      return
+    }
+
+    const root = await getSubTree(settings.archiveRootId)
+    sessions = (root?.children ?? [])
+      .filter((child) => !child.url)
+      .map((node) => ({node, plan: planRestore(node)}))
+
+    // 存档被删或被改名后，勾掉的书签 id 可能已经不存在了。
+    const alive = new Set(
+      sessions.flatMap((view) => view.plan.items.flatMap((item) => item.bookmarks.map((b) => b.id)))
+    )
+    for (const id of [...excludedBookmarks]) {
+      if (!alive.has(id)) excludedBookmarks.delete(id)
+    }
+    for (const id of [...selectedSessions]) {
+      if (!sessions.some((view) => view.node.id === id)) selectedSessions.delete(id)
+    }
+    for (const id of [...expanded]) {
+      if (!sessions.some((view) => view.node.id === id)) expanded.delete(id)
+    }
+
+    renderArchive()
+  }
+
+  // —————————————————————————— 动作 ——————————————————————————
+
+  async function runCapture(): Promise<void> {
+    if (busy || !settings?.archiveRootId) return
+    busy = true
+    updateCaptureBar()
+
+    try {
+      const result = await captureCurrentWindow(settings.archiveRootId, settings.sessionNameMode, {
+        excludeTabIds: excludedTabs
+      })
+      if (result.saved === 0) {
+        setStatus(captureStatus, '没有勾选任何标签页。', 'error')
+      } else {
+        await updateSettings({lastSessionFolderId: result.folderId})
+        const parts = [`已保存 ${result.saved} 个标签页到「${result.folderName}」`]
+        if (result.groups > 0) parts.push(`创建 ${result.groups} 个分组`)
+        if (result.skipped > 0) parts.push(`跳过 ${result.skipped} 个内部页面`)
+        setStatus(captureStatus, `${parts.join('，')}。`, 'ok')
+        // 这次勾选已经落盘了，下次从「全选」重新开始。
+        excludedTabs.clear()
+      }
+    } catch (error) {
+      setStatus(captureStatus, `保存失败：${errorText(error)}`, 'error')
+    } finally {
+      busy = false
+      await refreshCapture()
+      await refreshArchive()
+      updateCaptureBar()
+      updateBulkBar()
+    }
+  }
+
+  async function runUndo(): Promise<void> {
+    const folderId = settings?.lastSessionFolderId
+    if (busy || !folderId) return
+    busy = true
+    updateCaptureBar()
+
+    try {
+      await removeSubTree(folderId)
+      settings = await updateSettings({lastSessionFolderId: undefined})
+      setStatus(captureStatus, '已撤销上一次保存。', 'ok')
+    } catch (error) {
+      setStatus(captureStatus, `撤销失败：${errorText(error)}`, 'error')
+    } finally {
+      busy = false
+      await refreshCapture()
+      await refreshArchive()
+      updateCaptureBar()
+      updateBulkBar()
+    }
+  }
+
+  /**
+   * 打开选中的存档。
+   *
+   * `groupTabs: false` 是「只开标签页」——同一份勾选，只是不建标签分组。
+   */
+  async function runRestore(groupTabs: boolean): Promise<void> {
+    if (busy || !settings) return
+    const targets = [...selectedSessions]
+    if (targets.length === 0) return
+
+    busy = true
+    updateBulkBar()
+    setStatus(restoreStatus, '正在打开…', 'ok')
+
+    try {
+      let opened = 0
+      let groups = 0
+      let skipped = 0
+      for (const folderId of targets) {
+        const result = await restoreFolder(folderId, {
+          target: settings.restoreTarget,
+          groupTabs,
+          excludeBookmarkIds: excludedBookmarks
+        })
+        opened += result.opened
+        groups += result.groups
+        skipped += result.skipped
+      }
+
+      const parts = [`已打开 ${opened} 个标签页`]
+      if (groups > 0) parts.push(`创建 ${groups} 个分组`)
+      if (!groupTabs) parts.push('未建分组')
+      if (skipped > 0) parts.push(`跳过 ${skipped} 项`)
+      setStatus(restoreStatus, `${parts.join('，')}。`, 'ok')
+    } catch (error) {
+      setStatus(restoreStatus, `打开失败：${errorText(error)}`, 'error')
+    } finally {
+      busy = false
+      updateBulkBar()
+    }
+  }
+
+  async function runOpenViewers(): Promise<void> {
+    if (busy) return
+    const targets = [...selectedSessions]
+    if (targets.length === 0) return
+
+    busy = true
+    updateBulkBar()
+    setStatus(restoreStatus, '正在打开…', 'ok')
+
+    try {
+      const opened = await openFolderViewers(targets)
+      setStatus(restoreStatus, `已打开 ${opened} 个阅读页。`, 'ok')
+    } catch (error) {
+      setStatus(restoreStatus, `打开失败：${errorText(error)}`, 'error')
+    } finally {
+      busy = false
+      updateBulkBar()
+    }
+  }
+
+  async function confirmDelete(sessionId: string): Promise<void> {
+    const view = sessions.find((item) => item.node.id === sessionId)
+    if (busy || !view) return
+
+    busy = true
+    pendingDeleteId = undefined
+    updateBulkBar()
+
+    try {
+      await removeSubTree(sessionId)
+      if (settings?.lastSessionFolderId === sessionId) {
+        settings = await updateSettings({lastSessionFolderId: undefined})
+      }
+      selectedSessions.delete(sessionId)
+      expanded.delete(sessionId)
+      setStatus(restoreStatus, `已删除存档「${view.node.title}」。`, 'ok')
+    } catch (error) {
+      setStatus(restoreStatus, `删除失败：${errorText(error)}`, 'error')
+    } finally {
+      busy = false
+      await refreshArchive()
+      undoButton.hidden = !settings?.lastSessionFolderId
+      updateBulkBar()
+    }
+  }
+
+  /**
+   * 清掉编辑状态。
+   *
+   * 改名是异步的：收尾时用户可能已经在改下一个存档了（点「改名」前会先触发上一个
+   * 输入框的 focusout），所以只能清掉属于自己的那份状态。
+   */
+  function clearRenaming(sessionId: string): void {
+    if (renaming?.id === sessionId) renaming = undefined
+  }
+
+  async function commitRename(input: HTMLInputElement, sessionId: string): Promise<void> {
+    if (!renaming || renaming.id !== sessionId || renaming.committed) return
+    renaming.committed = true
+
+    const view = sessions.find((item) => item.node.id === sessionId)
+    if (!view) return
+
+    const next = sanitizeFolderName(input.value, view.node.title)
+    if (next === view.node.title) {
+      clearRenaming(sessionId)
+      renderArchive()
+      return
+    }
+
+    try {
+      await renameNode(sessionId, next)
+      setStatus(restoreStatus, `已改名为「${next}」。`, 'ok')
+    } catch (error) {
+      setStatus(restoreStatus, `改名失败：${errorText(error)}`, 'error')
+    } finally {
+      clearRenaming(sessionId)
+      await refreshArchive()
+    }
+  }
+
+  // —————————————————————————— 事件 ——————————————————————————
+
+  tabList.addEventListener('change', (event) => {
     const input = event.target as HTMLInputElement
-    const id = input.dataset.folderId
-    if (!id) return
-    if (input.checked) selected.add(id)
-    else selected.delete(id)
-    updateSelectionUi()
+
+    const tabId = input.dataset.tab
+    if (tabId !== undefined) {
+      if (input.checked) excludedTabs.delete(Number(tabId))
+      else excludedTabs.add(Number(tabId))
+    }
+
+    const groupIndex = input.dataset.group
+    if (groupIndex !== undefined) {
+      for (const id of captureGroupTabIds.get(Number(groupIndex)) ?? []) {
+        if (input.checked) excludedTabs.delete(id)
+        else excludedTabs.add(id)
+      }
+    }
+
+    syncCaptureStates()
   })
 
-  selectAllButton.addEventListener('click', () => {
-    for (const folder of visibleFolders()) selected.add(folder.id)
-    renderFolders()
+  tabsAllButton.addEventListener('click', () => {
+    excludedTabs.clear()
+    renderCapture()
   })
 
-  selectNoneButton.addEventListener('click', () => {
-    selected.clear()
-    renderFolders()
+  tabsNoneButton.addEventListener('click', () => {
+    for (const child of captureChildren) {
+      if (child.kind === 'tab') excludedTabs.add(child.tab.tabId)
+      else for (const tab of child.tabs) excludedTabs.add(tab.tabId)
+    }
+    syncCaptureStates()
   })
+
+  captureButton.addEventListener('click', () => void runCapture())
+  undoButton.addEventListener('click', () => void runUndo())
+
+  sessionList.addEventListener('change', (event) => {
+    const input = event.target as HTMLInputElement
+
+    const containerId = input.dataset.content
+    if (containerId !== undefined) {
+      for (const bookmarkId of containerBookmarks.get(containerId) ?? []) {
+        if (input.checked) excludedBookmarks.delete(bookmarkId)
+        else excludedBookmarks.add(bookmarkId)
+      }
+      // 只更新勾选态与计数：重建 DOM 会让键盘操作的焦点丢掉。
+      applyContainerStates()
+      updateBulkBar()
+      return
+    }
+
+    const sessionId = input.dataset.select
+    if (sessionId !== undefined) {
+      if (input.checked) selectedSessions.add(sessionId)
+      else selectedSessions.delete(sessionId)
+      updateBulkBar()
+    }
+  })
+
+  sessionList.addEventListener('click', (event) => {
+    const target = event.target as HTMLElement
+
+    const toggle = target.closest<HTMLButtonElement>('[data-toggle]')
+    if (toggle?.dataset.toggle) {
+      const sessionId = toggle.dataset.toggle
+      const children = sessionList.querySelector<HTMLElement>(`[data-children="${sessionId}"]`)
+      const open = !expanded.has(sessionId)
+      if (open) expanded.add(sessionId)
+      else expanded.delete(sessionId)
+      toggle.textContent = open ? '▾' : '▸'
+      toggle.setAttribute('aria-expanded', String(open))
+      toggle.title = open ? '折叠' : '展开'
+      if (children) children.hidden = !open
+      return
+    }
+
+    const renameButton = target.closest<HTMLButtonElement>('[data-rename]')
+    if (renameButton?.dataset.rename) {
+      renaming = {id: renameButton.dataset.rename, committed: false}
+      pendingDeleteId = undefined
+      renderArchive()
+      return
+    }
+
+    const deleteButton = target.closest<HTMLButtonElement>('[data-delete]')
+    if (deleteButton?.dataset.delete) {
+      pendingDeleteId = deleteButton.dataset.delete
+      renderArchive()
+      return
+    }
+
+    const confirmButton = target.closest<HTMLButtonElement>('[data-confirm-delete]')
+    if (confirmButton?.dataset.confirmDelete) {
+      void confirmDelete(confirmButton.dataset.confirmDelete)
+      return
+    }
+
+    if (target.closest('[data-cancel-delete]')) {
+      pendingDeleteId = undefined
+      renderArchive()
+    }
+  })
+
+  sessionList.addEventListener('keydown', (event) => {
+    const input = event.target as HTMLInputElement
+    const sessionId = input.dataset.renameInput
+    if (sessionId === undefined) return
+
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      void commitRename(input, sessionId)
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      renaming = undefined
+      renderArchive()
+    }
+  })
+
+  // 点开别处也算确认——不然改了名字却留在编辑框里，看着像没保存。
+  sessionList.addEventListener(
+    'focusout',
+    (event) => {
+      const input = event.target as HTMLInputElement
+      const sessionId = input.dataset.renameInput
+      if (sessionId !== undefined) void commitRename(input, sessionId)
+    },
+    true
+  )
+
+  searchInput.addEventListener('input', renderArchive)
+
+  expandAllButton.addEventListener('click', () => {
+    for (const view of sessions) expanded.add(view.node.id)
+    renderArchive()
+  })
+
+  collapseAllButton.addEventListener('click', () => {
+    expanded.clear()
+    renderArchive()
+  })
+
+  sessionsAllButton.addEventListener('click', () => {
+    for (const view of rendered) selectedSessions.add(view.node.id)
+    renderArchive()
+  })
+
+  sessionsNoneButton.addEventListener('click', () => {
+    selectedSessions.clear()
+    renderArchive()
+  })
+
+  openWindowButton.addEventListener('click', () => void runRestore(true))
+  openTabsButton.addEventListener('click', () => void runRestore(false))
+  openViewersButton.addEventListener('click', () => void runOpenViewers())
 
   optionsLink.addEventListener('click', (event) => {
     event.preventDefault()
     void chrome.runtime.openOptionsPage()
   })
 
-  captureButton.addEventListener('click', async () => {
-    if (busy || !settings?.archiveRootId) return
-    busy = true
-    captureButton.disabled = true
-    captureButton.textContent = '保存中…'
-
-    try {
-      const result = await captureCurrentWindow(
-        settings.archiveRootId,
-        settings.sessionNameMode
-      )
-      if (result.saved === 0) {
-        setStatus(captureStatus, '当前窗口没有可保存的标签页。', 'error')
-      } else {
-        await updateSettings({lastSessionFolderId: result.folderId})
-        const skipped = result.skipped > 0 ? `，跳过 ${result.skipped} 个内部页面` : ''
-        setStatus(
-          captureStatus,
-          `已保存 ${result.saved} 个标签页到「${result.folderName}」${skipped}`,
-          'ok'
-        )
-      }
-    } catch (error) {
-      setStatus(captureStatus, `保存失败：${errorText(error)}`, 'error')
-    } finally {
-      busy = false
-      captureButton.textContent = '保存当前窗口'
-      await refresh()
-      busy = false
-    }
+  docsLink.addEventListener('click', (event) => {
+    event.preventDefault()
+    if (settings?.archiveRootId) void openFolderViewers([settings.archiveRootId])
   })
 
-  undoButton.addEventListener('click', async () => {
-    const folderId = settings?.lastSessionFolderId
-    if (busy || !folderId) return
-    busy = true
-    try {
-      await removeSubTree(folderId)
-      await updateSettings({lastSessionFolderId: undefined})
-      setStatus(captureStatus, '已撤销上一次保存。', 'ok')
-    } catch (error) {
-      setStatus(captureStatus, `撤销失败：${errorText(error)}`, 'error')
-    } finally {
-      busy = false
-      await refresh()
-      busy = false
-    }
-  })
+  // 主界面是一个标签页，用户随时会去动标签；不跟着刷新的话清单会过期。
+  let refreshTimer: number | undefined
+  function scheduleCaptureRefresh(): void {
+    if (refreshTimer !== undefined) clearTimeout(refreshTimer)
+    refreshTimer = window.setTimeout(() => {
+      refreshTimer = undefined
+      void refreshCapture()
+    }, 200)
+  }
 
-  openWindowButton.addEventListener('click', async () => {
-    if (busy || !settings) return
-    const targets = [...selected]
-    busy = true
-    setStatus(restoreStatus, '正在打开…', 'ok')
-    try {
-      let opened = 0
-      let groups = 0
-      for (const folderId of targets) {
-        const result = await restoreFolder(folderId, {target: settings.restoreTarget})
-        opened += result.opened
-        groups += result.groups
-      }
-      setStatus(restoreStatus, `已打开 ${opened} 个标签页，创建 ${groups} 个分组。`, 'ok')
-    } catch (error) {
-      setStatus(restoreStatus, `打开失败：${errorText(error)}`, 'error')
-    } finally {
-      busy = false
-      updateSelectionUi()
-    }
+  chrome.tabs.onCreated.addListener(scheduleCaptureRefresh)
+  chrome.tabs.onRemoved.addListener(scheduleCaptureRefresh)
+  chrome.tabs.onMoved.addListener(scheduleCaptureRefresh)
+  chrome.tabs.onAttached.addListener(scheduleCaptureRefresh)
+  chrome.tabs.onDetached.addListener(scheduleCaptureRefresh)
+  chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
+    // 标题变化会疯狂触发，只有地址或分组变了才值得重排清单。
+    if (changeInfo.url !== undefined || changeInfo.groupId !== undefined) scheduleCaptureRefresh()
   })
+  chrome.tabGroups.onUpdated.addListener(scheduleCaptureRefresh)
+  chrome.tabGroups.onRemoved.addListener(scheduleCaptureRefresh)
 
-  openTabsButton.addEventListener('click', async () => {
-    if (busy) return
-    busy = true
-    setStatus(restoreStatus, '正在打开…', 'ok')
-    try {
-      const opened = await openFolderViewers([...selected])
-      setStatus(restoreStatus, `已打开 ${opened} 个文件夹标签页。`, 'ok')
-    } catch (error) {
-      setStatus(restoreStatus, `打开失败：${errorText(error)}`, 'error')
-    } finally {
-      busy = false
-      updateSelectionUi()
-    }
-  })
+  async function refresh(): Promise<void> {
+    settings = await loadSettings()
+
+    const root = settings.archiveRootId ? await getSubTree(settings.archiveRootId) : undefined
+    archiveAvailable = Boolean(root)
+    docsLink.hidden = !archiveAvailable
+
+    undoButton.hidden = !settings.lastSessionFolderId
+
+    await refreshCapture()
+    await refreshArchive()
+  }
 
   void refresh()
 }
