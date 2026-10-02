@@ -145,9 +145,8 @@ test('窗口内没有分组时，书签直接放进会话文件夹', async () =>
   const folders = foldersOf(created)
   assert.equal(folders.length, 1, '只应有会话文件夹这一层')
   assert.equal(folders[0].parentId, ARCHIVE_ROOT)
-  // `sanitizeFolderName` 会把 `:` 换成 `_`（为将来导出为文件路径留后路），
-  // 所以真实写入书签的名字是 `2026-10-02 21_44`，而不是设计文档示例里的 `21:44`。
-  assert.match(folders[0].title, /^\d{4}-\d{2}-\d{2} \d{2}_\d{2}$/)
+  // 名字保留原文，不做路径字符替换，所以时间戳里的冒号就是冒号。
+  assert.match(folders[0].title, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
 
   assert.deepEqual(shape(childrenOf(created, result.folderId)), [
     '书签:https://a.com',
@@ -249,17 +248,17 @@ test('会话名默认只有时间戳', async () => {
 
   const result = await captureCurrentWindow(ARCHIVE_ROOT)
 
-  // 时间戳里的冒号会被清洗成下划线；不再把站点写进会话名。
-  assert.match(result.folderName, /^\d{4}-\d{2}-\d{2} \d{2}_\d{2}$/)
+  // 不再把站点写进会话名；时间戳也不做字符替换。
+  assert.match(result.folderName, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
   assert.ok(!result.folderName.includes('github'))
 })
 
-test('自定义名拼在时间戳前面，并过一遍清洗', async () => {
+test('自定义名按手打原文拼在时间戳前面', async () => {
   stubChrome([plainTab(1, 'https://a.com')])
 
   const result = await captureCurrentWindow(ARCHIVE_ROOT, {name: '季度归档 / 一期'})
 
-  assert.match(result.folderName, /^季度归档 _ 一期 · \d{4}-\d{2}-\d{2} \d{2}_\d{2}$/)
+  assert.match(result.folderName, /^季度归档 \/ 一期 · \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
 })
 
 test('自定义名只有空白时退回只用时间戳', async () => {
@@ -267,7 +266,7 @@ test('自定义名只有空白时退回只用时间戳', async () => {
 
   const result = await captureCurrentWindow(ARCHIVE_ROOT, {name: '   '})
 
-  assert.match(result.folderName, /^\d{4}-\d{2}-\d{2} \d{2}_\d{2}$/)
+  assert.match(result.folderName, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
 })
 
 test('带自定义名的会话重名时追加序号，时间戳不受影响', async (t) => {
@@ -275,12 +274,12 @@ test('带自定义名的会话重名时追加序号，时间戳不受影响', as
   t.after(() => t.mock.timers.reset())
 
   const {created} = stubChrome([plainTab(1, 'https://a.com')], {
-    seed: {[ARCHIVE_ROOT]: [{id: 'old', title: '会议 · 2026-10-02 14_30'}]}
+    seed: {[ARCHIVE_ROOT]: [{id: 'old', title: '会议 · 2026-10-02 14:30'}]}
   })
 
   const result = await captureCurrentWindow(ARCHIVE_ROOT, {name: '会议'})
 
-  assert.equal(result.folderName, '会议 · 2026-10-02 14_30 (2)')
+  assert.equal(result.folderName, '会议 · 2026-10-02 14:30 (2)')
   assert.equal(created.length, 2, '会话文件夹 + 一个书签')
 })
 
@@ -289,13 +288,12 @@ test('会话文件夹与已有文件夹重名时追加序号', async (t) => {
   t.after(() => t.mock.timers.reset())
 
   const {created} = stubChrome([plainTab(1, 'https://a.com')], {
-    // 种子用的是清洗后的形态（冒号已成下划线），即真实写入书签的名字。
-    seed: {[ARCHIVE_ROOT]: [{id: 'old', title: '2026-10-02 14_30'}]}
+    seed: {[ARCHIVE_ROOT]: [{id: 'old', title: '2026-10-02 14:30'}]}
   })
 
   const result = await captureCurrentWindow(ARCHIVE_ROOT)
 
-  assert.equal(result.folderName, '2026-10-02 14_30 (2)')
+  assert.equal(result.folderName, '2026-10-02 14:30 (2)')
   assert.equal(created.length, 2, '会话文件夹 + 一个书签')
 })
 

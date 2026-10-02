@@ -22,12 +22,13 @@ export const GROUP_COLOR_LABELS: Record<TabGroupColor, string> = {
 }
 
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]+/g
-/** 这些字符在浏览器里合法，替换掉纯粹是为将来「导出为文件路径」留后路。 */
-const RESERVED_PATH_CHARS = /[\\/:*?"<>|]+/g
 const WHITESPACE = /\s+/g
 
 /**
- * 清洗文件夹名：折叠空白 → 去控制字符 → 替换路径保留字符 → 截断。
+ * 清洗文件夹名：去控制字符 → 折叠空白 → 截断。
+ *
+ * **可打印字符一律保留原文**——包括 `/ \ : * ? " < > |`。Chrome 不禁这些字符，
+ * 所以不做替换；用户手打的名字就按原样存进书签。
  *
  * @param fallback 清洗后为空时使用的名字（调用方必须显式给出，避免悄悄产生空文件夹名）。
  */
@@ -36,11 +37,7 @@ export function sanitizeFolderName(
   fallback: string,
   maxLength = MAX_FOLDER_NAME_LENGTH
 ): string {
-  const cleaned = raw
-    .replace(CONTROL_CHARS, ' ')
-    .replace(RESERVED_PATH_CHARS, '_')
-    .replace(WHITESPACE, ' ')
-    .trim()
+  const cleaned = raw.replace(CONTROL_CHARS, ' ').replace(WHITESPACE, ' ').trim()
 
   if (!cleaned) return fallback
   return cleaned.length > maxLength ? cleaned.slice(0, maxLength).trimEnd() : cleaned
@@ -69,8 +66,7 @@ export function formatTimestamp(date: Date = new Date()): string {
  * @param name 自定义名；空串或只有空白时只返回时间戳。
  */
 export function formatSessionName(date: Date = new Date(), name?: string): string {
-  // 时间戳里的冒号会被清洗成下划线（见 sanitizeFolderName），长度不变。
-  const stamp = sanitizeFolderName(formatTimestamp(date), formatTimestamp(date))
+  const stamp = formatTimestamp(date)
   const separator = SESSION_NAME_SEPARATOR
   const budget = MAX_FOLDER_NAME_LENGTH - stamp.length - separator.length
 

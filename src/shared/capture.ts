@@ -153,7 +153,7 @@ export function planSessionChildren(snapshot: WindowSnapshot): SessionChild[] {
  * 结构约定（详见 docs/design.md）：
  * ```
  * 标签页存档/
- *   2026-10-02 14_30/     ← 会话文件夹
+ *   2026-10-02 14:30/     ← 会话文件夹
  *     工作/               ← 标签分组
  *     wikipedia.org       ← 窗口里没进分组的标签，散装书签
  *     阅读/

@@ -77,8 +77,8 @@ export async function removeSubTree(id: string): Promise<void> {
 /**
  * 重命名文件夹或书签。
  *
- * 清洗与去重都不在这里做：名字由用户在界面上直接输入，`sanitizeFolderName` 负责清洗，
- * 重名则按浏览器自己的语义放行（Chrome 允许同级重名，界面以位置区分）。
+ * 只按原样写入用户给的标题（`sanitizeFolderName` 最多削掉控制字符与首尾空白，
+ * 不动可打印字符）；重名按浏览器自己的语义放行——Chrome 允许同级重名，界面以位置区分。
  */
 export async function renameNode(id: string, title: string): Promise<BookmarkNode> {
   return toNode(await chrome.bookmarks.update(id, {title}))

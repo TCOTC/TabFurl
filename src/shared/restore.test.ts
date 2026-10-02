@@ -16,7 +16,7 @@ const link = (id: string, url: string): BookmarkNode => ({id, title: url, url})
  * 分组是子文件夹，未分组的标签是散装书签。
  */
 const session = (): BookmarkNode =>
-  folder('s', '2026-10-02 14_30', [
+  folder('s', '2026-10-02 14:30', [
     folder('g1', '工作', [link('b1', 'https://a.com'), link('b2', 'chrome://settings')]),
     link('b3', 'https://loose.com'),
     folder('g3', '阅读', [link('b4', 'https://c.com')]),
@@ -98,7 +98,7 @@ test('只处理一层，更深的嵌套被跳过而不是被平铺', () => {
 
 test('没有分组的存档还原时也不会凭空造出分组', () => {
   // captureCurrentWindow 在窗口无分组时把标签直接放进会话文件夹，这里是它的对称输入。
-  const flat = folder('s', '2026-10-02 14_30', [
+  const flat = folder('s', '2026-10-02 14:30', [
     link('b1', 'https://a.com'),
     link('b2', 'https://b.com')
   ])
