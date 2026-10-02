@@ -1,12 +1,19 @@
 import {getSubTree} from './bookmarks'
 import type {BookmarkNode, RestoreOptions, RestoreResult} from './types'
-import {isInternalUrl} from './urls'
+import {isInternalUrl, isSeparatorUrl} from './urls'
 
 export interface PlannedBookmark {
   /** 书签 id；界面里取消勾选某一枚标签时用它。 */
   id: string
   title: string
   url: string
+  /**
+   * 分隔线（`isSeparatorUrl` 认出的那个占位书签）。
+   *
+   * 保留在计划里是为了让界面把它画在**原来的位置**上，但它不是要打开的页面：
+   * 还原时跳过，计数时不算作标签。
+   */
+  separator: boolean
 }
 
 /**
@@ -24,12 +31,18 @@ export interface PlannedItem {
 
 export interface RestorePlan {
   items: PlannedItem[]
-  /** 被跳过的条目数：浏览器内部页面，以及子文件夹的子文件夹。 */
+  /** 被跳过的条目数：浏览器内部页面，以及子文件夹的子文件夹。分隔线不算——它不是「丢了东西」。 */
   skipped: number
 }
 
 function plannedBookmark(node: BookmarkNode): PlannedBookmark {
-  return {id: node.id, title: node.title, url: node.url as string}
+  const url = node.url as string
+  return {id: node.id, title: node.title, url, separator: isSeparatorUrl(url)}
+}
+
+/** 计划里真正会被打开的标签。分隔线只是记号，不在此列。 */
+export function restorableBookmarks(bookmarks: readonly PlannedBookmark[]): PlannedBookmark[] {
+  return bookmarks.filter((bookmark) => !bookmark.separator)
 }
 
 /**
@@ -40,6 +53,7 @@ function plannedBookmark(node: BookmarkNode): PlannedBookmark {
  * 与保存时的标签顺序一致：未分组的标签不会被集中挪到末尾。
  *
  * 界面也用这份计划渲染勾选清单，所以「看到的」与「还原的」是同一口径。
+ * 分隔线（见 `PlannedBookmark.separator`）照常留在原位供渲染，只是不会被打开。
  */
 export function planRestore(folder: BookmarkNode): RestorePlan {
   const children = folder.children ?? []
@@ -71,7 +85,10 @@ export function planRestore(folder: BookmarkNode): RestorePlan {
       }
       bookmarks.push(plannedBookmark(grandChild))
     }
-    if (bookmarks.length > 0) items.push({folderId: child.id, title: child.title, bookmarks})
+    // 只有分隔线的分组等于空分组：留着只会渲染出一个有标题、却一枚标签都没有的框。
+    if (bookmarks.some((bookmark) => !bookmark.separator)) {
+      items.push({folderId: child.id, title: child.title, bookmarks})
+    }
   }
 
   return {items, skipped}
@@ -127,7 +144,10 @@ async function openTabs(
   for (const item of planned) {
     const tabIds: number[] = []
 
-    for (const {url} of item.bookmarks) {
+    for (const {url, separator} of item.bookmarks) {
+      // 分隔线是个占位书签，打开它只会多一个无用标签。渲染照旧，打开时跳过。
+      if (separator) continue
+
       // 第一个标签无论哪种模式都会成为活动标签；它不能（也不该）被舍弃。
       const isFirst = keepLoadedTabId === undefined
 

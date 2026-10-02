@@ -3,6 +3,7 @@ import {sanitizeFolderName} from '../shared/naming'
 import {
   openFolderViewers,
   planRestore,
+  restorableBookmarks,
   restoreFolder,
   type PlannedBookmark,
   type PlannedItem,
@@ -153,7 +154,7 @@ export function createArchivePanel(events: AppEvents): Panel {
    * 那会显示成「0 个标签」，看着像这个存档是空的。改成以「已选」为主。
    */
   function sessionMetaText(view: SessionView): string {
-    const bookmarks = view.plan.items.flatMap((item) => item.bookmarks)
+    const bookmarks = restorableBookmarks(view.plan.items.flatMap((item) => item.bookmarks))
     const total = bookmarks.length
     const kept = bookmarks.filter((bookmark) => !excludedBookmarks.has(bookmark.id)).length
     const groups = view.plan.items.filter((item) => item.title !== '').length
@@ -183,6 +184,13 @@ export function createArchivePanel(events: AppEvents): Panel {
   }
 
   function bookmarkMarkup(bookmark: PlannedBookmark): string {
+    // 分隔线不是可勾选的书签，只是一个记号：留在原位渲染，但不参与勾选、不计入枚数、不会被打开。
+    if (bookmark.separator) {
+      const title = bookmark.title.trim()
+      return title
+        ? `<li class="tree__divider"><span>${escapeHtml(title)}</span></li>`
+        : '<li class="tree__divider tree__divider--plain"></li>'
+    }
     const host = hostnameOf(bookmark.url) ?? bookmark.url
     return `
       <li class="tree__node">
@@ -207,7 +215,7 @@ export function createArchivePanel(events: AppEvents): Panel {
         <label class="tree__row tree__row--group">
           <input type="checkbox" data-content="${escapeHtml(containerId)}" />
           <span class="tree__title">${escapeHtml(item.title)}</span>
-          <span class="tree__meta">${item.bookmarks.length} 个标签</span>
+          <span class="tree__meta">${restorableBookmarks(item.bookmarks).length} 个标签</span>
         </label>
         <ul class="tree__children">${item.bookmarks.map(bookmarkMarkup).join('')}</ul>
       </li>
@@ -305,13 +313,15 @@ export function createArchivePanel(events: AppEvents): Panel {
     for (const view of rendered) {
       containerBookmarks.set(
         view.node.id,
-        view.plan.items.flatMap((item) => item.bookmarks.map((bookmark) => bookmark.id))
+        restorableBookmarks(view.plan.items.flatMap((item) => item.bookmarks)).map(
+          (bookmark) => bookmark.id
+        )
       )
       for (const item of view.plan.items) {
         if (item.folderId) {
           containerBookmarks.set(
             item.folderId,
-            item.bookmarks.map((bookmark) => bookmark.id)
+            restorableBookmarks(item.bookmarks).map((bookmark) => bookmark.id)
           )
         }
       }
@@ -438,8 +448,13 @@ export function createArchivePanel(events: AppEvents): Panel {
       .map((node) => ({node, plan: planRestore(node)}))
 
     // 存档被删或被改名后，勾掉的书签 id 可能已经不存在了。
+    // 分隔线不在此列：它不是可勾选的标签，不该进排除集，否则会给它留一个永远清不掉的勾选态。
     const alive = new Set(
-      sessions.flatMap((view) => view.plan.items.flatMap((item) => item.bookmarks.map((b) => b.id)))
+      sessions.flatMap((view) =>
+        restorableBookmarks(view.plan.items.flatMap((item) => item.bookmarks)).map(
+          (bookmark) => bookmark.id
+        )
+      )
     )
     // 第一次见到的书签默认算排除（存档侧默认一个都不勾）。
     // 新保存出来的存档同理：它里面的标签从一开始就不勾，免得「刚存完就被下一次还原顺手打开」。

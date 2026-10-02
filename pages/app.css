@@ -223,6 +223,32 @@
 }
 
 /*
+ * 分隔线：Maya Studios 约定的那个占位书签。它不是可勾选的标签，只是一个记号，
+ * 所以没有勾选框、没有悬停态、也不可点——留着它只是为了让人看清存档是怎么分段的。
+ */
+.tree__divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tree__divider::before,
+.tree__divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-strong);
+}
+
+.tree__divider--plain::after {
+  display: none;
+}
+
+/*
  * 子级缩进 = 折叠按钮宽 + 行内间距，这样子级的勾选框正好与父级的勾选框左对齐。
  * 必须用 calc 而不是写死数字：按钮一改尺寸，写死的缩进就会悄悄错位。
  */

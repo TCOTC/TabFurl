@@ -1,6 +1,13 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {FAVICON_SIZE, faviconUrl, hostnameOf, isInternalUrl} from './urls'
+import {
+  FAVICON_SIZE,
+  SEPARATOR_URL,
+  faviconUrl,
+  hostnameOf,
+  isInternalUrl,
+  isSeparatorUrl
+} from './urls'
 
 test('isInternalUrl 把空值与内部页面判为不可收藏', () => {
   assert.equal(isInternalUrl(undefined), true)
@@ -30,6 +37,38 @@ test('isInternalUrl 放行普通网页地址', () => {
 
 test('isInternalUrl 前缀匹配区分大小写（与 chrome 的 url 形态一致）', () => {
   assert.equal(isInternalUrl('CHROME://settings'), false)
+})
+
+test('isSeparatorUrl 认出分隔线占位书签（忽略协议、查询串与片段）', () => {
+  assert.equal(isSeparatorUrl(SEPARATOR_URL), true)
+
+  for (const url of [
+    'http://separator.mayastudios.com/index.php',
+    'https://separator.mayastudios.com/index.php?title=x',
+    'https://separator.mayastudios.com/index.php#top',
+    'https://SEPARATOR.mayastudios.com/index.php',
+    // 省略路径时浏览器会补成 `/`，指的是同一枚记号。
+    'https://separator.mayastudios.com/',
+    'https://separator.mayastudios.com'
+  ]) {
+    assert.equal(isSeparatorUrl(url), true, `${url} 应被判为分隔线`)
+  }
+})
+
+test('isSeparatorUrl 不误伤同名域名下的其他页面与普通书签', () => {
+  for (const url of [
+    'https://separator.mayastudios.com/other.php',
+    'https://separator.mayastudios.com/index.php/extra',
+    'https://example.com',
+    // 后缀伪装的域名不能算。
+    'https://separator.mayastudios.com.evil.test/index.php'
+  ]) {
+    assert.equal(isSeparatorUrl(url), false, `${url} 不该被判为分隔线`)
+  }
+
+  assert.equal(isSeparatorUrl(undefined), false)
+  assert.equal(isSeparatorUrl(''), false)
+  assert.equal(isSeparatorUrl('not a url'), false)
 })
 
 test('hostnameOf 去掉 www 前缀', () => {

@@ -3,7 +3,7 @@ import {restoreFolder} from '../src/shared/restore'
 import {loadSettings} from '../src/shared/settings'
 import {escapeHtml, faviconMarkup} from '../src/shared/tile'
 import type {BookmarkNode} from '../src/shared/types'
-import {hostnameOf} from '../src/shared/urls'
+import {hostnameOf, isSeparatorUrl} from '../src/shared/urls'
 import '../src/shared/base.css'
 import './folder.css'
 
@@ -46,15 +46,42 @@ function bookmarkMarkup(node: BookmarkNode): string {
   `
 }
 
+/**
+ * 分隔线（Maya Studios 约定的那个占位书签）。
+ *
+ * 它不是书签，而是书签树里的一个组织记号，所以画成一条横线：标题为空就只画线，
+ * 标题非空时把标题嵌在线的正中（两边各一段线，构成「—— 标题 ——」）。
+ *
+ * `data-search` 也给它一份：搜索时它会跟着被藏起来，列表就被压平了——
+ * 无标题的分隔线永远匹配不上任何词，正是想要的效果。
+ */
+function separatorMarkup(node: BookmarkNode): string {
+  const title = node.title.trim()
+  if (!title) return '<hr class="separator separator--plain" data-search="" />'
+  return `
+    <div class="separator" role="separator" aria-orientation="horizontal"
+         data-search="${escapeHtml(title.toLowerCase())}">
+      <span class="separator__title">${escapeHtml(title)}</span>
+    </div>
+  `
+}
+
+/** 是书签就画卡片，是分隔线就画横线；顺序即书签树里的顺序。 */
+function entryMarkup(node: BookmarkNode): string {
+  return isSeparatorUrl(node.url) ? separatorMarkup(node) : bookmarkMarkup(node)
+}
+
 function sectionMarkup(title: string, nodes: readonly BookmarkNode[]): string {
   if (nodes.length === 0) return ''
+  // 胸章只数真书签：分隔线不是书签，算进去会与下面的「N 个书签」对不上。
+  const count = nodes.filter((node) => !isSeparatorUrl(node.url)).length
   return `
     <section class="section">
       <div class="section__head">
         <h2 class="section__title">${escapeHtml(title)}</h2>
-        <span class="badge">${nodes.length}</span>
+        <span class="badge">${count}</span>
       </div>
-      <div class="grid">${nodes.map(bookmarkMarkup).join('')}</div>
+      <div class="grid">${nodes.map(entryMarkup).join('')}</div>
     </section>
   `
 }
@@ -64,7 +91,9 @@ function folderHref(folderId: string): string {
 }
 
 function subfolderCardMarkup(folder: BookmarkNode): string {
-  const bookmarks = (folder.children ?? []).filter((child) => child.url)
+  const bookmarks = (folder.children ?? []).filter(
+    (child) => child.url && !isSeparatorUrl(child.url)
+  )
   const folderCount = (folder.children ?? []).filter((child) => !child.url).length
   return `
     <a class="bookmark" href="${escapeHtml(folderHref(folder.id))}">
@@ -95,13 +124,13 @@ async function render(): Promise<void> {
   }
 
   const children = folder.children ?? []
+  // 分隔线留在这个列表里，好让它在原位被画出来（见 `entryMarkup`）。
   const looseBookmarks = children.filter((child) => child.url)
   const subFolders = children.filter((child) => !child.url)
-  const totalBookmarks = looseBookmarks.length +
-    subFolders.reduce(
-      (sum, sub) => sum + (sub.children ?? []).filter((item) => item.url).length,
-      0
-    )
+  const countBookmarks = (nodes: readonly BookmarkNode[]): number =>
+    nodes.filter((node) => node.url && !isSeparatorUrl(node.url)).length
+  const totalBookmarks = countBookmarks(looseBookmarks) +
+    subFolders.reduce((sum, sub) => sum + countBookmarks(sub.children ?? []), 0)
 
   // 面包屑：除当前这一层外都可点，点了就打开那一层文件夹。
   // 当前层是这一页自身，做成链接只是噪声，所以留作纯文本。
@@ -161,7 +190,8 @@ async function render(): Promise<void> {
 
   searchInput.addEventListener('input', () => {
     const term = searchInput.value.trim().toLowerCase()
-    for (const element of document.querySelectorAll<HTMLElement>('.bookmark[data-search]')) {
+    // 分隔线也带 `data-search`，所以会一并被筛掉；否则搜索时线会孤零零留在列表里。
+    for (const element of document.querySelectorAll<HTMLElement>('[data-search]')) {
       element.hidden = term.length > 0 && !(element.dataset.search ?? '').includes(term)
     }
   })

@@ -17,6 +17,38 @@ export function isInternalUrl(url: string | undefined): boolean {
   return INTERNAL_URL_PREFIXES.some((prefix) => url.startsWith(prefix))
 }
 
+/**
+ * 书签分隔线的占位网址（Maya Studios 的约定）。
+ *
+ * Chrome 早已不支持书签分隔线，社区的做法是收藏一个**指向固定网址的书签**来模拟：
+ * 它不指向任何有用内容，只是书签树里的一个组织记号，界面上画成一条横线。
+ */
+export const SEPARATOR_URL = 'https://separator.mayastudios.com/index.php'
+
+const SEPARATOR = new URL(SEPARATOR_URL)
+/** 省略路径时浏览器会补成 `/`，两种形态指的是同一枚分隔线。 */
+const SEPARATOR_PATHS = new Set([SEPARATOR.pathname, '/'])
+
+/**
+ * 判定一枚书签是不是分隔线。
+ *
+ * 按**主机名 + 路径**比对，忽略协议、查询串与片段：同一个记号在不同工具、不同时期会写成
+ * `http` / `https`，也可能带上 `?title=…` 之类的参数。路径只认 `/index.php` 与省略成 `/`
+ * 两种形态——不能只认主机名，那会把该域名下的任意页面也当成记号吃掉。
+ */
+export function isSeparatorUrl(url: string | undefined): boolean {
+  if (!url) return false
+  try {
+    const parsed = new URL(url)
+    return (
+      parsed.hostname.toLowerCase() === SEPARATOR.hostname &&
+      SEPARATOR_PATHS.has(parsed.pathname.toLowerCase())
+    )
+  } catch {
+    return false
+  }
+}
+
 /** 取主机名，去掉 `www.`。取不到时返回 undefined。 */
 export function hostnameOf(url: string | undefined): string | undefined {
   if (!url) return undefined

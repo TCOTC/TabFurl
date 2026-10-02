@@ -4,6 +4,7 @@ import {
   applyExclusions,
   discardCommittedTabs,
   planRestore,
+  restorableBookmarks,
   restoreFolder,
   type RestorePlan
 } from './restore'
@@ -16,6 +17,10 @@ const folder = (id: string, title: string, children: BookmarkNode[] = []): Bookm
 })
 
 const link = (id: string, url: string): BookmarkNode => ({id, title: url, url})
+
+/** 分隔线占位书签（Maya Studios 约定）。它是个记号，不是要打开的页面。 */
+const SEPARATOR = 'https://separator.mayastudios.com/index.php'
+const divider = (id: string, title = ''): BookmarkNode => ({id, title, url: SEPARATOR})
 
 /**
  * 一次「有分组」的保存结果。会话文件夹的子级按窗口顺序穿插：
@@ -129,6 +134,51 @@ test('planRestore 不修改传入的书签树', () => {
   planRestore(node)
 
   assert.equal(JSON.stringify(node), before)
+})
+
+test('分隔线照常留在计划里（界面要按原位画出来），不计入 skipped', () => {
+  const node = folder('s', '会话', [
+    link('b1', 'https://a.com'),
+    divider('sep1', '以下为工作'),
+    link('b2', 'https://b.com')
+  ])
+
+  const plan = planRestore(node)
+
+  assert.deepEqual(shape(plan), [
+    {title: '', urls: ['https://a.com', SEPARATOR, 'https://b.com']}
+  ])
+  assert.equal(plan.skipped, 0, '分隔线不是「丢了东西」，不该计入 skipped')
+  assert.deepEqual(
+    plan.items[0].bookmarks.map((bookmark) => bookmark.separator),
+    [false, true, false],
+    '只有分隔线那一条带 separator 标记'
+  )
+})
+
+test('restorableBookmarks 把分隔线从「会被打开的标签」里剔除', () => {
+  const plan = planRestore(
+    folder('s', '会话', [link('b1', 'https://a.com'), divider('sep1'), link('b2', 'https://b.com')])
+  )
+
+  assert.deepEqual(
+    restorableBookmarks(plan.items.flatMap((item) => item.bookmarks)).map((b) => b.url),
+    ['https://a.com', 'https://b.com']
+  )
+})
+
+test('与内部页面不同，分隔线不算 skipped', () => {
+  const {skipped} = planRestore(
+    folder('s', '会话', [divider('sep1'), link('b1', 'chrome://newtab')])
+  )
+
+  assert.equal(skipped, 1, '只有内部页面记一笔')
+})
+
+test('只有分隔线的子文件夹不产生项', () => {
+  const node = folder('s', '会话', [folder('g1', '全是线', [divider('sep1')])])
+
+  assert.deepEqual(planRestore(node).items, [], '有标题但无标签的框只是噪声')
 })
 
 test('applyExclusions 只剔除被勾掉的书签，其余原样保留', () => {
@@ -333,6 +383,50 @@ test('舍弃失败不影响已打开的标签，也不算进 discarded', async (
 
   assert.equal(result.opened, 3, '舍弃失败不该把已打开的标签算没')
   assert.equal(result.discarded, 1, '只有成功的那一枚算数')
+})
+
+test('还原时跳过散装的分隔线：不打开它的网址，也不影响其它标签', async () => {
+  const spy = stubChrome(
+    folder('s', '会话', [
+      link('b1', 'https://a.com'),
+      divider('sep1'),
+      divider('sep2', '以下为工作'),
+      link('b2', 'https://b.com')
+    ])
+  )
+
+  const result = await restoreFolder('s', {target: 'newWindow'})
+
+  assert.equal(result.opened, 2)
+  assert.deepEqual(
+    spy.created.map((tab) => tab.url),
+    ['https://a.com', 'https://b.com'],
+    '分隔线的网址一次都不该被打开'
+  )
+})
+
+test('分组内的分隔线不占分组名额，也不会被打开', async () => {
+  const spy = stubChrome(
+    folder('s', '会话', [
+      folder('g1', '工作', [divider('sep1', '标题'), link('b1', 'https://a.com')]),
+      link('b2', 'https://b.com')
+    ])
+  )
+
+  const result = await restoreFolder('s', {target: 'newWindow'})
+
+  assert.equal(result.opened, 2)
+  assert.equal(result.groups, 1)
+  assert.deepEqual(spy.grouped, [[1]], '分组里只应有那一枚真标签')
+})
+
+test('整个存档只有分隔线时，还原不开任何标签也不报错', async () => {
+  const spy = stubChrome(folder('s', '会话', [divider('sep1'), divider('sep2')]))
+
+  const result = await restoreFolder('s', {target: 'newWindow'})
+
+  assert.equal(result.opened, 0)
+  assert.deepEqual(spy.created, [])
 })
 
 /**

@@ -86,6 +86,44 @@
   white-space: nowrap;
 }
 
+/*
+ * 分隔线：Maya Studios 约定的那个占位书签。它不是书签，而是书签树里的组织记号，
+ * 所以画成一条横线，并且横跨整个网格（卡片是列，线是行与行之间的分隔）。
+ */
+.separator {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* 线由伪元素画：有标题时两段把它夹在正中（「—— 标题 ——」）。 */
+.separator::before,
+.separator::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-strong);
+}
+
+/* 没标题就只留一条线。`hr` 的默认边框必须先清掉，否则会在上面再压一条。 */
+.separator--plain {
+  display: block;
+  height: 0;
+  margin: 5px 0;
+  border: 0;
+  border-top: 1px solid var(--border-strong);
+  background: transparent;
+}
+
+.separator--plain::before,
+.separator--plain::after {
+  display: none;
+}
+
 .crumbs {
   color: var(--text-muted);
   font-size: 12px;
