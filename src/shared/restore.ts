@@ -161,32 +161,87 @@ async function openTabs(
   return {created, opened, keepLoadedTabId}
 }
 
+/** 舍弃前等待导航提交的节奏。抽成参数是为了让测试能用毫秒级的时间跑完。 */
+export interface DiscardTiming {
+  /** 轮询间隔。 */
+  pollMs: number
+  /** 总超时；超时后放弃舍弃，宁可留着加载。 */
+  timeoutMs: number
+}
+
 /**
- * 把刚打开的标签舍弃掉——它们仍留在标签栏里，点开时才真正加载。
+ * 默认节奏：每 50ms 问一次，最多等 2 秒。
  *
- * **为什么需要这一步**：`chrome.tabs.create()` 没有「先不加载」的选项，
- * 传了 `url` 就会立即开始加载，所以一次还原几十个标签会造成瞬时并发加载而卡顿。
- * `chrome.tabs.discard()` 正好是这个语义：从内存中卸载，但标签仍在标签栏上
- * （标题、位置、标签分组都保留）。
- *
- * **活动标签无法被舍弃**（API 限制），所以每个窗口会留下一枚已加载的——
- * 这正好让人看得见窗口确实开出来了。
+ * 超时是**为了让状态栏不至于卡太久**：整个 `restoreFolder` 是同步等的，
+ * 只要有一枚标签迟迟不提交（比如对方服务器没响应），用户就会一直看着「正在打开…」。
+ * 2 秒足够覆盖正常站点的提交，超时的那些就干脆留着加载。
  */
-async function discardTabs(
+const DEFAULT_DISCARD_TIMING: DiscardTiming = {pollMs: 50, timeoutMs: 2000}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * 标签的导航是否**已提交**（因而可以安全舍弃）。
+ *
+ * `Tab.url` 是「主框架的**上次已提交**网址」；尚未提交时它是空串，目标地址只出现在 `pendingUrl` 里。
+ * 三个条件都要满足，取最保守的一支：宁可少舍弃几枚，也不能丢掉地址。
+ */
+function isCommitted(tab: chrome.tabs.Tab): boolean {
+  return Boolean(tab.url) && tab.url !== 'about:blank' && tab.pendingUrl === undefined
+}
+
+/**
+ * 把**已提交导航**的标签舍弃掉——它们仍留在标签栏里，点开时才真正加载。
+ *
+ * **为什么需要这一步**：`chrome.tabs.create()` 没有「先不加载」的选项，传了 `url` 就立即开始加载，
+ * 所以一次还原几十个标签会造成瞬时并发加载而卡顿。`chrome.tabs.discard()` 正是这个语义。
+ *
+ * **为什么必须先等导航提交**：`discard` 的语义是「卸载已加载的内容，激活时按记录的地址重新加载」。
+ * 若标签还在加载、没有任何**已提交**的地址，Chrome 就没有可恢复的地址，标签会变成 `about:blank`。
+ * （2026-10-03 实测到的 bug，不是推测。）所以这里轮询到 `url` 有值才动手，超时就干脆不碰它。
+ *
+ * **活动标签无法被舍弃**（API 限制），所以每个窗口会留下一枚已加载的——这正好让人看得见窗口确实开出来了。
+ */
+export async function discardCommittedTabs(
   tabIds: readonly number[],
-  keepLoadedTabId: number | undefined
+  options: {keepLoadedTabId?: number; timing?: DiscardTiming} = {}
 ): Promise<number> {
+  const {keepLoadedTabId, timing = DEFAULT_DISCARD_TIMING} = options
+  const pending = new Set(tabIds.filter((tabId) => tabId !== keepLoadedTabId))
+  const deadline = Date.now() + timing.timeoutMs
   let discarded = 0
 
-  for (const tabId of tabIds) {
-    if (tabId === keepLoadedTabId) continue
-    try {
-      await chrome.tabs.discard(tabId)
-      discarded++
-    } catch (error) {
-      // 舍弃失败不该让整次还原失败：标签已经打开了，只是会真加载而已。
-      console.error('[tabfurl] 舍弃标签失败', tabId, error)
+  while (pending.size > 0 && Date.now() < deadline) {
+    for (const tabId of [...pending]) {
+      let tab: chrome.tabs.Tab
+      try {
+        tab = await chrome.tabs.get(tabId)
+      } catch {
+        // 标签已经被关掉了，没什么可舍弃的。
+        pending.delete(tabId)
+        continue
+      }
+
+      if (!isCommitted(tab)) continue
+
+      pending.delete(tabId)
+      try {
+        await chrome.tabs.discard(tabId)
+        discarded++
+      } catch (error) {
+        // 舍弃失败不该让整次还原失败：标签已经打开了，只是会真加载而已。
+        console.error('[tabfurl] 舍弃标签失败', tabId, error)
+      }
     }
+
+    if (pending.size > 0) await delay(timing.pollMs)
+  }
+
+  if (pending.size > 0) {
+    // 不是错误：这些标签会照常加载，只是没省下内存。
+    console.info(`[tabfurl] ${pending.size} 个标签在 ${timing.timeoutMs}ms 内未提交导航，保持加载`)
   }
 
   return discarded
@@ -251,10 +306,9 @@ export async function restoreFolder(
     : await applyGroups(created, await currentWindowId(created))
 
   // 舍弃放在最后：分组、窗口都建好了，标签的位置与归属都已固定，此时卸载最安全。
-  const discarded = await discardTabs(
-    created.flatMap((item) => item.tabIds),
+  const discarded = await discardCommittedTabs(created.flatMap((item) => item.tabIds), {
     keepLoadedTabId
-  )
+  })
 
   return {opened, groups, skipped: plan.skipped, discarded}
 }

@@ -1,6 +1,12 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {applyExclusions, planRestore, restoreFolder, type RestorePlan} from './restore'
+import {
+  applyExclusions,
+  discardCommittedTabs,
+  planRestore,
+  restoreFolder,
+  type RestorePlan
+} from './restore'
 import type {BookmarkNode} from './types'
 
 const folder = (id: string, title: string, children: BookmarkNode[] = []): BookmarkNode => ({
@@ -166,15 +172,41 @@ test('没有排除项时原样返回同一个计划，不做无谓复制', () =>
  *
  * 关注的是「打开后有没有把标签舍弃掉」这件事，所以只实现这条路径需要的几个方法。
  */
-function stubChrome(folderNode: BookmarkNode): {
+type TabState = {url?: string; pendingUrl?: string}
+
+/**
+ * 内存书签树 + 记录调用的 chrome 桩。
+ *
+ * `commitAfterPolls` 模拟真实 Chrome 的提交时机：`tabs.create()` 返回时导航还没提交
+ * （`url` 为空、地址只在 `pendingUrl` 里），要等第 N 次 `tabs.get` 才看得到 `url`。
+ * `neverCommit` 里的标签则永远停在未提交状态。
+ */
+function stubChrome(
+  folderNode: BookmarkNode,
+  options: {
+    commitAfterPolls?: number
+    neverCommit?: readonly number[]
+    /** 预先存在的标签（不走 create），供直连 discardCommittedTabs 的测试使用。 */
+    existing?: readonly {id: number; url: string}[]
+  } = {}
+): {
   discarded: number[]
   created: {url: string; active: boolean}[]
   grouped: number[][]
+  gets: number
 } {
+  const committedAfter = options.commitAfterPolls ?? 1
+  const neverCommit = new Set(options.neverCommit ?? [])
+  const urls = new Map<number, string>((options.existing ?? []).map((t) => [t.id, t.url]))
   const discarded: number[] = []
   const created: {url: string; active: boolean}[] = []
   const grouped: number[][] = []
   let seq = 0
+  let gets = 0
+
+  const record = (tabId: number, url: string): void => {
+    urls.set(tabId, url)
+  }
 
   ;(globalThis as Record<string, unknown>).chrome = {
     bookmarks: {
@@ -189,6 +221,7 @@ function stubChrome(folderNode: BookmarkNode): {
       create: async (input: {url: string}) => {
         seq += 1
         created.push({url: input.url, active: true})
+        record(seq, input.url)
         return {id: 1, tabs: [{id: seq}]}
       }
     },
@@ -196,9 +229,20 @@ function stubChrome(folderNode: BookmarkNode): {
       create: async (input: {url: string; active: boolean}) => {
         seq += 1
         created.push({url: input.url, active: input.active})
+        record(seq, input.url)
         return {id: seq, windowId: 7}
       },
-      get: async (id: number) => ({id, windowId: 7}),
+      get: async (id: number): Promise<TabState & {id: number; windowId: number}> => {
+        gets += 1
+        const url = urls.get(id)
+        if (!url) return {id, windowId: 7}
+
+        const committed = !neverCommit.has(id) && gets >= committedAfter
+        // 未提交时地址只在 pendingUrl 里，url 是空串——与真实 Chrome 一致。
+        return committed
+          ? {id, windowId: 7, url}
+          : {id, windowId: 7, url: '', pendingUrl: url}
+      },
       group: async (input: {tabIds: number[]}) => {
         grouped.push([...input.tabIds])
         return 100
@@ -211,7 +255,7 @@ function stubChrome(folderNode: BookmarkNode): {
     tabGroups: {update: async () => ({})}
   }
 
-  return {discarded, created, grouped}
+  return {discarded, created, grouped, get gets() { return gets }}
 }
 
 const threeTabs = (): BookmarkNode =>
@@ -219,6 +263,13 @@ const threeTabs = (): BookmarkNode =>
     folder('g1', '工作', [link('b1', 'https://a.com'), link('b2', 'https://b.com')]),
     link('b3', 'https://loose.com')
   ])
+
+/** 直接测 discardCommittedTabs 时用的预置标签（不走 create，所以得自己登记地址）。 */
+const existingTabs = [
+  {id: 1, url: 'https://a.com'},
+  {id: 2, url: 'https://b.com'},
+  {id: 3, url: 'https://loose.com'}
+]
 
 test('新窗口还原：活动标签保持加载，其余全部舍弃', async () => {
   const spy = stubChrome(threeTabs())
@@ -282,4 +333,99 @@ test('舍弃失败不影响已打开的标签，也不算进 discarded', async (
 
   assert.equal(result.opened, 3, '舍弃失败不该把已打开的标签算没')
   assert.equal(result.discarded, 1, '只有成功的那一枚算数')
+})
+
+/**
+ * 下面几条盯的是 2026-10-03 修掉的 bug：曾经在 `create()` 之后**立刻**舍弃，
+ * 而那时导航还没提交、没有可恢复的地址，标签会变成 about:blank。
+ */
+
+test('导航已提交的标签才会被舍弃', async () => {
+  const spy = stubChrome(threeTabs(), {existing: existingTabs})
+
+  const discarded = await discardCommittedTabs([1, 2, 3], {
+    keepLoadedTabId: 1,
+    timing: {pollMs: 1, timeoutMs: 100}
+  })
+
+  assert.equal(discarded, 2)
+  assert.deepEqual(spy.discarded, [2, 3])
+})
+
+test('未提交的标签一律不碰，等它提交后才舍弃', async () => {
+  const spy = stubChrome(threeTabs(), {existing: existingTabs, commitAfterPolls: 3})
+
+  const discarded = await discardCommittedTabs([2, 3], {
+    timing: {pollMs: 1, timeoutMs: 200}
+  })
+
+  assert.equal(discarded, 2, '轮询到提交后就该动手')
+  assert.deepEqual(spy.discarded, [2, 3])
+  assert.ok(spy.gets >= 4, `应当轮询过多次，实际只查了 ${spy.gets} 次`)
+})
+
+test('超时仍没提交就放弃舍弃——宁可留着加载，也不能弄成空白页', async () => {
+  const spy = stubChrome(threeTabs(), {existing: existingTabs, neverCommit: [2, 3]})
+
+  const discarded = await discardCommittedTabs([2, 3], {
+    timing: {pollMs: 1, timeoutMs: 20}
+  })
+
+  assert.equal(discarded, 0)
+  assert.deepEqual(spy.discarded, [], '一次 discard 都不该发出去')
+})
+
+test('只舍弃已提交的那部分，未提交的留着', async () => {
+  const spy = stubChrome(threeTabs(), {existing: existingTabs, neverCommit: [3]})
+
+  const discarded = await discardCommittedTabs([2, 3], {
+    timing: {pollMs: 1, timeoutMs: 20}
+  })
+
+  assert.equal(discarded, 1)
+  assert.deepEqual(spy.discarded, [2], '只动已提交的那枚')
+})
+
+test('活动标签即使已提交也不舍弃', async () => {
+  const spy = stubChrome(threeTabs(), {existing: existingTabs})
+
+  const discarded = await discardCommittedTabs([1, 2], {
+    keepLoadedTabId: 1,
+    timing: {pollMs: 1, timeoutMs: 50}
+  })
+
+  assert.equal(discarded, 1)
+  assert.ok(!spy.discarded.includes(1), '活动标签碰不得')
+})
+
+test('url 是空串、或只剩 pendingUrl 时都算未提交', async () => {
+  const spy = stubChrome(threeTabs(), {existing: existingTabs, commitAfterPolls: 99})
+
+  const discarded = await discardCommittedTabs([2], {timing: {pollMs: 1, timeoutMs: 15}})
+
+  assert.equal(discarded, 0, '有 pendingUrl、url 为空时不得舍弃')
+  assert.deepEqual(spy.discarded, [])
+})
+
+test('标签在轮询期间被关掉时跳过它，不抛错', async () => {
+  const spy = stubChrome(threeTabs(), {existing: existingTabs})
+  const chromeStub = (globalThis as Record<string, unknown>).chrome as {
+    tabs: {get: (id: number) => Promise<unknown>}
+  }
+  chromeStub.tabs.get = async (id: number) => {
+    if (id === 2) throw new Error('No tab with id: 2')
+    return {id, windowId: 7, url: 'https://b.com'}
+  }
+
+  const discarded = await discardCommittedTabs([2, 3], {timing: {pollMs: 1, timeoutMs: 50}})
+
+  assert.equal(discarded, 1, '只剩能查到的那些')
+  assert.deepEqual(spy.discarded, [3])
+})
+
+test('空列表直接返回 0，不发任何调用', async () => {
+  const spy = stubChrome(threeTabs(), {existing: existingTabs})
+
+  assert.equal(await discardCommittedTabs([]), 0)
+  assert.deepEqual(spy.discarded, [])
 })
