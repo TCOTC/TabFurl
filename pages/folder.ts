@@ -146,10 +146,7 @@ async function render(): Promise<void> {
     openWindowButton.disabled = true
     try {
       const settings = await loadSettings()
-      const result = await restoreFolder(folderId, {
-        target: settings.restoreTarget,
-        groupUngrouped: settings.groupUngrouped
-      })
+      const result = await restoreFolder(folderId, {target: settings.restoreTarget})
       status.className = 'status status--ok'
       status.textContent = `已打开 ${result.opened} 个标签页，创建 ${result.groups} 个分组`
     } catch (error) {

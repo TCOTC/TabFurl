@@ -30,14 +30,13 @@ test('返回的是默认设置的新副本，不会污染默认值', async () =>
 })
 
 test('存储里只有部分字段时与默认值合并', async () => {
-  store.settings = {archiveRootId: 'abc', groupUngrouped: true}
+  store.settings = {archiveRootId: 'abc', restoreTarget: 'currentWindow'}
 
   const settings = await loadSettings()
 
   assert.equal(settings.archiveRootId, 'abc')
-  assert.equal(settings.groupUngrouped, true)
+  assert.equal(settings.restoreTarget, 'currentWindow')
   assert.equal(settings.sessionNameMode, DEFAULT_SETTINGS.sessionNameMode)
-  assert.equal(settings.restoreTarget, DEFAULT_SETTINGS.restoreTarget)
   assert.equal(settings.archiveRootName, DEFAULT_SETTINGS.archiveRootName)
 })
 
@@ -51,11 +50,11 @@ test('saveSettings 写入约定的存储键', async () => {
 test('updateSettings 合并补丁并落盘', async () => {
   store.settings = {archiveRootId: 'root-1', restoreTarget: 'currentWindow'}
 
-  const next = await updateSettings({groupUngrouped: true})
+  const next = await updateSettings({sessionNameMode: 'datetimeSite'})
 
   assert.equal(next.archiveRootId, 'root-1', '未提及的字段必须保留')
   assert.equal(next.restoreTarget, 'currentWindow')
-  assert.equal(next.groupUngrouped, true)
+  assert.equal(next.sessionNameMode, 'datetimeSite')
   assert.deepEqual(store.settings, next, '返回值应与落盘内容一致')
 })
 

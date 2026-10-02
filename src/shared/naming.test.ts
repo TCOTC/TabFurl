@@ -2,13 +2,11 @@ import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {
   MAX_FOLDER_NAME_LENGTH,
-  UNGROUPED_FOLDER_NAME,
   dedupeName,
   formatSessionName,
   formatTimestamp,
   groupFolderName,
-  sanitizeFolderName,
-  ungroupedFolderName
+  sanitizeFolderName
 } from './naming'
 
 test('sanitizeFolderName 折叠连续空白并去掉首尾空白', () => {
@@ -66,10 +64,6 @@ test('groupFolderName 空标题时用颜色消歧', () => {
   assert.equal(groupFolderName({title: '   ', color: 'orange'}), '未命名分组（橙）')
   // 颜色缺失时也给出确定的名字，不留空文件夹名。
   assert.equal(groupFolderName({title: ''}), '未命名分组（无颜色）')
-})
-
-test('ungroupedFolderName 是固定名字', () => {
-  assert.equal(ungroupedFolderName(), UNGROUPED_FOLDER_NAME)
 })
 
 test('dedupeName 不冲突时原样返回', () => {

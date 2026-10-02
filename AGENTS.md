@@ -25,19 +25,26 @@
 ## 常用命令
 
 ```bash
-pnpm dev            # 开发模式
-pnpm build          # 构建 → dist/chrome/
+pnpm build          # 生产构建 → dist/chrome/（混淆）
+pnpm build:dev      # 开发用构建 → dist/chrome/（不混淆，权限同样干净）
 pnpm typecheck      # 必须通过；构建本身不做类型检查，且需先 build 生成 extension-env.d.ts
 pnpm test           # 单元测试（node:test，无额外依赖）
 pnpm verify         # 产物自检（需先 build）：权限、host 权限、入口文件、中文编码、测试文件泄漏
 pnpm icons          # 重新生成占位图标
 ```
 
-`pnpm dev` 有两个坑（2026-10-02 实测）：
+日常开发用 `pnpm build:dev`：权限与生产构建完全一致（所以 `pnpm verify` 照常通过），但不混淆，
+浏览器里报错时的堆栈是真实函数名。代价只是体积大一倍（都是本地产物，无所谓）。
 
-1. **它不启动你系统里的 Chrome**，而是用独立的 Chrome for Testing，首次需
-   `pnpm exec extension install chrome`（下载到 `%LOCALAPPDATA%\extension.js\browsers\chrome`）。
-   不装的话 `dev` 会报 `Chrome for Testing isn't installed`，浏览器起不来但 dev server 照样挂着。
+**没有保留 `dev` / `start` / `preview` 脚本**（2026-10-02 决定）。它们都要求先下载独立的
+Chrome for Testing（约 150 MB，`pnpm exec extension install chrome`），换来的是热重载与一套控制桥
+（`logs` / `open` / `reload` / `eval` / `storage`）。本项目不做自动化验收，于是换成「手动加载
+`dist/chrome` + 点扩展卡片的刷新」，省掉一个重依赖。哪天要做自动化了，命令随时可以加回来。
+
+需要时临时跑 `pnpm exec extension dev`，但要知道两件事（2026-10-02 实测）：
+
+1. **它不启动你系统里的 Chrome**，只用托管缓存里的 Chrome for Testing。没装时浏览器起不来，
+   而 dev server 会照常打印「ready」并继续挂着——只看这一行容易误判成功。
 2. **它会把 `dist/chrome` 覆盖成开发版产物**：清单里多出 `scripting` 与 `management` 权限，
    并写入 `extension-js-control.json`。此时 `pnpm verify` 必然报「权限与预期不一致」。
    所以 **`dev` 之后要再跑一次 `pnpm build`**，才能拿到可自检、可对外分发的干净产物。
@@ -82,6 +89,7 @@ tools/
 8. **同名不覆盖**：建文件夹前先用 `dedupeName()` 对同级已有名字去重。
 9. **样式**：所有颜色和间距走 `base.css` 的 CSS 变量，不写死色值；深色模式靠 `prefers-color-scheme`，不要单独维护两套。
 10. **测试只用 `node:test`**：不引入 vitest / jest / tsx 等框架。测试文件与实现同目录（`naming.test.ts`），`chrome.*` 靠给 `globalThis.chrome` 赋值来打桩，不给产品代码加依赖注入。
+11. **会话文件夹的直接子级必须按窗口顺序排列**：标签分组建子文件夹，未分组的标签建成散装书签插在原位，**不要**把它们收进「未分组」文件夹。两个实现是逆运算，改一处必须同步另一处：`capture.ts` 的 `planSessionChildren()` ↔ `restore.ts` 的 `planRestore()`（前者按 `TabSnapshot.index` 归并，后者按子级数组顺序还原）。
 
 ## 提交前自检
 

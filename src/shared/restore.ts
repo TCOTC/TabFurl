@@ -1,30 +1,41 @@
 import {getSubTree} from './bookmarks'
-import {UNGROUPED_FOLDER_NAME} from './naming'
 import type {BookmarkNode, RestoreOptions, RestoreResult} from './types'
 import {isInternalUrl} from './urls'
 
-interface PlannedGroup {
-  /** 空字符串表示「不建分组」。 */
+/**
+ * 会话文件夹的一个直接子级。
+ *
+ * `title` 非空是标签分组；空串是「这些标签不建分组」的散装书签（窗口里本来就没分组）。
+ * 数组顺序即书签树里的顺序，也就是原来窗口里的顺序。
+ */
+interface PlannedItem {
   title: string
   urls: string[]
-}
-
-interface PlannedRestore {
-  groups: PlannedGroup[]
-  skipped: number
 }
 
 /**
  * 只处理一层子文件夹，与「按子文件夹（一层）创建分组」的需求一致。
  * 更深的嵌套会被跳过并计入 skipped，不会静默丢书签。
+ *
+ * 散装书签保留在它们原来的位置上（相邻的合并成一项），所以还原出来的窗口
+ * 与保存时的标签顺序一致：未分组的标签不会被集中挪到末尾。
  */
-export function planRestore(folder: BookmarkNode, options: RestoreOptions): PlannedRestore {
+export function planRestore(folder: BookmarkNode): {items: PlannedItem[]; skipped: number} {
   const children = folder.children ?? []
-  const groups: PlannedGroup[] = []
+  const items: PlannedItem[] = []
   let skipped = 0
 
   for (const child of children) {
-    if (child.url) continue
+    if (child.url) {
+      if (isInternalUrl(child.url)) {
+        skipped++
+        continue
+      }
+      const previous = items.at(-1)
+      if (previous && previous.title === '') previous.urls.push(child.url)
+      else items.push({title: '', urls: [child.url]})
+      continue
+    }
 
     const urls: string[] = []
     for (const grandChild of child.children ?? []) {
@@ -38,32 +49,18 @@ export function planRestore(folder: BookmarkNode, options: RestoreOptions): Plan
       }
       urls.push(grandChild.url)
     }
-    if (urls.length > 0) groups.push({title: child.title, urls})
+    if (urls.length > 0) items.push({title: child.title, urls})
   }
 
-  // 会话文件夹顶层的散装书签（窗口里没有分组的那些）。
-  const looseUrls: string[] = []
-  for (const child of children) {
-    if (!child.url) continue
-    if (isInternalUrl(child.url)) {
-      skipped++
-      continue
-    }
-    looseUrls.push(child.url)
-  }
-  if (looseUrls.length > 0) {
-    groups.push({title: options.groupUngrouped ? UNGROUPED_FOLDER_NAME : '', urls: looseUrls})
-  }
-
-  return {groups, skipped}
+  return {items, skipped}
 }
 
-/** 按计划打开标签，返回每个分组拿到的 tabId。 */
+/** 按计划打开标签，返回每一项拿到的 tabId。 */
 async function openTabs(
-  planned: readonly PlannedGroup[],
+  planned: readonly PlannedItem[],
   target: RestoreOptions['target']
-): Promise<{created: {group: PlannedGroup; tabIds: number[]}[]; opened: number}> {
-  const created: {group: PlannedGroup; tabIds: number[]}[] = []
+): Promise<{created: {item: PlannedItem; tabIds: number[]}[]; opened: number}> {
+  const created: {item: PlannedItem; tabIds: number[]}[] = []
 
   // 「当前窗口」先取到 windowId，后续标签全部落在这里；
   // 「新窗口」则留空，由第一个标签顺手把窗口建出来，避免先开空窗口再补标签的闪烁。
@@ -74,10 +71,10 @@ async function openTabs(
 
   let opened = 0
 
-  for (const group of planned) {
+  for (const item of planned) {
     const tabIds: number[] = []
 
-    for (const url of group.urls) {
+    for (const url of item.urls) {
       if (windowId === undefined) {
         const newWindow = await chrome.windows.create({url, focused: true})
         if (!newWindow) throw new Error('无法创建新窗口')
@@ -96,7 +93,7 @@ async function openTabs(
       opened++
     }
 
-    created.push({group, tabIds})
+    created.push({item, tabIds})
   }
 
   return {created, opened}
@@ -110,30 +107,29 @@ function asNonEmptyTabIds(tabIds: readonly number[]): [number, ...number[]] {
   return tabIds as unknown as [number, ...number[]]
 }
 
-/** 建标签分组。 */
+/**
+ * 建标签分组。`title` 为空的项是散装标签，本来就不该有分组。
+ */
 async function applyGroups(
-  created: readonly {group: PlannedGroup; tabIds: number[]}[],
-  windowId: number | undefined,
-  options: RestoreOptions
+  created: readonly {item: PlannedItem; tabIds: number[]}[],
+  windowId: number | undefined
 ): Promise<number> {
   if (windowId === undefined) return 0
 
   let count = 0
-  for (const {group, tabIds} of created) {
-    if (tabIds.length === 0) continue
-    if (!group.title && !options.groupUngrouped) continue
+  for (const {item, tabIds} of created) {
+    if (tabIds.length === 0 || !item.title) continue
 
     try {
       const groupId = await chrome.tabs.group({
         tabIds: asNonEmptyTabIds(tabIds),
         createProperties: {windowId}
       })
-      const title = group.title || UNGROUPED_FOLDER_NAME
-      await chrome.tabGroups.update(groupId, {title})
+      await chrome.tabGroups.update(groupId, {title: item.title})
       count++
     } catch (error) {
       // 分组失败不该让整次还原失败：标签已经打开了。
-      console.error('[tabfurl] 创建标签分组失败', group.title, error)
+      console.error('[tabfurl] 创建标签分组失败', item.title, error)
     }
   }
   return count
@@ -147,15 +143,14 @@ export async function restoreFolder(
   const folder = await getSubTree(folderId)
   if (!folder) throw new Error('找不到该收藏文件夹，可能已被删除')
 
-  const planned = planRestore(folder, options)
-  const nonEmpty = planned.groups.filter((group) => group.urls.length > 0)
-  if (nonEmpty.length === 0) {
+  const planned = planRestore(folder)
+  if (planned.items.length === 0) {
     return {opened: 0, groups: 0, skipped: planned.skipped}
   }
 
-  const {created, opened} = await openTabs(nonEmpty, options.target)
+  const {created, opened} = await openTabs(planned.items, options.target)
   const windowId = await currentWindowId(created)
-  const groups = await applyGroups(created, windowId, options)
+  const groups = await applyGroups(created, windowId)
 
   return {opened, groups, skipped: planned.skipped}
 }

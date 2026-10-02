@@ -274,10 +274,7 @@ function SidebarApp(): void {
       let opened = 0
       let groups = 0
       for (const folderId of targets) {
-        const result = await restoreFolder(folderId, {
-          target: settings.restoreTarget,
-          groupUngrouped: settings.groupUngrouped
-        })
+        const result = await restoreFolder(folderId, {target: settings.restoreTarget})
         opened += result.opened
         groups += result.groups
       }

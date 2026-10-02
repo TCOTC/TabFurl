@@ -4,8 +4,7 @@ import {
   formatSessionName,
   formatTimestamp,
   groupFolderName,
-  sanitizeFolderName,
-  ungroupedFolderName
+  sanitizeFolderName
 } from './naming'
 import type {
   CaptureResult,
@@ -122,18 +121,52 @@ async function writeTabs(folderId: string, tabs: readonly TabSnapshot[]): Promis
   return written
 }
 
+/** 会话文件夹的直接子级：分组建成子文件夹，未分组的标签是散装书签。 */
+type SessionChild =
+  | {kind: 'group'; name: string; tabs: readonly TabSnapshot[]}
+  | {kind: 'tab'; tab: TabSnapshot}
+
+/**
+ * 按窗口顺序排列会话文件夹的子级。
+ *
+ * 分组的次序取组内第一个标签的 index；Chrome 的标签栏里同一分组的标签必定连续，
+ * 所以按 index 归并得到的就是窗口里「未分组段 / 分组 / 未分组段 …」的真实次序。
+ * 这样未分组的标签会留在原位，而不会被集中挑到末尾。
+ */
+function planSessionChildren(snapshot: WindowSnapshot): SessionChild[] {
+  const ordered: {index: number; child: SessionChild}[] = []
+
+  for (const bucket of snapshot.groups) {
+    const first = bucket.tabs[0]
+    if (!first) continue
+    ordered.push({
+      index: first.index,
+      child: {kind: 'group', name: groupFolderName(bucket), tabs: bucket.tabs}
+    })
+  }
+
+  for (const tab of snapshot.ungrouped) {
+    ordered.push({index: tab.index, child: {kind: 'tab', tab}})
+  }
+
+  // index 在窗口内唯一，按它排序即窗口顺序。
+  ordered.sort((a, b) => a.index - b.index)
+  return ordered.map((entry) => entry.child)
+}
+
 /**
  * 把当前窗口存成书签文件夹。
  *
  * 结构约定（详见 docs/design.md）：
  * ```
  * 标签页存档/
- *   2026-10-02 14:30/     ← 会话文件夹
+ *   2026-10-02 14_30/     ← 会话文件夹
  *     工作/               ← 标签分组
+ *     wikipedia.org       ← 窗口里没进分组的标签，散装书签
  *     阅读/
- *     未分组/             ← 窗口内没进分组的标签（仅当窗口存在分组时才有这一层）
  * ```
- * 窗口内一个分组都没有时省略桶层，标签直接放进会话文件夹。
+ * 会话文件夹的直接子级严格按窗口顺序排列。窗口里一个分组都没有时，结果就是
+ * 一列散装书签——不需要额外的「未分组」层，所以「保存 → 还原」始终对称。
  */
 export async function captureCurrentWindow(
   archiveRootId: string,
@@ -160,21 +193,17 @@ export async function captureCurrentWindow(
   let saved = 0
   let groups = 0
 
-  if (snapshot.groups.length === 0) {
-    saved += await writeTabs(sessionFolder.id, snapshot.ungrouped)
-  } else {
-    for (const bucket of snapshot.groups) {
-      const name = dedupeName(groupFolderName(bucket), await getChildTitles(sessionFolder.id))
-      const folder = await createFolder(sessionFolder.id, name)
-      groups++
-      saved += await writeTabs(folder.id, bucket.tabs)
+  for (const child of planSessionChildren(snapshot)) {
+    if (child.kind === 'tab') {
+      await createBookmark(sessionFolder.id, child.tab.title, child.tab.url)
+      saved++
+      continue
     }
 
-    if (snapshot.ungrouped.length > 0) {
-      const name = dedupeName(ungroupedFolderName(), await getChildTitles(sessionFolder.id))
-      const folder = await createFolder(sessionFolder.id, name)
-      saved += await writeTabs(folder.id, snapshot.ungrouped)
-    }
+    const name = dedupeName(child.name, await getChildTitles(sessionFolder.id))
+    const folder = await createFolder(sessionFolder.id, name)
+    groups++
+    saved += await writeTabs(folder.id, child.tabs)
   }
 
   return {

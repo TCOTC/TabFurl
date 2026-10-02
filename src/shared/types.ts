@@ -40,13 +40,18 @@ export interface TabGroupBucket {
   tabs: TabSnapshot[]
 }
 
-/** 一次窗口采集的结果。 */
+/**
+ * 一次窗口采集的结果。
+ *
+ * `groups` 与 `ungrouped` 分开只是为了调用方好取用：两者都带着窗口内的位置
+ * （`TabSnapshot.index`），按 `index` 归并就能还原标签在窗口里的真实先后。
+ */
 export interface WindowSnapshot {
   windowId: number
   capturedAt: number
-  /** 有分组的标签，按分组在窗口内的首次出现顺序。 */
+  /** 有分组的标签，按分组在窗口内的首次出现顺序；`tabs` 按 index 升序。 */
   groups: TabGroupBucket[]
-  /** 窗口内未分组的标签。 */
+  /** 窗口内未分组的标签，按 index 升序。 */
   ungrouped: TabSnapshot[]
   /** 因是浏览器内部页面而跳过的数量。 */
   skipped: number
@@ -65,8 +70,6 @@ export interface CaptureResult {
 export interface RestoreOptions {
   /** 打开的标签放到新窗口还是当前窗口。 */
   target: 'newWindow' | 'currentWindow'
-  /** 顶层散装书签是否也建一个「未分组」分组。 */
-  groupUngrouped: boolean
 }
 
 export interface RestoreResult {
@@ -98,7 +101,6 @@ export interface Settings {
   archiveRootName: string
   sessionNameMode: SessionNameMode
   restoreTarget: RestoreOptions['target']
-  groupUngrouped: boolean
   /** 最近一次保存创建的会话文件夹 id，用于撤销。 */
   lastSessionFolderId?: string
 }
@@ -107,6 +109,5 @@ export const DEFAULT_SETTINGS: Settings = {
   archiveRootId: '',
   archiveRootName: '标签页存档',
   sessionNameMode: 'datetime',
-  restoreTarget: 'newWindow',
-  groupUngrouped: false
+  restoreTarget: 'newWindow'
 }

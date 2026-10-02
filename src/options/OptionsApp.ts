@@ -49,12 +49,9 @@ const ROOT_TEMPLATE = `
           <span>当前窗口</span>
         </label>
       </div>
-      <label class="check">
-        <input type="checkbox" id="group-ungrouped" />
-        <span>为未分组书签也创建一个「未分组」标签分组</span>
-      </label>
       <p class="muted">
-        还原时按存档文件夹的子文件夹（一层）创建标签分组。更深的嵌套会被跳过，统计里会给出数量。
+        还原时按存档文件夹的子文件夹（一层）创建标签分组；文件夹里没进子文件夹的散装书签，
+        会按它们原来的位置还原成未分组的标签。更深的嵌套会被跳过，统计里会给出数量。
       </p>
     </section>
 
@@ -80,7 +77,6 @@ function OptionsApp(): void {
   const rootNameInput = q<HTMLInputElement>(root, '#root-name')
   const rootStatus = q<HTMLParagraphElement>(root, '#root-status')
   const rootCreateButton = q<HTMLButtonElement>(root, '#root-create-btn')
-  const groupUngroupedInput = q<HTMLInputElement>(root, '#group-ungrouped')
   const saveButton = q<HTMLButtonElement>(root, '#save-btn')
   const resetButton = q<HTMLButtonElement>(root, '#reset-btn')
   const saveStatus = q<HTMLParagraphElement>(root, '#save-status')
@@ -121,8 +117,7 @@ function OptionsApp(): void {
         radioValue('session-name-mode') === 'datetimeSite' ? 'datetimeSite' : 'datetime',
       restoreTarget: radioValue('restore-target') === 'currentWindow'
         ? 'currentWindow'
-        : 'newWindow',
-      groupUngrouped: groupUngroupedInput.checked
+        : 'newWindow'
     }
   }
 
@@ -130,7 +125,6 @@ function OptionsApp(): void {
     rootNameInput.value = settings.archiveRootName
     setRadio('session-name-mode', settings.sessionNameMode)
     setRadio('restore-target', settings.restoreTarget)
-    groupUngroupedInput.checked = settings.groupUngrouped
     void describeRoot()
   }
 

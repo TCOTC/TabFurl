@@ -1,7 +1,6 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {captureCurrentWindow, snapshotCurrentWindow} from './capture'
-import {UNGROUPED_FOLDER_NAME} from './naming'
 
 interface StubTab {
   id: number
@@ -74,6 +73,14 @@ function stubChrome(
 const foldersOf = (created: CreatedNode[]) => created.filter((node) => node.url === undefined)
 const linksOf = (created: CreatedNode[]) => created.filter((node) => node.url !== undefined)
 
+/** 会话文件夹的直接子级，按写入顺序。 */
+const childrenOf = (created: CreatedNode[], sessionId: string) =>
+  created.filter((node) => node.parentId === sessionId)
+
+/** 把子级压成可读的序列，便于断言穿插顺序。 */
+const shape = (children: CreatedNode[]) =>
+  children.map((node) => (node.url ? `书签:${node.url}` : `文件夹:${node.title}`))
+
 const plainTab = (id: number, url: string, extra: Partial<StubTab> = {}): StubTab => ({
   id,
   windowId: 7,
@@ -130,7 +137,7 @@ test('一个标签都存不了时不留下空文件夹', async () => {
   assert.equal(created.length, 0, '不应产生任何书签写入')
 })
 
-test('窗口内没有分组时省略桶层，书签直接放进会话文件夹', async () => {
+test('窗口内没有分组时，书签直接放进会话文件夹', async () => {
   const {created} = stubChrome([plainTab(1, 'https://a.com'), plainTab(2, 'https://b.com')])
 
   const result = await captureCurrentWindow(ARCHIVE_ROOT, 'datetime')
@@ -142,41 +149,71 @@ test('窗口内没有分组时省略桶层，书签直接放进会话文件夹',
   // 所以真实写入书签的名字是 `2026-10-02 21_44`，而不是设计文档示例里的 `21:44`。
   assert.match(folders[0].title, /^\d{4}-\d{2}-\d{2} \d{2}_\d{2}$/)
 
-  const links = linksOf(created)
-  assert.equal(links.length, 2)
-  assert.ok(links.every((node) => node.parentId === folders[0].id))
+  assert.deepEqual(shape(childrenOf(created, result.folderId)), [
+    '书签:https://a.com',
+    '书签:https://b.com'
+  ])
 
   assert.equal(result.saved, 2)
   assert.equal(result.groups, 0)
   assert.equal(result.folderId, folders[0].id)
 })
 
-test('有分组时建桶层，未分组标签进「未分组」文件夹', async () => {
+test('未分组的标签按窗口顺序穿插在分组之间，不单独建文件夹', async () => {
   const {created} = stubChrome(
     [
-      plainTab(1, 'https://a.com', {groupId: 10}),
-      plainTab(2, 'https://b.com', {groupId: 10}),
-      plainTab(3, 'https://c.com')
+      plainTab(1, 'https://a1.com', {groupId: 10}),
+      plainTab(2, 'https://a2.com', {groupId: 10}),
+      plainTab(3, 'https://loose-1.com'),
+      plainTab(4, 'https://b1.com', {groupId: 11}),
+      plainTab(5, 'https://loose-2.com')
+    ],
+    {groups: {10: {title: '工作', color: 'blue'}, 11: {title: '阅读', color: 'red'}}}
+  )
+
+  const result = await captureCurrentWindow(ARCHIVE_ROOT, 'datetime')
+
+  const children = childrenOf(created, result.folderId)
+  assert.deepEqual(
+    shape(children),
+    [
+      '文件夹:工作',
+      '书签:https://loose-1.com',
+      '文件夹:阅读',
+      '书签:https://loose-2.com'
+    ],
+    '会话文件夹的子级必须按窗口顺序穿插'
+  )
+
+  // 不再有「未分组」文件夹。
+  assert.ok(!children.some((node) => node.title === '未分组'))
+
+  // 分组内部的标签顺序与窗口一致。
+  const work = children.find((node) => node.title === '工作')
+  assert.deepEqual(shape(childrenOf(created, work?.id ?? '')), [
+    '书签:https://a1.com',
+    '书签:https://a2.com'
+  ])
+
+  assert.equal(result.saved, 5)
+  assert.equal(result.groups, 2)
+})
+
+test('窗口开头的未分组标签排在第一个分组前面', async () => {
+  const {created} = stubChrome(
+    [
+      plainTab(1, 'https://first.com'),
+      plainTab(2, 'https://a.com', {groupId: 10})
     ],
     {groups: {10: {title: '工作', color: 'blue'}}}
   )
 
   const result = await captureCurrentWindow(ARCHIVE_ROOT, 'datetime')
 
-  const folders = foldersOf(created)
-  assert.equal(folders.length, 3, '会话 + 工作 + 未分组')
-
-  const work = folders.find((node) => node.title === '工作')
-  const ungrouped = folders.find((node) => node.title === UNGROUPED_FOLDER_NAME)
-  assert.ok(work && ungrouped, '两个桶都要建出来')
-
-  const links = linksOf(created)
-  assert.equal(links.filter((node) => node.parentId === work.id).length, 2)
-  assert.equal(links.filter((node) => node.parentId === ungrouped.id).length, 1)
-
-  assert.equal(result.saved, 3)
-  // groups 只数真正的标签分组，不含「未分组」桶（它是收纳层，不是用户建的分组）。
-  assert.equal(result.groups, 1)
+  assert.deepEqual(shape(childrenOf(created, result.folderId)), [
+    '书签:https://first.com',
+    '文件夹:工作'
+  ])
 })
 
 test('两个同名标签分组不互相覆盖，第二个追加序号', async () => {

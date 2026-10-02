@@ -1,8 +1,5 @@
 import type {TabGroupBucket, TabGroupColor} from './types'
 
-/** 存档里用来收纳「窗口内未分组标签」的文件夹名。 */
-export const UNGROUPED_FOLDER_NAME = '未分组'
-
 /** 文件夹名最大长度。浏览器没有硬限制，截断只是为了列表和导出好看。 */
 export const MAX_FOLDER_NAME_LENGTH = 100
 
@@ -78,11 +75,6 @@ export function groupFolderName(bucket: Pick<TabGroupBucket, 'title' | 'color'>)
 
   const colorLabel = bucket.color ? GROUP_COLOR_LABELS[bucket.color] : '无颜色'
   return sanitizeFolderName(`${UNNAMED_GROUP_NAME}（${colorLabel}）`, UNNAMED_GROUP_NAME)
-}
-
-/** 未分组桶的文件夹名。 */
-export function ungroupedFolderName(): string {
-  return sanitizeFolderName(UNGROUPED_FOLDER_NAME, UNGROUPED_FOLDER_NAME)
 }
 
 /** 同级重名时追加 ` (2)`、` (3)`……绝不覆盖已有文件夹。 */

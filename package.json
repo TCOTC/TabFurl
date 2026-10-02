@@ -6,10 +6,8 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev": "extension dev",
-    "start": "extension start",
-    "preview": "extension preview",
     "build": "extension build",
+    "build:dev": "extension build --mode development",
     "typecheck": "tsc --noEmit",
     "test": "node --import ./tools/ts-hooks.mjs --test",
     "verify": "node tools/verify-build.mjs",
