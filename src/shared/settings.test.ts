@@ -66,9 +66,9 @@ test('updateSettings 可以写入撤销用的 lastSessionFolderId', async () => 
   assert.equal(cleared.lastSessionFolderId, undefined)
 })
 
-test('已知契约：loadSettings 不校验存储里的取值', async () => {
-  // 写入方必须保证合法（设置页只写联合类型里的值）。
-  // 这里锁住当前行为：改 storage 不会被静默纠正，读取方需要容忍脏值。
+test('loadSettings 原样透传存储里的值，不做校验', async () => {
+  // 写入方必须保证合法（设置页只写联合类型里的值）；读取方直接信任存储，
+  // 不引入「纠正脏值」这类逻辑。
   store.settings = {sessionNameMode: 'nonsense'}
 
   const settings = await loadSettings()

@@ -20,11 +20,10 @@ const ROOT_TEMPLATE = `
         <button type="button" class="btn btn--ghost" id="root-refresh-btn">重新读取书签栏</button>
       </div>
       <p class="muted">
-        存档直接写进选中的文件夹，不再额外建一层；扩展不会自己建文件夹，也不往「其他书签」里写东西。
+        存档直接写进选中的文件夹，不会再包一层。扩展不会自己建文件夹，也不往「其他书签」里写东西。
         它下面的每个子文件夹都会被当成一次存档，所以最好专为它建一个文件夹。
         列表里没有合适的选项时，先在书签管理器里于「书签栏」下新建一个，再点「重新读取书签栏」。
-      </p>
-    </section>
+      </p>    </section>
 
     <section class="card">
       <h2 class="panel__title">会话文件夹命名</h2>
@@ -118,39 +117,19 @@ function OptionsApp(): void {
     return [barTitle, ...folder.path, folder.title].join(' / ')
   }
 
-  /**
-   * 用当前存档根重建下拉选项。
-   *
-   * 旧版本把存档根建在「其他书签」下，那里不在候选范围内；这种遗留 id 会额外插一项
-   * 并显示它的真实路径，免得下拉框静默地显示成另一个文件夹。
-   */
+  /** 用书签栏重建下拉选项。存档根只能是这份候选列表里的一项。 */
   async function refreshRootOptions(): Promise<void> {
     const {barTitle: title, folders} = await listArchiveRootCandidates()
     barTitle = title
 
-    const options = folders.map((folder, index) => ({
-      id: folder.id,
-      label: rootOptionLabel(folder, index)
-    }))
-
-    const current = settings.archiveRootId
-    if (current && !options.some((option) => option.id === current) && (await getNode(current))) {
-      options.unshift({
-        id: current,
-        label: `${(await getNodePath(current)).join(' / ')}（不在书签栏内）`
-      })
-    }
-
     rootSelect.innerHTML = ''
-    for (const option of options) {
+    for (const [index, folder] of folders.entries()) {
       const element = document.createElement('option')
-      element.value = option.id
-      element.textContent = option.label
+      element.value = folder.id
+      element.textContent = rootOptionLabel(folder, index)
       rootSelect.append(element)
     }
-    if (current && options.some((option) => option.id === current)) {
-      rootSelect.value = current
-    }
+    rootSelect.value = settings.archiveRootId
   }
 
   function readForm(): Settings {
@@ -183,7 +162,7 @@ function OptionsApp(): void {
     void showRoot()
   }
 
-  // 存档位置是单独一次选择，选中就落盘；「保存设置」只管名字与还原行为。
+  // 存档位置是单独一次选择，选中就落盘；「保存设置」只管会话命名与还原行为。
   rootSelect.addEventListener('change', async () => {
     const next = await updateSettings({archiveRootId: rootSelect.value})
     settings = {...settings, archiveRootId: next.archiveRootId}
