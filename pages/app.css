@@ -138,6 +138,8 @@
 /* ———————————————— 存档侧：会话树 ———————————————— */
 
 .tree {
+  --tree-caret: 22px;
+  --tree-caret-inline: 8px;
   display: flex;
   flex-direction: column;
   margin: 0;
@@ -157,7 +159,8 @@
 .tree__row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  /* 与子级缩进用的是同一个变量，两者必须一致（见 .tree__children）。 */
+  gap: var(--tree-caret-inline);
   padding: 5px 8px;
 }
 
@@ -177,15 +180,16 @@
 
 .tree__caret {
   flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
+  width: var(--tree-caret);
+  height: var(--tree-caret);
   padding: 0;
   border: 0;
   border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
+  /* 三角形字形本身就比字身小，所以字号要给得比「看起来想要的大小」再大一点。 */
   font-family: inherit;
-  font-size: 11px;
+  font-size: 16px;
   line-height: 1;
   cursor: pointer;
 }
@@ -214,9 +218,13 @@
   gap: 2px;
 }
 
+/*
+ * 子级缩进 = 折叠按钮宽 + 行内间距，这样子级的勾选框正好与父级的勾选框左对齐。
+ * 必须用 calc 而不是写死数字：按钮一改尺寸，写死的缩进就会悄悄错位。
+ */
 .tree__children {
   margin: 0;
-  padding: 0 0 4px 26px;
+  padding: 0 0 4px calc(var(--tree-caret) + var(--tree-caret-inline));
   list-style: none;
 }
 
