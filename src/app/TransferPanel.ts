@@ -43,7 +43,7 @@ import {
   type Panel
 } from './dom'
 import {openBookmarkDialog} from './BookmarkDialog'
-import {FOLDER_ICON, OPEN_MANAGER_ICON, PIN_ICON, REFRESH_ICON, VERT_LINE_ICON, plusIcon} from './icons'
+import {FOLDER_ICON, CHEVRON_ICON, OPEN_MANAGER_ICON, PIN_ICON, REFRESH_ICON, VERT_LINE_ICON, plusIcon} from './icons'
 
 /** Chrome 本地 favicon 缓存端点：读缓存、不联网。 */
 const FAVICON_BASE = chrome.runtime.getURL('_favicon/')
@@ -77,7 +77,16 @@ type WindowDrop =
   | {kind: 'end'; groupId?: number}
 
 /** 右栏的落点。`into` 进某个子文件夹，`here` 插到当前这一层的某个下标。 */
-type ArchiveDrop = {kind: 'into'; folderId: string} | {kind: 'here'; index: number}
+type ArchiveDrop =
+  | {kind: 'into'; folderId: string}
+  /*
+   * `parentId` 是**落点所在的那一层**，而 `index` 是它在这一层里的下标。
+   *
+   * 多了这一项才能支持行内展开：以前右栏一次只显示一层，所以「插到下标 N」永远指当前层；
+   * 现在展开的子级也在同一份清单里，没带父 id 就会把「插到子文件夹里第 2 行」当成
+   * 「插到当前层第 2 行」——它会默默插到另一个地方去。
+   */
+  | {kind: 'here'; parentId: string; index: number}
 
 /**
  * 中间按钮上的计数。
@@ -347,7 +356,12 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    * 而「上一层」是 O(1) 的退路，缩进不是。
    */
   let viewFolderId = ''
-  /** 当前展示的文件夹从树根到自身的完整路径（含自身），用于面包屑与「上一层」。 */
+  /**
+   * 当前展示的文件夹从树根到自身的完整路径（含自身），用于面包屑与「上一层」。
+   *
+   * 与 `expandedIds` 是**两件事**：这里是「我站在哪一层」，那里是「一眼多看了几层」。
+   *  Finder 的列表视图也是两者并存（清单里可以推开子文件夹，同时自己在某一层）。
+   */
   let viewPath: {id: string; title: string}[] = []
   /**
    * 面包屑上一次渲染用的签名。
@@ -358,6 +372,27 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   let lastPathSignature: string | undefined
   let windowChildren: WindowChild[] = []
   let archiveChildren: BookmarkNode[] = []
+
+  /**
+   * 已经在一行行里展开的文件夹 id（Finder 那样就地推开，与「进入」是两件事）。
+   *
+   * **不落盘**：它是一次浏览过程中的临时视图状态，不是偏好。换一层（`navigateTo`）会清空。
+   */
+  const expandedIds = new Set<string>()
+
+  /**
+   * 已载入节点的索引：当前层 + 它下面**所有后代**。
+   *
+   * 为什么可以先建一张全量索引：`getSubTree()` 本来就把整棵子树递归读进来了，
+   * 所以「展开某一层」不需要再去读一次——它要的那些节点已经在手上（展开是纯渲染状态，零 IPC）。
+   *
+   * 为什么必须有这张索引：展开之后行不再只属于当前层，而下面这些动作都只认识 id——
+   * 改名、删除、打开、转换记号、弹窗改书签、勾选框三态的回填。以前它们都在
+   * `archiveChildren` 里找，那种写法在有了后代之后就找不到了。
+   */
+  let nodeIndex = new Map<string, BookmarkNode>()
+  /** id → 父 id。删掉一个节点后把它的展开状态收掉、不让把文件夹拖进自己的子孙里，都靠它。 */
+  let parentById = new Map<string, string>()
   /**
    * 左栏上一次渲染用的签名。
    *
@@ -592,7 +627,21 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    * 而小一号的字与一行的限制能把绝大多数网址完整装下。真的过长时仍会省略，
    * 那时 `title` 里还有完整的一份。
    */
-  function archiveBookmarkRow(bookmark: BookmarkNode): string {
+  /**
+   * 右栏的子级列表（递归）。
+   *
+   * `parentId` 会写进每一行的 `data-parent-id`：拖拽落点靠它算「插进哪一层的第几格」。
+   * 展开的那一层直接在同一份清单里接下去渲染，而不换页——所以缩进栈是**就地**长的。
+   */
+  function archiveRows(children: readonly BookmarkNode[], parentId: string): string {
+    return children
+      .map((child) =>
+        child.url ? archiveBookmarkRow(child, parentId) : archiveFolderRow(child, parentId)
+      )
+      .join('')
+  }
+
+  function archiveBookmarkRow(bookmark: BookmarkNode, parentId: string): string {
     const kind = separatorKind(bookmark.url)
     if (kind) {
       const isRenaming = renaming?.id === bookmark.id
@@ -609,6 +658,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       // 而按钮必须在这条线**右边**——用伪元素就只能得到「线在按钮右边」那种坏排布。
       return `
         <li class="marker marker--${kind}" draggable="true" data-drop-row="separator"
+            data-parent-id="${escapeHtml(parentId)}"
             data-drag-separator="${escapeHtml(bookmark.id)}">
           <span class="marker__slot" aria-hidden="true"></span>
           ${
@@ -650,6 +700,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
     return `
       <li class="item leaf" data-row data-drop-row="bookmark" draggable="true"
+          data-parent-id="${escapeHtml(parentId)}"
           data-drag-bookmark="${escapeHtml(bookmark.id)}"
           data-bookmark-url="${escapeHtml(url)}">
         <input type="checkbox" data-archive-item="${escapeHtml(bookmark.id)}" />
@@ -673,21 +724,17 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   /**
-   * 一个子文件夹行。
+   * 一个子文件夹行。它同时支持两种「往里看」的方式，两者是两码事：
    *
-   * 它是**可以进去的一层**，不是可展开的分组：双击这一行（或点「进入」）把它变成当前展示的文件夹，
-   * `↑ 上一层` 与面包屑负责往回走。这样层级再深也不会把面板撑成一根越来越长的缩进链。
+   * - **双击这一行（或点「进入」）= 进这一层**：把它变成当前展示的文件夹，`viewFolderId` 跟过去，
+   *   面包屑负责往回走。也就是说「我现在就在这一层干活」（往它里面存东西、接着往下看）。
+   * - **点左侧那枚方块 = 就地展开**（Finder 的列表视图那样）：子级直接推开在下面，换页不离开。
+   *   适合「我只想看一眼里面有什么、不想丢掉手上的上下文」（比如往父层存东西时先看看里面）。
+   *   方块平时是文件夹图标，悬停 / 聚焦时换成折叠三角（见 `icons.ts`）。
    *
-   * 勾选框仍然是「这一层里的书签全都要 / 全不要」的三态，与 `restoreFolder` 的口径一致
-   * （它只处理一层：子文件夹建分组，散装书签不建分组）。所以**进不进去与勾不勾它是两件事**——
-   * 勾上是「打开它里面的书签」，进去是「往它里面存东西 / 接着往下看」。
-   *
-   * **在书签树的根上时不给「改名 / 删除」**：那三个子级（书签栏 / 其他书签 / 移动设备书签）
-   * 是 Chrome 的固定文件夹，两个动作都会被浏览器拒绝——管理器的 `canEditNode()`
-   * 也是这么判的（根的子级一律不可编辑）。不给按钮，比给了之后报错好；
-   * 「进入」照旧，因为它们里面照样可以看。
+   * 那两个计数仍是**直属**的，没有因为能展开就改成递归——口径与「打开（N）」、勾选框保持一致（见下）。
    */
-  function archiveFolderRow(folder: BookmarkNode): string {
+  function archiveFolderRow(folder: BookmarkNode, parentId: string): string {
     // 两个计数都保持**直属**，而且只算真书签（分隔线不是书签，算进去会与文件管理器的直觉不符）。
     //
     // 「直属」而不是递归到后代，是为了让这一行上的三个数字**同一口径**：
@@ -695,11 +742,15 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     // 三者一致，才能一眼看出「勾上它、点打开，会开几枚标签页」——
     // 递归数字（例如 312）跟着的却是一个只能勾 18 条的勾选框，反而让人以为勾了会开 312 个。
     // （递归计数不要钱：`getSubTree()` 本来就把整棵子树读进来了，纯内存遍历实测 0.4ms/万条。）
+    //
+    // 所以**展开也不改计数**：展开只是多看到几行，这一行的勾选框、副文案与「打开（N）」
+    // 说的还是「这一层」。
     const children = folder.children ?? []
     const bookmarks = realBookmarks(children)
     const folderCount = children.filter((child) => !child.url).length
     const isRenaming = renaming?.id === folder.id
     const editable = !atTreeRoot()
+    const expanded = expandedIds.has(folder.id)
 
     const title = isRenaming
       ? `<input type="text" class="input input--rename" draggable="false"
@@ -722,12 +773,24 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       ? ''
       : `<span class="tree__actions">${enterButton}${editButtons}</span>`
 
+    const kids = expanded
+      ? `<ul class="kids kids--archive">${
+          children.length === 0
+            ? '<li class="kids__empty">这个文件夹是空的</li>'
+            : archiveRows(children, folder.id)
+        }</ul>`
+      : ''
+
     return `
-      <li class="group" data-row data-drop-row="folder" data-drop-folder="${escapeHtml(folder.id)}"
-          data-enter-folder="${escapeHtml(folder.id)}">
-        <div class="item group__head">
+      <li class="group${expanded ? ' is-expanded' : ''}" data-row data-drop-row="folder"
+          data-parent-id="${escapeHtml(parentId)}"
+          data-drop-folder="${escapeHtml(folder.id)}">
+        <div class="item group__head" data-enter-folder="${escapeHtml(folder.id)}">
           <input type="checkbox" data-archive-item="${escapeHtml(folder.id)}" />
-          <span class="folder-tile" aria-hidden="true">${FOLDER_ICON}</span>
+          <button type="button" class="folder-tile" data-toggle-folder="${escapeHtml(folder.id)}"
+                  aria-expanded="${expanded}"
+                  title="${expanded ? '收起这一层' : '就地展开这一层（不换页）'}"
+                  aria-label="${expanded ? '收起' : '展开'}${escapeHtml(folder.title)}">${FOLDER_ICON}${CHEVRON_ICON}</button>
           <span class="item__main item__main--row" draggable="true"
                 data-drag-folder="${escapeHtml(folder.id)}" title="双击进入这一层">
             ${title}
@@ -735,6 +798,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
           </span>
           ${actions}
         </div>
+        ${kids}
       </li>
     `
   }
@@ -825,9 +889,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       return
     }
 
-    archiveList.innerHTML = archiveChildren
-      .map((child) => (child.url ? archiveBookmarkRow(child) : archiveFolderRow(child)))
-      .join('')
+    archiveList.innerHTML = archiveRows(archiveChildren, viewFolderId)
 
     syncArchiveStates()
   }
@@ -859,7 +921,9 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     for (const input of archiveList.querySelectorAll<HTMLInputElement>('[data-archive-item]')) {
       const id = input.dataset.archiveItem
       if (!id) continue
-      const folder = archiveChildren.find((child) => child.id === id && !child.url)
+      // 查找走索引而不是 `archiveChildren`：展开之后，勾选框可能属于**后代**里的某一层。
+      const node = nodeIndex.get(id)
+      const folder = node && !node.url ? node : undefined
       if (!folder) {
         input.checked = !archiveExcluded.has(id)
         continue
@@ -922,9 +986,11 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     if (now - lastNavigationAt < NAVIGATION_GUARD_MS) return
     lastNavigationAt = now
 
-    // 换层时把行内编辑状态丢掉：那些控件已经不在眼前了。
+    // 换层时把行内编辑状态与展开状态都丢掉：那些行已经不在眼前了。
+    // 展开状态**不跟着走**是为了不让它越攒越多——一个层的展开与否只对那一层的浏览有意义。
     renaming = undefined
     pendingDeleteId = undefined
+    expandedIds.clear()
     viewFolderId = folderId
     await refresh()
   }
@@ -1063,6 +1129,23 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    */
   function applyArchive(folder: BookmarkNode | undefined): void {
     archiveChildren = folder?.children ?? []
+
+    // 重建索引：当前层 + 所有后代。展开某一层不需要再读一次书签树（数据已经在手上，
+    // 因为 `getSubTree()` 本来就是递归的），这里重建的只是查找表。
+    nodeIndex = new Map()
+    parentById = new Map()
+    const indexTree = (nodes: readonly BookmarkNode[]): void => {
+      for (const node of nodes) {
+        nodeIndex.set(node.id, node)
+        for (const child of node.children ?? []) parentById.set(child.id, node.id)
+        if (node.children) indexTree(node.children)
+      }
+    }
+    indexTree(archiveChildren)
+
+    // 展开集只保留还看得见的那些：删掉一个文件夹之后再刷新，它的 id 留在集合里没害处，
+    // 但集合没理由越攒越大。
+    for (const id of [...expandedIds]) if (!nodeIndex.has(id)) expandedIds.delete(id)
 
     const alive = new Set(archiveBookmarkIds())
     for (const id of alive) {
@@ -1285,10 +1368,27 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   /**
-   * 右栏的落点：进某个文件夹，或插到当前这一层的某个位置。
+   * 某一层里的行（同一个 `data-parent-id`），文档顺序即该层顺序。
+   *
+   * 不能用 `archiveList.children`：行内展开之后，子级的行不再挂在 `archiveList` 下面了。
+   */
+  function siblingRows(parentId: string): HTMLElement[] {
+    return [...archiveList.querySelectorAll<HTMLElement>('[data-parent-id]')].filter(
+      (row) => row.dataset.parentId === parentId
+    )
+  }
+
+  /**
+   * 右栏的落点：进某个文件夹，或插到某一层的某个位置。
    *
    * 三类行（文件夹 / 书签 / 分隔线）都是可锚定的——分隔线虽然只是个记号，
    * 但用户可以把它拖到任意两条之间，所以它不是特殊行。
+   *
+   * 两处与行内展开有关的细节：
+   *
+   * - **三分法要量 `.group__head` 而不是整个 `<li>`**：展开的那一行把子级也包在 `<li>` 里，
+   *   量整个 `li` 的话「中间 = 进去」会变成「在整棵展开块的正中间才算进去」，高度差几倍。
+   * - **下标要按「同一层」算**，所以先看这一行的 `data-parent-id`。
    */
   function archiveDropSpot(event: DragEvent): ArchiveDrop | undefined {
     const target = event.target as HTMLElement
@@ -1297,11 +1397,13 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     )
     if (!row) return undefined
 
-    const index = [...archiveList.children].indexOf(row)
+    const parentId = row.dataset.parentId ?? viewFolderId
     const isFolder = row.dataset.dropRow === 'folder'
-    const spot = spotIn(row, event.clientY, isFolder)
+    const head = isFolder ? row.querySelector<HTMLElement>('.group__head') ?? row : row
+    const spot = spotIn(head, event.clientY, isFolder)
     if (isFolder && spot === 'into') return {kind: 'into', folderId: row.dataset.dropFolder ?? ''}
-    return {kind: 'here', index: spot === 'after' ? index + 1 : index}
+    const index = siblingRows(parentId).indexOf(row)
+    return {kind: 'here', parentId, index: spot === 'after' ? index + 1 : index}
   }
 
   /**
@@ -1354,14 +1456,25 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     if (toArchive && fromArchive) {
       // 挪一条收藏夹条目：与左栏同一套「行内三分法」。
       const spot = archiveDropSpot(event)
+      if (dragging && spot && !canDropAt(dragging, dropTargetId(spot))) {
+        /*
+         * 拖到自己或自己的子孙里：**整份拖拽直接拒收**。
+         *
+         * `dropEffect = 'none'` 不只是换个光标：按规范，拖拽的操作一旦是 none，
+         * 浏览器连 `drop` 事件都不会派发。所以这个落点真的收不了东西。
+         * 不这么做的话，用户会看到一条提示线、松手却什么都没发生。
+         */
+        event.dataTransfer.dropEffect = 'none'
+        return
+      }
       const folderRow = (event.target as HTMLElement).closest<HTMLElement>('[data-drop-row="folder"]')
       if (spot?.kind === 'into' && folderRow) {
         folderRow.classList.add('is-drop-active')
         return
       }
       if (spot?.kind === 'here') {
-        const rows = [...archiveList.children]
-        // 插到这一层末尾时，线画在最后一行的下缘。
+        // 插到这一层的末尾时，线画在最后那一行的下缘。
+        const rows = siblingRows(spot.parentId)
         const anchor = rows[Math.min(spot.index, rows.length - 1)]
         if (anchor) {
           anchor.classList.add(spot.index >= rows.length ? 'is-drop-after' : 'is-drop-before')
@@ -1571,7 +1684,12 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     spot: ArchiveDrop | undefined
   ): Promise<void> {
     if (busy || !canWrite()) return
-    if (spot?.kind === 'into' && spot.folderId === payload.id) return
+    if (spot && !canDropAt(payload, dropTargetId(spot))) {
+      // 兜底：正常路径上 `dragover` 已经把 dropEffect 置成 none、drop 不会派发，
+      // 但万一走到了这里，绝不能报「已调整收藏夹顺序」——那是假话，实际什么都没做。
+      setStatus(status, '不能把文件夹挪进它自己里面。', 'error')
+      return
+    }
 
     // **不置灰按钮**：`busy` 只是防重入（上面的守卫），而这一步几乎是瞬时的。
     // 一旦在这里调 `updateButtons()`，中间那排按钮会先变灰再恢复——用户看到的就是「按钮闪一下」。
@@ -1583,7 +1701,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
         await chrome.bookmarks.move(payload.id, {parentId: spot.folderId})
       } else {
         await chrome.bookmarks.move(payload.id, {
-          parentId: viewFolderId,
+          parentId: spot?.kind === 'here' ? spot.parentId : viewFolderId,
           index: spot?.kind === 'here' ? spot.index : archiveChildren.length
         })
       }
@@ -1594,6 +1712,50 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       busy = false
       await events.archiveChanged()
     }
+  }
+
+  /**
+   * 这个落点收不收这一份拖拽载荷。
+   *
+   * 两种情况不行，而它们以前都不可能发生（右栏一次只显示一层，落点的锚点永远是兄弟）：
+   *
+   * 1. **拖到自己身上**。
+   * 2. **拖进自己的子孙里**——行内展开之后这个动作点得到（展开 A，再把 A 拖到它里面那层）。
+   *    Chrome 会拒绝它（会形成环），但我们不能等到报错：那会在界面上留下
+   *    「拖了但没动」而没有任何解释的痕迹。所以先沿父链走一遍自己判断。
+   *
+   * 两个落点都要过这一关：`into` 时目标是那个文件夹，`here` 时目标是**它所在的那一层**
+   * （把 A 拖进 A 里面的某个位置，一样是环）。
+   */
+  function canDropAt(payload: DragPayload, targetId: string): boolean {
+    if (payload.kind !== 'folder') return true
+    if (payload.id === targetId) return false
+    for (let at = parentById.get(targetId); at !== undefined; at = parentById.get(at)) {
+      if (at === payload.id) return false
+    }
+    return true
+  }
+
+  /** 落点对应的「收件层」是哪一个（`into` 是那个文件夹，`here` 是它所在的那一层）。 */
+  function dropTargetId(spot: ArchiveDrop): string {
+    return spot.kind === 'into' ? spot.folderId : spot.parentId
+  }
+
+  /**
+   * 就地展开 / 收起一个文件夹（点左侧那枚方块）。
+   *
+   * 不 `await` 任何东西、也不重新读书签树：`getSubTree()` 已经把整棵子树读进来了，
+   * 子级就在 `folder.children` 里。所以这一步只是把 id 记进 `expandedIds` 再重绘。
+   * 重绘不会丢掉展开状态（它在模块状态里，不在 DOM 里），也会走 `syncArchiveStates()` 把
+   * 新出现的勾选框回填成正确的样子。
+   */
+  function toggleFolder(id: string): void {
+    const node = nodeIndex.get(id)
+    if (!node || node.url) return
+    // 默认浏览器行为之外的东西都不要：拖拽与展开是两种手势，别让行上的拖动把它带走。
+    if (expandedIds.has(id)) expandedIds.delete(id)
+    else expandedIds.add(id)
+    renderArchive()
   }
 
   /**
@@ -1652,7 +1814,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     }
     if (payload.kind !== 'folder') return []
 
-    const folder = archiveChildren.find((child) => child.id === payload.id)
+    const folder = nodeIndex.get(payload.id)
     return realBookmarks(folder?.children ?? [])
       .map((node) => node.url as string)
       .filter((url) => !isInternalUrl(url))
@@ -1660,16 +1822,13 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   function archiveFolderTitle(id: string): string | undefined {
-    return archiveChildren.find((child) => child.id === id)?.title
+    // 不带 `!node.url` 的判断：调用方只会拿文件夹的 id（它要给新建的分组起名），
+    // 而索引里给出的就是那个节点。
+    return nodeIndex.get(id)?.title
   }
 
   function bookmarkUrl(id: string): string | undefined {
-    for (const child of archiveChildren) {
-      if (child.id === id && child.url) return child.url
-      const hit = (child.children ?? []).find((node) => node.id === id)
-      if (hit?.url) return hit.url
-    }
-    return undefined
+    return nodeIndex.get(id)?.url
   }
 
   // ———————————————— 勾选 ————————————————
@@ -1806,7 +1965,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
     const itemId = input.dataset.archiveItem
     if (itemId !== undefined) {
-      const folder = archiveChildren.find((child) => child.id === itemId && !child.url)
+      const node = nodeIndex.get(itemId)
+      const folder = node && !node.url ? node : undefined
       if (folder) {
         const ids = folderBookmarkIds(folder)
         const kept = ids.filter((id) => !archiveExcluded.has(id)).length
@@ -1866,6 +2026,12 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       return
     }
 
+    const toggleButton = target.closest<HTMLButtonElement>('[data-toggle-folder]')
+    if (toggleButton?.dataset.toggleFolder) {
+      toggleFolder(toggleButton.dataset.toggleFolder)
+      return
+    }
+
     const swapButton = target.closest<HTMLButtonElement>('[data-swap-separator]')
     if (swapButton?.dataset.swapSeparator) {
       void swapSeparator(swapButton.dataset.swapSeparator)
@@ -1889,12 +2055,13 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    * 给用户一个能改它的输入框只会把记号改坏。
    */
   function realBookmarkId(id: string): boolean {
-    return archiveChildren.some((child) => child.id === id && isRealBookmark(child))
+    const node = nodeIndex.get(id)
+    return node !== undefined && isRealBookmark(node)
   }
 
   /** 弹窗改一条书签的标题与网址。取消时什么都不做。 */
   function editBookmark(id: string): void {
-    const node = archiveChildren.find((child) => child.id === id)
+    const node = nodeIndex.get(id)
     if (!node) return
     openBookmarkDialog(
       element,
@@ -1979,7 +2146,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   async function commitRename(input: HTMLInputElement, id: string): Promise<void> {
     if (!renaming || renaming.id !== id || renaming.committed) return
     renaming.committed = true
-    const node = archiveChildren.find((child) => child.id === id)
+    const node = nodeIndex.get(id)
     if (!node) return
 
     // 只服务文件夹与分隔线（书签的改名走模态弹窗，见 editBookmark）。
@@ -2095,7 +2262,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    */
   async function swapSeparator(id: string): Promise<void> {
     if (busy) return
-    const kind = separatorKind(archiveChildren.find((child) => child.id === id)?.url)
+    const kind = separatorKind(nodeIndex.get(id)?.url)
     if (!kind) return
     const next = toggledSeparatorKind(kind)
 

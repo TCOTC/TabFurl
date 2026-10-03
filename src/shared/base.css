@@ -63,6 +63,14 @@
    */
   --load-btn-min: 52px;
   /*
+   * 右栏行内展开时，每一层子级缩进的宽度。
+   *
+   * 定得比左栏标签清单那一道缩进（`14px + --space-2`）**小**：右栏能看到更深的后代
+   * （实测真实数据最深 7 层），而面板宽度是固定的，缩进一大就真的会把内容压成一条缝。
+   * 12px 下即使 7 层也只吃掉 84px，剩下的留给标题与网址。
+   */
+  --tree-indent: var(--space-4);
+  /*
    * 行条目的横向内边距。
    *
    * 抽成变量是因为**列表外面的全选框要跟列表里面的勾选框对齐**：两者的左边距都从它算，
@@ -472,6 +480,13 @@ input[type='checkbox'] {
   flex: 0 0 auto;
   width: 26px;
   height: 26px;
+  /*
+   * 它现在是一个**按钮**（点它展开 / 收起），所以还要把浏览器给的默认样式收掉。
+   * 尺寸仍是 26px 的方形定值，与 `.favicon` 严格一致——`--row-inner` 就是这两个方块的高度。
+   */
+  padding: 0;
+  border: 0;
+  cursor: pointer;
   border-radius: var(--space-1);
   background: var(--accent-soft);
   color: var(--accent-strong);
@@ -481,6 +496,38 @@ input[type='checkbox'] {
   /* 方块 26px 时字形占 19px：再大就会顶到圆角上，看着像溢出。 */
   width: 19px;
   height: 19px;
+}
+
+/*
+ * 折叠三角：平时藏起来（槽位里显示的是文件夹），悬停这一行、键盘聚焦到它、
+ * 或者这一层已经展开时，换成它。
+ *
+ * 三条规则分开写而不是叠成一条选择器列表：展开那一档还要转 90°，与另两档的目的不同。
+ */
+.folder-tile__chevron {
+  display: none;
+  width: 19px;
+  height: 19px;
+}
+
+.group__head:hover .folder-tile__icon,
+.folder-tile:focus-visible .folder-tile__icon {
+  display: none;
+}
+
+.group__head:hover .folder-tile__chevron,
+.folder-tile:focus-visible .folder-tile__chevron {
+  display: inline-flex;
+}
+
+/* 已展开：三角常显并指着下方（收起的入口必须一直看得见，不能只靠悬停）。 */
+.group.is-expanded .folder-tile__icon {
+  display: none;
+}
+
+.group.is-expanded .folder-tile__chevron {
+  display: inline-flex;
+  transform: rotate(90deg);
 }
 
 [hidden] {

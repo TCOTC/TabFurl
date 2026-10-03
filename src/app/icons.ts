@@ -35,6 +35,23 @@ export const FOLDER_ICON = `
 `
 
 /**
+ * 折叠三角：文件夹行左侧那枚方块的**第二副面孔**。
+ *
+ * 与 `FOLDER_ICON` 占**同一个槽位**（`.folder-tile` 的 26px 方块），两枚同时放在里面，
+ * 一次只显示一枚：平时是文件夹，悬停时换成它，展开后常显并转 90°（指着下方）。
+ *
+ * 做成两枚而不是把文件夹转一下：两者形状无关，转一个文件夹只会得到一支歪的文件夹。
+ * 展开后**常显**是关键：不常显的话「怎么收起来」得先悬停才知道，
+ * 而鼠标一离开这一行，就再没有线索说「这里展开过」。
+ */
+export const CHEVRON_ICON = `
+  <svg class="folder-tile__chevron" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor"
+          stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+  </svg>
+`
+
+/**
  * 加号：新建、添加这类「多加一个」的动作。
  *
  * 尺寸交给 `className`，因为两处的语境不同：中栏那排方向按钮要 15px 的 `move__icon`

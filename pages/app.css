@@ -417,6 +417,30 @@
 }
 
 /*
+ * 右栏行内展开的子级。
+ *
+ * 与左栏的 `.kids` 同一套（`list-style` / `margin` 都继承下来），只把缩进换成小一号的
+ * `--tree-indent`——右栏的层级更深，缩进必须更省。所以这一条要写在 `.kids` **之后**。
+ */
+.kids--archive {
+  padding-left: var(--tree-indent);
+}
+
+/*
+ * 展开了一个空文件夹。
+ *
+ * 不给这一行的话，点开之后下面什么都没出现，看着像「点了没反应」；
+ * 它没有 `data-drop-row` / `data-parent-id`，所以不参与拖拽落点与计数。
+ */
+.kids__empty {
+  display: flex;
+  align-items: center;
+  min-height: var(--row-height);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+/*
  * 行内操作按钮组。
  *
  * 它们紧跟在文字后面，所以是 `flex: 0 0 auto`（不被文字挤走），并且整个行都保持一条线：
