@@ -74,10 +74,16 @@
  *
  * 两栏装的是同一个东西的两侧（活会话 ↔ 已落盘的会话），所以宽度对等：
  * 哪一边更宽都在暗示「哪一边更重要」，而它们同等重要。
+ *
+ * `minmax(0, 1fr)` 里的 `0` 不可省。默认的 `1fr` 等价于 `minmax(auto, 1fr)`，
+ * 而 `auto` 下限 = 子项的 min-content 宽度——两栏里都是一列不换行的标题，
+ * 于是列表的 min-content 就是最长那条标题的宽度（实测 422px / 364px），
+ * 两栏加起来一旦超过窗口，页面就被顶出一条横向滚动条。
+ * 写成 `minmax(0, 1fr)` 之后轨道可以真的缩到零，标题交给各自的省略号处理。
  */
 .split {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   gap: var(--space-4);
   flex: 1;
   min-height: 0;
@@ -88,6 +94,8 @@
   flex-direction: column;
   gap: var(--space-3);
   min-height: 0;
+  /* 同一件事的防御写法：grid 子项的自动最小尺寸不该参与定宽。 */
+  min-width: 0;
 }
 
 .col__head {
@@ -118,6 +126,10 @@
  *
  * **不要给它加 max-height**：那会与页面滚动叠成两条滚动条，而且列表一长，
  * 底部的按钮就被推出屏幕。
+ *
+ * `overflow-x: hidden` 要显式写：`overflow-y: auto` 会让另一个轴按规范计算成 `auto`，
+ * 于是列表里任何东西溢出一点就会出现横向滚动条（而且竖向滚动条一出现、
+ * 内容宽度又变小，很容易互相激发）。标题本来就有省略号，水平方向从不需要滚。
  */
 .box {
   display: flex;
@@ -125,6 +137,7 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   margin: 0;
   padding: 0 0 var(--space-1);
   border: 1px solid var(--border);

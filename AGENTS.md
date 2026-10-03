@@ -104,8 +104,14 @@ pnpm icons          # 重新生成占位图标
     **不计入任何枚数、没有勾选框、还原时跳过**，也不算 `skipped`。
     **新增任何「数标签」的地方都必须走 `restorableBookmarks()`**，否则枚数会在分隔线上对不上。
     两个最容易被「顺手简化」掉的细节：判定要看**主机名 + 路径**（不是只认主机名）；清洗要把**首尾的横杠与空白一起去掉**（不是只剥横杠再 `trim()`）。
-21. **主界面只允许有一条滚动条**：`.app--shell` 把整页锁在一屏内（`100dvh`），滚动交给两栏各自的 `.box`（`flex: 1; min-height: 0; overflow-y: auto`），
-    这样顶栏与底部按钮始终可见。**不要给列表加 `max-height`**——那会与页面滚动叠成两条滚动条。
+21. **主界面只允许有一条滚动条，而且用满整页宽度**：`.app--shell` 把整页锁在一屏内（`100dvh`）、**并且 `max-width: none`**（`.app` 那个 `--content-max` 只留给阅读页）。
+    滚动交给两栏各自的 `.box`（`flex: 1; min-height: 0; overflow-y: auto`），这样顶栏与底部按钮始终可见。
+    **不要给列表加 `max-height`**——那会与页面滚动叠成两条滚动条。
+    两栏是 `grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr)`：**`0` 不能省**。默认的 `1fr` 等于 `minmax(auto, 1fr)`，
+    那个 `auto` 下限就是子项的 min-content（一列不换行的标题 → 最长那条标题的宽度，实测 422px / 364px），
+    两栏加起来超过窗口时整页就会多出一条横向滚动条。`.col` 上也同步写 `min-width: 0` 做防御。
+    `.box` 另外显式写 `overflow-x: hidden`：`overflow-y: auto` 会把另一个轴按规范计算成 `auto`，
+    于是列表里溢出一点点就冒出横向滚动条（而且竖向滚动条一出现、内容宽度又变小，两者容易互相激发）。
     阅读页（`folder.html`）不加 `app--shell`：它就是要整页往下读的文档。
 22. **没有会话层，所以撤销是内存态的**：存档直接写进存档根，每次保存只是追加，没有一个「刚建的那棵子树」可删。
     撤销靠 `writeChildren` 返回的 `SaveResult`（新建的 `folderIds` / `bookmarkIds`），**只存在内存里，关掉界面就失效**。
