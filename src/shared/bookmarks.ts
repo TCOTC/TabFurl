@@ -7,11 +7,10 @@ const BOOKMARKS_BAR_ID = '1'
 /**
  * 节点是不是一枚**真书签**。
  *
- * 分隔线（`isSeparatorUrl`）是书签树里的组织记号，不是书签：它不计入任何枚数、没有勾选框、
- * 还原时跳过，也不参与「打开（N）」的计数。所以「有没有 url」**不能**当作「是不是书签」用——
- * 以前就是这么写的，于是分隔线被算进了书签数，而界面又把它画成一条线，两边的口径就对不上了。
- *
- * 凡是数书签或取书签 id 的地方都必须过这一层。
+ * 分隔线（`isSeparatorUrl`）是书签树里的组织记号，不是书签：不计枚数、无勾选框、还原时跳过，
+ * 也不进「打开（N）」。所以**「有没有 url」不能当「是不是书签」用**——以前就是这么写的，
+ * 于是分隔线被算进书签数、而界面又把它画成一条线，两边口径对不上。
+ * 凡数书签或取书签 id 的地方都必须过这一层。
  */
 export function isRealBookmark(node: BookmarkNode): boolean {
   return Boolean(node.url) && !isSeparatorUrl(node.url)
@@ -33,9 +32,7 @@ function toNode(node: chrome.bookmarks.BookmarkTreeNode): BookmarkNode {
   }
 }
 
-/**
- * 书签树根。Chrome 下是 `[{id: '0', children: [书签栏, 其他书签, 移动设备书签]}]`。
- */
+/** 书签树根。Chrome 下是 `[{id: '0', children: [书签栏, 其他书签, 移动设备书签]}]`。 */
 export async function getRoots(): Promise<BookmarkNode[]> {
   const roots = await chrome.bookmarks.getTree()
   return roots.map(toNode)
@@ -88,13 +85,10 @@ export async function removeSubTree(id: string): Promise<void> {
 }
 
 /**
- * 改一个节点的标题与 / 或网址。
- *
- * 只按原样写入用户给的值（`sanitizeFolderName` 最多削掉控制字符与首尾空白，
- * 不动可打印字符）；重名按浏览器自己的语义放行——Chrome 允许同级重名，界面以位置区分。
- *
- * 网址只对书签有意义（文件夹没有 url），调用方自己保证不往文件夹上传它。
- * 因此这里**不读旧值**：传什么写什么，没传的字段就不动（`chrome.bookmarks.update` 的语义）。
+ * 改一个节点的标题与 / 或网址。只按原样写入用户给的值（`sanitizeFolderName` 最多削控制字符与首尾空白）；
+ * 重名按浏览器自己的语义放行（Chrome 允许同级重名，界面以位置区分）。
+ * 网址只对书签有意义，调用方自己保证不往文件夹上传它，所以这里**不读旧值**：
+ * 传什么写什么，没传的字段不动（`chrome.bookmarks.update` 的语义）。
  */
 export async function updateNode(
   id: string,

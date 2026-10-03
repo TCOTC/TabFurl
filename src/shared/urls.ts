@@ -18,11 +18,9 @@ export function isInternalUrl(url: string | undefined): boolean {
 }
 
 /**
- * 书签分隔记号的占位网址（Maya Studios 的约定）。
- *
- * Chrome 早已不支持书签分隔线，社区的做法是收藏一个**指向固定网址的书签**来模拟：
- * 它不指向任何有用内容，只是书签树里的一个组织记号。
- * 同一个网址靠 `?t=` 参数分成两种形态，名字与外观都不同（见下面两个常量）。
+ * 书签分隔记号的占位网址（Maya Studios 的约定）。Chrome 早已不支持书签分隔线，社区做法是收藏一个
+ * **指向固定网址的书签**来模拟：它不指向有用内容，只是书签树里的组织记号。
+ * 同一网址靠 `?t=` 分成两种形态，名字与外观都不同（见下面两个常量）。
  */
 const SEPARATOR_HOST = 'separator.mayastudios.com'
 const SEPARATOR_PATH = '/index.php'
@@ -30,19 +28,14 @@ const SEPARATOR_PATH = '/index.php'
 const SEPARATOR_PATHS = new Set([SEPARATOR_PATH, '/'])
 
 /**
- * **间隔**：横向的一种，界面上画成一条通栏横线，**没有图标**。
- *
- * 它本来是为**竖向排列**（书签菜单、收藏夹列表）准备的：竖排里要一条横线才隔得开。
- * 所以它的名字不是「分隔线」而是「间隔」——两个按钮必须叫得出区别，
- * 否则用户分不清自己点的是哪一个（见 docs/design.md）。
+ * **间隔**：横向的一种，画成一条通栏横线。它本来是为**竖向排列**（书签菜单、收藏夹列表）准备的：
+ * 竖排里要一条横线才隔得开。名字不叫「分隔线」而叫「间隔」是为了两个按钮叫得出区别。
  */
 export const GAP_URL = 'https://separator.mayastudios.com/index.php?t=horz'
 
 /**
- * **分隔线**：纵向的一种，界面上显示成一枚**竖线图标**。
- *
- * 它是为**横向排列**（书签栏那一排）准备的：横排里要一条竖线才隔得开。
- * 所以它不能画成横线——那样既与它的含义相反，也看不出它其实是给书签栏用的。
+ * **分隔线**：纵向的一种，画成一枚**竖线图标**。它是为**横向排列**（书签栏那一排）准备的：
+ * 横排里要一条竖线才隔得开 → 不能画成横线（那与它的含义相反）。
  */
 export const SEPARATOR_URL = 'https://separator.mayastudios.com/index.php'
 
@@ -56,12 +49,9 @@ export const SEPARATOR_LABELS: Record<SeparatorKind, string> = {
 }
 
 /**
- * 记号的种类。不是记号时返回 undefined。
- *
- * 判定按**主机名 + 路径**，路径只认 `/index.php` 与省略成 `/` 两种形态——
- * 不能只认主机名，那会把该域名下的任意页面也当成记号吃掉。
- * `?t=horz`（或写全的 `horizontal`）是横向的间隔，其余（无参数、`?t=vert`、
- * 以及早期工具写下的其他参数）一律当作纵向的分隔线——纵向本来就是默认形态。
+ * 记号的种类，不是记号时返回 undefined。
+ * 判定按**主机名 + 路径**（只认 `/index.php` 与 `/`）——只认主机名会把该域名下任意页面也当成记号。
+ * `?t=horz`（或 `horizontal`）是横向的间隔，其余（无参数 / `?t=vert` / 其他）一律当纵向的分隔线。
  */
 export function separatorKind(url: string | undefined): SeparatorKind | undefined {
   if (!url) return undefined
@@ -92,22 +82,10 @@ export function toggledSeparatorKind(kind: SeparatorKind): SeparatorKind {
 }
 
 /**
- * 浏览器自带书签管理器里某个文件夹的地址。
- *
- * 主界面的「打开书签管理器」用它：在那儿能看到整棵树、也能批量整理，
- * 而扩展本来就不打算重做一套通用收藏管理（见 docs/design.md 二）。
- *
- * `?id=` 收的是 `chrome.bookmarks` 给的**数字 id**。管理器的 URL 平时显示成
- * `?id=<UUID>`（它内部用 UUID），但传数字 id 是官方支持的入口：浏览器自己的书签栏右键菜单
- * 「打开书签管理器」就是这么干的（见 issue 565829425 的复现步骤），
- * 而 `router.ts` 里的 `findIdByLegacyId()` 专门把数字 id 映射成 UUID，**映射完会改写地址栏**。
- * 所以看到 UUID 不代表数字 id 不被接受。
- *
- * 已知的地雷：**Chrome 154.x 上这个入口是坏的**（Mojo 迁移的回归，见 issue 565829425 /
- * 受限制的 565108351：传数字 id 会静默退回默认层）。修复已并进 **155.0.8059.26**（M155 stable）
- * 与 156 canary，所以 154 及更早的版本上会看到「打开了但没落在那一层」。
- * 曾经为此把这里改成 `?q=<层名>` 搜索，何必：搜出来的是一堆结果、还要用户自己点进去，
- * 而 `?id=` 是直接落在那一层。修好之后就该用回它。
+ * 浏览器自带书签管理器里某个文件夹的地址。`?id=` 收的是 `chrome.bookmarks` 的**数字 id**
+ *（管理器地址栏显 UUID，但 `router.ts` 的 `findIdByLegacyId()` 会把数字 id 映射过去并改写地址栏）。
+ * **Chrome 154.x 上这个入口是坏的**（Mojo 迁移回归，issue 565829425；修在 155.0.8059.26）
+ * → 旧版上会看到「打开了但没落在那一层」，不是我们的 bug。所以不要改回 `?q=<层名>` 搜索。
  */
 export function bookmarkManagerUrl(folderId: string): string {
   return `chrome://bookmarks/?id=${encodeURIComponent(folderId)}`
@@ -117,16 +95,12 @@ export function bookmarkManagerUrl(folderId: string): string {
 const SEPARATOR_EDGES = /^[\s─]+|[\s─]+$/g
 
 /**
- * 分隔线标题的清洗：去掉首尾的 `─`。
+ * 分隔线标题的清洗：去掉首尾的 `─` 与空白。那些横杠是**手画的线**，而界面已经用 CSS 画了线，
+ * 留着它们就成了第二条线（长度写死、跟容器宽度对不上）。
  *
- * 分隔线标题常被写成 `──── 工作 ────`——那两道横杠是**手画的线**。而界面已经用 CSS 画了线，
- * 留着它们就成了第二条线：长度写死、跟容器宽度对不上，看着像排版坏了。所以首尾的横杠一律剔除。
- *
- * 横杠与空白**当成同一类字符一起剥**，而不是只剥横杠再 `trim()`：写成 `─ ─ ─` 那种
- * 拿横杠和空格拼出来的假线，只剥一层会剩下中间那根，看着还是一条坏线。合成一个字符集就不会漏。
- * 好处是整条都是横杠、或横杠加空格时结果为空串，于是走「无标题」那条路，只画一条线——正是想要的。
- *
- * 只动首尾：`2020 ─ 2024` 中间那根是标题的一部分。
+ * 横杠与空白**当同一类字符一起剥**（而不是只剥横杠再 `trim()`）：写成 `─ ─ ─` 那种拿横杠和空格
+ * 拼的假线，只剥一层会剩下中间那根。整条都是横杠时结果为空串 → 走「无标题」那条路，只画一条线。
+ * **只动首尾**：`2020 ─ 2024` 中间那根是标题的一部分。
  */
 export function separatorTitle(title: string): string {
   return title.replace(SEPARATOR_EDGES, '').trim()
@@ -147,12 +121,8 @@ export function hostnameOf(url: string | undefined): string | undefined {
 export const FAVICON_SIZE = 32
 
 /**
- * 拼出 `_favicon` 端点的地址：`chrome-extension://<id>/_favicon/?pageUrl=…&size=32`。
- *
- * 它读的是 Chrome **本地**的 favicon 缓存，不发任何网络请求（需要 `favicon` 权限）；
- * 与 `tabs.Tab.favIconUrl` 不同——后者指向网站服务器，渲染时等于向该站点发请求。
- *
- * @param faviconBase `chrome.runtime.getURL('_favicon/')`。
+ * 拼出 `_favicon` 端点的地址。它读 Chrome **本地**缓存、不发网络请求（需 `favicon` 权限）；
+ * 与 `tabs.Tab.favIconUrl` 不同——后者指向网站服务器，渲染时等于向该站发请求。
  */
 export function faviconUrl(pageUrl: string, faviconBase: string): string {
   const url = new URL(faviconBase)
