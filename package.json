@@ -4,6 +4,15 @@
   "description": "把浏览器窗口的标签页收进书签文件夹，也能把文件夹还原成带分组的窗口。",
   "version": "0.1.0",
   "license": "MIT",
+  "author": "Jeffrey Chen <78434827+TCOTC@users.noreply.github.com> (https://github.com/TCOTC)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TCOTC/TabFurl.git"
+  },
+  "bugs": {
+    "url": "https://github.com/TCOTC/TabFurl/issues"
+  },
+  "homepage": "https://github.com/TCOTC/TabFurl#readme",
   "type": "module",
   "scripts": {
     "build": "extension build",
