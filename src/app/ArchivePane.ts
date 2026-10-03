@@ -112,6 +112,13 @@ export interface ArchivePane {
   /** 这一层里「还会被打开」的书签枚数。 */
   keptCount(): number
   /**
+   * 这一层里「会被看见的东西」有多少：子文件夹可以进去，书签可以打开，分隔线两样都不是。
+   *
+   * 面板拿它去写左栏表头那**唯一一枚**胸章（那一枚两档共用一个，见 `TransferPanel`）。
+   * 右栏自己有胸章，所以它不用这个方法。
+   */
+  count(): number
+  /**
    * 这一栏要不要显示勾选框。
    *
    * 窗口档下右栏要（勾选驱动「存过去 / 打开 (N)」）；而**两栏都是收藏夹时两栏都不要**：
@@ -162,7 +169,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
    */
   const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
 
-  const archiveCount = q<HTMLSpanElement>(root, id('count'))
+  const archiveCount = root.querySelector<HTMLSpanElement>(id('count'))
   const archivePath = q<HTMLElement>(root, id('path'))
   const archiveNote = q<HTMLParagraphElement>(root, id('note'))
 
@@ -713,9 +720,10 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   function renderArchive(): void {
     renderArchivePath()
     // 胸章数的是「这一层里能干活的东西」：子文件夹可以进去，书签可以打开。分隔线两样都不是。
-    archiveCount.textContent = String(
-      archiveChildren.filter((child) => !child.url).length + realBookmarks(archiveChildren).length
-    )
+    //
+    // **这一栏可以没有胸章**（左栏那个实例就是）：它的两档共用一个胸章，而那一枚归面板管
+    // ——两个数分属两个模块，只有面板同时认得它们（见 `count()`）。
+    if (archiveCount) archiveCount.textContent = String(archiveCountValue())
 
     if (!viewFolderId) {
       archiveList.innerHTML =
@@ -750,6 +758,11 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   /** 右栏某个文件夹下的「会被打开」的书签 id。分隔线不在内：它没有勾选框，也不参与计数。 */
   function folderBookmarkIds(folder: BookmarkNode): string[] {
     return realBookmarks(folder.children ?? []).map((bookmark) => bookmark.id)
+  }
+
+  /** 当前这一层里「能干活的东西」的枚数（胸章与 `count()` 都用它）。 */
+  function archiveCountValue(): number {
+    return archiveChildren.filter((child) => !child.url).length + realBookmarks(archiveChildren).length
   }
 
   /**
@@ -1463,6 +1476,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     currentFolderId: () => viewFolderId,
     currentFolderTitle: () => viewPath.at(-1)?.title ?? '',
     keptCount: archiveKeptCount,
+    count: archiveCountValue,
     setSelectable,
     excluded: () => archiveExcluded,
     reload: refresh,

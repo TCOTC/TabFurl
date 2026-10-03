@@ -152,9 +152,16 @@ const TEMPLATE = `
           **不新增一行高度**：这个位置本来就空着一大片（理由见 docs/design.md 七）。
         -->
         <div class="modes" role="group" aria-label="左栏显示什么">
-          <button type="button" class="mode is-active" data-mode="window" aria-pressed="true">当前窗口 <span class="badge" id="window-count">0</span></button>
-          <button type="button" class="mode" data-mode="archive" aria-pressed="false">收藏夹 <span class="badge" id="left-archive-count">0</span></button>
+          <button type="button" class="mode is-active" data-mode="window" aria-pressed="true">当前窗口</button>
+          <button type="button" class="mode" data-mode="archive" aria-pressed="false">收藏夹</button>
         </div>
+        <!--
+          胸章**只有一个，而且在两档控件外面**：它说的是「左栏现在有几条」
+          （窗口档是标签数，收藏夹档是那个文件夹里的条目数），而那是**同一件事的数**——
+          两个档各背一枚时，两枚里总有一枚在说另一个档的事，而且看上去就像两个计数器并排。
+          它由面板按当前这一档写（两个数分属两个模块，只有面板同时认得）。
+        -->
+        <span class="badge" id="left-count">0</span>
         <!--
           左栏的 chip 栏只在这一栏看着收藏夹时出现（看窗口时它没地方可跳）。
           与右栏那条是**同一份数据的两块视图**：在任一栏加/删/排序，两条一起变；
@@ -306,14 +313,14 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   const archive: ArchivePane = createArchivePane({...paneDeps, root: rightCol, idPrefix: 'archive'})
   const leftArchive: ArchivePane = createArchivePane({
     ...paneDeps,
-    // 根用**整栏**而不是那个视图：胸章（`left-archive-count`）在表头里，不在视图里。
-    // id 都带前缀，所以在整栏范围内查也不会串到右栏去。
+    // 根用**整栏**而不是那个视图：面包屑与那几个按钮在视图里，而**表头里的东西**（chip 栏所在的那一行）
+    // 不在——左栏那个实例需要整栏才能把自己的部分找全。id 都带前缀，所以在整栏范围内查也不会串到右栏去。
     root: leftCol,
     idPrefix: 'left-archive'
   })
 
   const windowList = q<HTMLUListElement>(element, '#window-list')
-  const windowCount = q<HTMLSpanElement>(element, '#window-count')
+  const leftCount = q<HTMLSpanElement>(element, '#left-count')
   const saveButton = q<HTMLButtonElement>(element, '#save-btn')
   const saveLabel = q<HTMLSpanElement>(element, '#save-label')
   const openButton = q<HTMLButtonElement>(element, '#open-btn')
@@ -456,8 +463,9 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     if (mode === next) return
     mode = next
     applyMode()
+    // 两侧的收藏夹数据都**只在自己可见时才读**：窗口档下左栏那个实例是 `display: none`，
+    // 读了也白读（还要多一次 `getSubTree`）。所以第一次切过去时才 `reload()`。
     if (next === 'archive') await leftArchive.reload()
-    updateButtons()
   }
 
   /**
@@ -466,7 +474,9 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    *
    * 中间那一列**整列收起**，而不是把里面的按钮逐个藏起来：
    * 两栏都是收藏夹时，窗口语义的五个控件（存过去 / 打开 / 新窗口 / 不建分组 / 撤销）
-   * 一个都不成立。这一档完全靠拖拽，所以列里也没有別的东西可放——空的列就该真的没有。
+   * 一个都不成立。这一档完全靠拖拽，所以列里也没有别的东西可放——空的列就该真的没有。
+   *
+   * 末尾要调一次 `updateButtons()`：那枚共用的胸章跟着这一档走。
    */
   function applyMode(): void {
     const isArchive = mode === 'archive'
@@ -485,6 +495,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     // 勾选框只在窗口档下有意义（右栏的驱动「打开 (N)」），两栏都是收藏夹时两栏都不要。
     archive.setSelectable(!isArchive)
     leftArchive.setSelectable(!isArchive)
+    // 换了一档，那枚共用的胸章与中间那一列的计数都跟着换一套。
+    updateButtons()
   }
 
   // ———————————————— 左栏 ————————————————
@@ -666,7 +678,6 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       return
     }
     windowSignature = signature
-    windowCount.textContent = String(allWindowTabs().length)
 
     if (windowChildren.length === 0) {
       windowList.innerHTML = '<li class="empty">当前窗口没有可保存的标签页。</li>'
@@ -763,6 +774,10 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   function updateButtons(): void {
     const keptTabs = allWindowTabs().filter((tab) => windowSelected.has(tab.tabId)).length
     const keptBookmarks = archive.keptCount()
+
+    // 左栏那一枚胸章：说的是「这一栏现在有几条」——窗口档数标签，收藏夹档数那个文件夹里的条目。
+    // 两个数分属两个模块，而**只有面板同时认得它们**，所以这里按当前这一档来写那个唯一的胸章。
+    leftCount.textContent = String(mode === 'archive' ? leftArchive.count() : allWindowTabs().length)
 
     saveLabel.textContent = countLabel('存过去', keptTabs)
     openLabel.textContent = countLabel('打开', keptBookmarks)
