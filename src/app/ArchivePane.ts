@@ -563,7 +563,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     return undefined
   }
 
-  /** 换一批选择（普通点击）。 */
+  /** 换一批选择（只有「起点找不到」时 Shift 扩范围退化成它）。 */
   function selectOnly(id: string): void {
     pickedIds.clear()
     pickedIds.add(id)
@@ -591,10 +591,17 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /**
-   * 点一行：选中它（Ctrl / Cmd 切换、Shift 扩范围、什么都不按就只选它）。
+   * 点一行：**Ctrl / Cmd 切换、Shift 扩范围**，而**普通点击不改选择**。
    *
-   * 返回 true 表示这次点击是「点选」，已经处理完了。
-   * 落在行内按钮 / 勾选框 / 输入框上时返回 false——那些各有自己的语义。
+   * 普通点击什么都不做是有意的：多选是 Ctrl / Shift 的手势，单击在这里没有「选中它」这层意思
+   *（这一档本来就没有勾选框可点），而让它「只选这一条」会**随手点一下就把刚选好的一批清掉**。
+   * 撤销选择靠 Ctrl 点回去或点空白处。
+   *
+   * 但它**仍然会挪 Shift 的起点**：先随手点一下再 Shift 点另一头，是很自然的用法，
+   * 而起点本来也只是「最后一次碰过的那一行」。
+   *
+   * 返回 true 表示这次点击已经处理完了，不必再往下走。
+   * 落在行内按钮 / 输入框上时返回 false——那些各有自己的语义。
    */
   function handlePickClick(event: MouseEvent): boolean {
     if (!picking()) return false
@@ -611,14 +618,21 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
       return true
     }
 
-    if (event.shiftKey) extendPickTo(id)
-    else if (event.ctrlKey || event.metaKey) {
+    if (event.shiftKey) {
+      extendPickTo(id)
+      // Shift 不挪起点（见 `pickAnchor`）。
+      renderArchive()
+      return true
+    }
+    if (event.ctrlKey || event.metaKey) {
       if (pickedIds.has(id)) pickedIds.delete(id)
       else pickedIds.add(id)
-    } else selectOnly(id)
-    // Shift 不挪起点，其余都挪（见 `pickAnchor`）。
-    if (!event.shiftKey) pickAnchor = id
-    renderArchive()
+      pickAnchor = id
+      renderArchive()
+      return true
+    }
+    // 普通点击：不改选择，也不重绘——只把起点挪过来（上面那两条依赖它）。
+    pickAnchor = id
     return true
   }
 
