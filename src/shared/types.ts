@@ -123,14 +123,17 @@ export interface FolderOption {
 
 export interface Settings {
   /**
-   * 存档根文件夹在书签树中的 id；空字符串表示尚未指定。
+   * 默认展示文件夹在书签树中的 id；空字符串表示尚未指定。
    *
-   * 它必须是用户在书签栏里指定的一个**已有**文件夹：存档直接写进它，
-   * 不再额外建一层，也不往「其他书签」里写任何东西。
+   * 它是右栏的**起点**：打开界面时右栏落在这一层。它**不是写入边界**——
+   * 右栏可以在书签树里自由导航，写入跟的始终是当前展示的那一层。
+   *
+   * 必须是某次用工具栏上的选择器明确指定的文件夹（只列书签栏及其后代），
+   * 扩展不建根文件夹、也不往「其他书签」里写任何东西。
    */
-  archiveRootId: string
+  defaultFolderId: string
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  archiveRootId: ''
+  defaultFolderId: ''
 }

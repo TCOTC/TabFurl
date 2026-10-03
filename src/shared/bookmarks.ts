@@ -154,15 +154,16 @@ function describeFolder(node: BookmarkNode, path: string[]): FolderOption {
 }
 
 /**
- * 把 rootId 展开成扁平文件夹列表，供主界面与启动器使用。
- * 顺序即书签树里的前序遍历顺序，所以会话文件夹天然按时间排列。
- * `includeRoot` 为真时把 rootId 自身也作为第一项（存档根候选列表要用它）。
+ * 把 folderId 展开成扁平文件夹列表，供设置页的候选列表使用。
+ * 顺序即书签树里的前序遍历顺序，所以同级之间天然按添加时间排列。
+ * `includeRoot` 为真时把 folderId 自身也作为第一项。
  */
 export async function listFolders(
-  archiveRootId: string,
+  folderId: string,
   options: {includeRoot?: boolean} = {}
 ): Promise<FolderOption[]> {
-  const root = await getSubTree(archiveRootId)
+  // 文件夹被删掉后这个查询会落空，返回空列表而不是抛错——调用方本来就按「候选里没有」处理。
+  const root = await getSubTree(folderId)
   if (!root) return []
 
   const folders: FolderOption[] = options.includeRoot ? [describeFolder(root, [])] : []
@@ -180,12 +181,12 @@ export async function listFolders(
 }
 
 /**
- * 可作存档根的候选：书签栏自身 + 它下面所有层级的文件夹。
+ * 可作「默认展示文件夹」的候选：书签栏自身 + 它下面所有层级的文件夹。
  *
- * 只读——存档位置由用户在顶部的选择器里指定，扩展不负责建文件夹。
+ * 只读——起点由用户在工具栏的选择器里指定，扩展不负责建文件夹。
  * 返回项的 `path` 一律不含书签栏自己，界面拼显示路径时自行补上头部的 `barTitle`。
  */
-export async function listArchiveRootCandidates(): Promise<{
+export async function listDefaultFolderCandidates(): Promise<{
   barTitle: string
   folders: FolderOption[]
 }> {

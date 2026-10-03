@@ -4,7 +4,7 @@ import {
   getBookmarksBarId,
   getNodePath,
   isRealBookmark,
-  listArchiveRootCandidates,
+  listDefaultFolderCandidates,
   listFolders,
   realBookmarks
 } from './bookmarks'
@@ -150,9 +150,9 @@ test('getBookmarksBarId 认不出书签栏时报错，绝不退化为「其他�
   await assert.rejects(getBookmarksBarId(), /找不到书签栏/)
 })
 
-test('listArchiveRootCandidates 第一项是书签栏自身，书签与「其他书签」都不进列表', async () => {
+test('listDefaultFolderCandidates 第一项是书签栏自身，书签与「其他书签」都不进列表', async () => {
   stubChrome(TREE)
-  const {barTitle, folders} = await listArchiveRootCandidates()
+  const {barTitle, folders} = await listDefaultFolderCandidates()
 
   assert.equal(barTitle, '书签栏')
   assert.deepEqual(
@@ -161,9 +161,9 @@ test('listArchiveRootCandidates 第一项是书签栏自身，书签与「其他
   )
 })
 
-test('listArchiveRootCandidates 的 path 不含书签栏，层级用 path 表达', async () => {
+test('listDefaultFolderCandidates 的 path 不含书签栏，层级用 path 表达', async () => {
   stubChrome(TREE)
-  const {folders} = await listArchiveRootCandidates()
+  const {folders} = await listDefaultFolderCandidates()
 
   assert.deepEqual(
     folders.map((folder) => folder.path),
@@ -171,9 +171,9 @@ test('listArchiveRootCandidates 的 path 不含书签栏，层级用 path 表达
   )
 })
 
-test('listArchiveRootCandidates 的计数只算直属书签，总数递归到后代', async () => {
+test('listDefaultFolderCandidates 的计数只算直属书签，总数递归到后代', async () => {
   stubChrome(TREE)
-  const {folders} = await listArchiveRootCandidates()
+  const {folders} = await listDefaultFolderCandidates()
   const [bar, archive] = folders
 
   assert.equal(bar.bookmarkCount, 1, '书签栏直属只有「书签A」')
@@ -187,7 +187,7 @@ test('listArchiveRootCandidates 的计数只算直属书签，总数递归到后
 
 test('分隔线不算书签：计数里看不到它，但它照旧留在书签树里', async () => {
   stubChrome(TREE)
-  const {folders} = await listArchiveRootCandidates()
+  const {folders} = await listDefaultFolderCandidates()
   const [bar, archive] = folders
 
   // 两个文件夹里各插了一枚分隔线（id 15 / 16），上面的数字与没插时一模一样——

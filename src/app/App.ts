@@ -1,9 +1,9 @@
-import {createArchiveRootPicker} from './ArchiveRootPicker'
+import {createDefaultFolderPicker} from './DefaultFolderPicker'
 import {createTransferPanel} from './TransferPanel'
 import {q, type AppEvents, type Panel} from './dom'
 
 /**
- * 主界面：顶部一行是存档位置，下面是「保存 / 打开」两栏。
+ * 主界面：工具栏一行是默认展示文件夹，下面是「保存 / 打开」两栏。
  *
  * **没有标签页切换**：保存与打开是同一个东西的两侧（活会话 ↔ 已落盘的会话），
  * 并排摆在一起才能一眼看清「存到哪、从哪取」。原来分成两个 Tab 时，
@@ -43,7 +43,7 @@ export function App(): void {
       await panel.refresh()
     },
     settingsChanged: async () => {
-      await rootPicker.refresh()
+      await folderPicker.refresh()
       await panel.refresh()
     }
   }
@@ -51,10 +51,10 @@ export function App(): void {
   const panel: Panel = createTransferPanel(events)
   panelsHost.append(panel.element)
 
-  // 存档位置不属于任何一栏，挂在外壳里：两栏都要看它。
-  const rootPicker = createArchiveRootPicker(events)
-  topbar.append(rootPicker.element)
+  // 默认展示文件夹不属于任何一栏，挂在外壳里：它决定右栏从哪里开始。
+  const folderPicker = createDefaultFolderPicker(events)
+  topbar.append(folderPicker.element)
 
-  void rootPicker.refresh()
+  void folderPicker.refresh()
   void panel.refresh()
 }

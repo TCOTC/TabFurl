@@ -1,5 +1,5 @@
 /*
- * 主界面：顶部存档位置，下面「保存 / 打开」两栏。
+ * 主界面：工具栏一行是默认展示文件夹，下面「保存 / 打开」两栏。
  *
  * 居中的外壳、宽度、四周留白与字号/间距尺度都在 base.css 的 `.app` 里（两个页面共用），
  * 这里只写这一页特有的部分。
@@ -20,20 +20,20 @@
   gap: var(--space-4);
 }
 
-.root-pick {
+.folder-pick {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   margin-left: auto;
 }
 
-.root-pick__field {
+.folder-pick__field {
   display: flex;
   align-items: center;
   gap: var(--space-2);
 }
 
-.root-pick__label {
+.folder-pick__label {
   color: var(--text-muted);
   font-size: var(--text-xs);
   font-weight: 600;
@@ -48,8 +48,8 @@
   font-size: var(--text-xs);
 }
 
-/* 存档位置出错时的红字。正常状态下整块 UI 只有一个下拉框与一个刷新按钮。 */
-.root-pick .status {
+/* 选择器出错时的红字。正常状态下整块 UI 只有一个下拉框与一个刷新按钮。 */
+.folder-pick .status {
   max-width: 320px;
 }
 
@@ -122,7 +122,10 @@
 }
 
 /*
- * 列表：两栏各有自己的滚动容器，页面本身不滚（`.app--shell`）。
+ * 列表框：两栏各有自己的滚动容器，页面本身不滚（`.app--shell`）。
+ * 它是外层框（描边 + 滚动），里面的 `<ul class="list">` 才是逐行的列表——
+ * 分成两层是因为右栏要把「当前位置 + 导航按钮」摆在**框里面的顶部**，
+ * 而那些内容不能被 `renderArchive()` 重写列表时一起冲掉。
  *
  * **不要给它加 max-height**：那会与页面滚动叠成两条滚动条，而且列表一长，
  * 底部的按钮就被推出屏幕。
@@ -132,18 +135,44 @@
  * 内容宽度又变小，很容易互相激发）。标题本来就有省略号，水平方向从不需要滚。
  */
 .box {
-  display: flex;
-  flex-direction: column;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  margin: 0;
-  padding: 0 0 var(--space-1);
-  border: 1px solid var(--border);
+  border: var(--border-width) solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
+}
+
+.list {
+  margin: 0;
+  padding: 0 0 var(--space-1);
   list-style: none;
+}
+
+/*
+ * 框内顶部：当前位置（面包屑）与导航按钮。
+ *
+ * 粘住不滚走——左栏的列表可以很长，滚到一半时「上一层」这个唯一的退路不该消失。
+ * 背景色必须自己带上，否则底下的行会从它身上透出来。
+ */
+.box__top {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--item-pad-x);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+/* 框内顶部的一行说明（目前只在书签树根上出现）。 */
+.box__note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
 }
 
 .group__head {
@@ -168,21 +197,10 @@
 }
 
 /*
- * 存档栏表头右侧的「上一层」推到最右。
+ * 当前所在位置的路径。
  *
- * 它是导航器唯一的退路，所以放在表头（永远可见），而不是列表里的一行——
- * 列表是滚动区，进了深层再想退出来就得先滚回去。
- */
-.col__head-action {
-  margin-left: auto;
-}
-
-/*
- * 当前所在位置的路径。它在表头下面单独占一行，而不是挤在标题旁边：
- * 路径很长（书签栏 / 工具 / 桌面软件 / …），挤在标题行会把标题与按钮一起顶掉。
- *
- * 存档根之上那几层只作上下文（不属于可写入的范围），所以它们只是文字；
- * 存档根及以下可以点着跳过去。用按钮而不是 `<a>`，因为它不换页、只换右栏的内容。
+ * 框内顶部的第一行，紧跟后面一行是导航按钮。除了当前层都能点（包括默认展示文件夹之上的层）：
+ * 右栏是一个自由的浏览器，不是「只能往下走」的向导。用按钮而不是 `<a>`——它不换页，只换右栏的内容。
  */
 .path {
   display: flex;
@@ -242,7 +260,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--item-pad-x);
   color: var(--text-muted);
   font-size: var(--text-xs);
   font-weight: 600;
@@ -262,10 +280,17 @@
 
 /* ———————————————— 中间那列 ———————————————— */
 
+/*
+ * 中间那列：按钮等宽。
+ *
+ * `align-items: stretch` 让每个按钮的宽度都等于这一列的宽度，而这一列的宽度
+ * （grid 里的 `auto` 轨道）取的是最宽那个按钮的 max-content——
+ * 于是四个按钮天然一样宽，不需要写死一个 `min-width`，将来改文案也不会跑偏。
+ */
 .mid {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   justify-content: center;
   gap: var(--space-3);
 }
@@ -286,14 +311,7 @@
   line-height: 1;
 }
 
-/* 加号与箭头占同一个大小，三个按钮的图标才会对齐。 */
-.move__icon {
-  display: block;
-  width: 15px;
-  height: 15px;
-}
-
-/* 加号与箭头占同一个位置、同一个大小，三个按钮的图标才会对齐。 */
+/* 加号与箭头占同一个大小，几个按钮的图标才会对齐。 */
 .move__icon {
   display: block;
   width: 15px;
