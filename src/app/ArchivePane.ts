@@ -454,6 +454,23 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   /** 没有勾选框的行用它占位：`.marker__slot` 与复选框实测都是 14px，不给就会整列左移一格。 */
   const NO_BOX_SLOT = '<span class="marker__slot" aria-hidden="true"></span>'
 
+  /**
+   * 行首那一格。
+   *
+   * 三种情况：
+   * - **给勾选框**：这一行在「打开」的范围内（见 `selectableAt`）。
+   *   分隔线永远不给（它不是书签，传 `undefined`）。
+   * - **给等宽占位**：同一份清单里别的行有勾选框，不给占位它们就会差一格（`NO_BOX_SLOT`）。
+   * - **什么都不给**：整栏都不要勾选框时（两栏都是收藏夹，见 `setSelectable`）。
+   *   那时没有任何一行有勾选框，再留一列空白就只是让每一行的文字白白右移 14px。
+   */
+  function boxSlot(id: string | undefined, depth: number, isFolder: boolean): string {
+    if (id !== undefined && selectableAt(depth, isFolder)) {
+      return `<input type="checkbox" data-archive-item="${escapeHtml(id)}" />`
+    }
+    return selectable ? NO_BOX_SLOT : ''
+  }
+
   /** 一条行的 HTML（三类行 + 空文件夹提示，都在这里分派）。 */
   function archiveRowMarkup(row: ArchiveRow): string {
     if (row.kind === 'empty') {
@@ -498,7 +515,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
       return `
         <li class="marker marker--${kind}" draggable="true" data-drop-row="separator"
             ${boxAttrs} ${nodeAttr} data-drag-separator="${escapeHtml(bookmark.id)}">
-          <span class="marker__slot" aria-hidden="true"></span>
+          ${boxSlot(undefined, row.depth, false)}
           ${
             kind === 'sep' ? VERT_LINE_ICON : rules
           }
@@ -540,7 +557,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
       <li class="item leaf" data-row data-drop-row="bookmark" draggable="true"
           ${boxAttrs} ${nodeAttr} data-drag-bookmark="${escapeHtml(bookmark.id)}"
           data-bookmark-url="${escapeHtml(url)}">
-        ${selectableAt(row.depth, false) ? `<input type="checkbox" data-archive-item="${escapeHtml(bookmark.id)}" />` : NO_BOX_SLOT}
+        ${boxSlot(bookmark.id, row.depth, false)}
         ${faviconMarkup(url, FAVICON_BASE)}
         <span class="item__main">
           <span class="item__title">${escapeHtml(bookmark.title.trim() || host)}</span>
@@ -616,7 +633,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
           data-parent-id="${escapeHtml(row.parentId)}" data-sibling-index="${row.siblingIndex}"
           style="--depth:${row.depth}" data-node-id="${escapeHtml(folder.id)}"
           data-drop-folder="${escapeHtml(folder.id)}" data-enter-folder="${escapeHtml(folder.id)}">
-        ${selectableAt(row.depth, true) ? `<input type="checkbox" data-archive-item="${escapeHtml(folder.id)}" />` : NO_BOX_SLOT}
+        ${boxSlot(folder.id, row.depth, true)}
         <button type="button" class="folder-tile" data-toggle-folder="${escapeHtml(folder.id)}"
                 aria-expanded="${expanded}"
                 title="${expanded ? '收起这一层' : '就地展开这一层（不换页）'}"

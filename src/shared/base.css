@@ -94,6 +94,17 @@
    * 种类之间的高度差会直接看出来（分隔线行比旁边的书签行矮一截，像没排好）。
    */
   --row-height: calc(var(--row-inner) + var(--item-pad-y) * 2);
+  /*
+   * 两栏表头的高度下限。
+   *
+   * 两栏表头的内容不一样高（左栏是一枚两档控件、右栏是一行标题 + chip 栏），
+   * 而它们下面各是一个列表框——**两个框的顶边必须对齐**（实测不管的话差 9px，
+   * 两栏的行从此全都不在同一水平线上）。所以给一个下限，让两栏都取同一个值。
+   *
+   * 取 36 而不是刚好卡住两档控件那 33px：留几像素余量，字号或内边距微调时
+   * 两栏仍会取到同一个高度（多出来的几像素在这个尺度上看不出来）。
+   */
+  --head-min: 36px;
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
     'Hiragino Sans GB', sans-serif;
 }
