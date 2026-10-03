@@ -405,9 +405,15 @@
 /*
  * 路径与按钮组同一行：路径吃掉剩余宽度，按钮组推最右。按钮是「在当前位置做事」，
  * 与「我在哪」不是一回事 → 靠右分开而不是接在路径后面。
+ *
+ * **两级换行都是必需的**（实测 820px 视口下容器 334px，而按钮组自身 351px）：
+ * 不换行时按钮组把路径挤成 0 宽（面包屑变成一列竖着的字），而**最后一个按钮被裁掉**——
+ * 因为 `.box` 写着 `overflow-x: hidden`，溢出不会报警，只是悄悄看不见（`＋ 间隔` 点不到）。
+ * 所以别去掉这两处 `flex-wrap`，也别把按钮组改回 `flex: 0 0 auto`（不允许收缩 = 内部不会换行）。
  */
 .box__bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
@@ -418,7 +424,11 @@
 }
 
 .box__bar > .row {
-  flex: 0 0 auto;
+  /* 可收缩：窄栏下容器比按钮组窄，靠它把按钮压到第二行、第三行。 */
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: var(--space-1);
   margin-left: auto;
 }
 
