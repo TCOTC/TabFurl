@@ -331,14 +331,17 @@
 }
 
 /*
- * 分隔线是记号，不是书签：没有勾选框，画成一条横线，右侧带「修改 / 删除」。
+ * 两种记号（见 urls.ts）：**分隔线**是竖线图标，**间隔**是通栏横线。
  *
- * 两条横线是**真实元素**（`.divider__rule`）而不是伪元素：`::after` 永远排在所有子元素之后，
+ * 两者的外观必须完全不同：新建它们的是两个只差一个字的按钮，画得一样用户就分不清自己建的是哪一个，
+ * 也看不出它们在书签栏里各管什么——分隔线给**横排**的书签栏，间隔给**竖排**的列表。
+ *
+ * 横线用**真实元素**（`.marker__rule`）而不是伪元素：`::after` 永远排在所有子元素之后，
  * 用伪元素就没办法把按钮放在线的右边。
  *
- * `cursor: grab` 与其他可拖的行一致：它也能拖（位置本身就有意义）。
+ * `cursor: grab` 与其他可拖的行一致：两种都能拖（位置本身就有意义）。
  */
-.divider {
+.marker {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -349,28 +352,68 @@
   cursor: grab;
 }
 
-.divider:active {
+.marker:active {
   cursor: grabbing;
 }
 
-.divider__rule {
+/*
+ * 勾选框位置的占位。
+ *
+ * 记号行没有勾选框（它不是「要不要打开」的一枚），但竖线得落在与书签行的网站图标
+ * **同一列**上——不占位就会整排左移一格，看上去像没对齐。
+ */
+.marker__slot {
+  flex: 0 0 auto;
+  width: 14px;
+}
+
+/* 分隔线：一枚竖线，占位宽度与网站图标一致，所以它落在**同一列的中心**上。 */
+.marker__vert {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  color: var(--text-muted);
+}
+
+/* 间隔：一条通栏横线（两侧各一段，标题写在线中间）。 */
+.marker__rule {
   flex: 1;
   height: 1px;
   background: var(--border-strong);
 }
 
 /* 无标题时就只剩一条通线：右侧那条不画（否则两段线之间会顶着一个空格）。 */
-.divider__title:empty {
+.marker__title:empty {
   display: none;
 }
 
-.divider__title:empty + .divider__rule {
+.marker__title:empty + .marker__rule {
   display: none;
 }
 
-/* 编辑标题时把两条线收起来，否则输入框两边各挂一截线，看着像坏了。 */
-.divider:has(.input--rename) .divider__rule {
-  display: none;
+/*
+ * 载入占位。
+ *
+ * 高度与一行条目一致（`.item` 的上下内边距 6+6 加上图标 26px = 38px）：数据到达时换上去的
+ * 是同样高的行，列表不会「先短一截再变长」。脉冲只在系统允许动效时才加。
+ */
+.skeleton {
+  height: 38px;
+  margin: var(--space-1) var(--item-pad-x);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .skeleton {
+    animation: skeleton-pulse 1.6s ease-in-out infinite;
+  }
+}
+
+@keyframes skeleton-pulse {
+  50% {
+    opacity: 0.55;
+  }
 }
 
 /* ———————————————— 中间那列 ———————————————— */

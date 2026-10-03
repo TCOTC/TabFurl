@@ -125,7 +125,7 @@ export async function getBookmarksBarId(): Promise<string> {
 /**
  * 从节点一路向上收集祖先，**含自身**，顺序由浅到深（根在前）。
  *
- * 返回 id 而不只是标题：阅读页的面包屑要把每一层做成链接（`folder.html?id=…`）。
+ * 返回 id 而不只是标题：右栏的面包屑要把每一层做成可点的项（只靠标题的话没法跳）。
  * 根节点的 `title` 是空串，所以兜底成「书签」——否则面包屑首项会是个空白格。
  */
 export async function getNodePath(id: string): Promise<{id: string; title: string}[]> {

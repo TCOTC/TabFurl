@@ -18,35 +18,87 @@ export function isInternalUrl(url: string | undefined): boolean {
 }
 
 /**
- * 书签分隔线的占位网址（Maya Studios 的约定）。
+ * 书签分隔记号的占位网址（Maya Studios 的约定）。
  *
  * Chrome 早已不支持书签分隔线，社区的做法是收藏一个**指向固定网址的书签**来模拟：
- * 它不指向任何有用内容，只是书签树里的一个组织记号，界面上画成一条横线。
+ * 它不指向任何有用内容，只是书签树里的一个组织记号。
+ * 同一个网址靠 `?t=` 参数分成两种形态，名字与外观都不同（见下面两个常量）。
+ */
+const SEPARATOR_HOST = 'separator.mayastudios.com'
+const SEPARATOR_PATH = '/index.php'
+/** 省略路径时浏览器会补成 `/`，两种形态指的是同一枚记号。 */
+const SEPARATOR_PATHS = new Set([SEPARATOR_PATH, '/'])
+
+/**
+ * **间隔**：横向的一种，界面上画成一条通栏横线，**没有图标**。
+ *
+ * 它本来是为**竖向排列**（书签菜单、收藏夹列表）准备的：竖排里要一条横线才隔得开。
+ * 所以它的名字不是「分隔线」而是「间隔」——两个按钮必须叫得出区别，
+ * 否则用户分不清自己点的是哪一个（见 docs/design.md）。
+ */
+export const GAP_URL = 'https://separator.mayastudios.com/index.php?t=horz'
+
+/**
+ * **分隔线**：纵向的一种，界面上显示成一枚**竖线图标**。
+ *
+ * 它是为**横向排列**（书签栏那一排）准备的：横排里要一条竖线才隔得开。
+ * 所以它不能画成横线——那样既与它的含义相反，也看不出它其实是给书签栏用的。
  */
 export const SEPARATOR_URL = 'https://separator.mayastudios.com/index.php'
 
-const SEPARATOR = new URL(SEPARATOR_URL)
-/** 省略路径时浏览器会补成 `/`，两种形态指的是同一枚分隔线。 */
-const SEPARATOR_PATHS = new Set([SEPARATOR.pathname, '/'])
+/** `sep` 是纵向的分隔线（竖线图标），`gap` 是横向的间隔（一条横线）。 */
+export type SeparatorKind = 'sep' | 'gap'
+
+/** 两种记号的界面名。两个按钮、行内操作与状态文案都从这里取，不各自拼字。 */
+export const SEPARATOR_LABELS: Record<SeparatorKind, string> = {
+  sep: '分隔线',
+  gap: '间隔'
+}
 
 /**
- * 判定一枚书签是不是分隔线。
+ * 记号的种类。不是记号时返回 undefined。
  *
- * 按**主机名 + 路径**比对，忽略协议、查询串与片段：同一个记号在不同工具、不同时期会写成
- * `http` / `https`，也可能带上 `?title=…` 之类的参数。路径只认 `/index.php` 与省略成 `/`
- * 两种形态——不能只认主机名，那会把该域名下的任意页面也当成记号吃掉。
+ * 判定按**主机名 + 路径**，路径只认 `/index.php` 与省略成 `/` 两种形态——
+ * 不能只认主机名，那会把该域名下的任意页面也当成记号吃掉。
+ * `?t=horz`（或写全的 `horizontal`）是横向的间隔，其余（无参数、`?t=vert`、
+ * 以及早期工具写下的其他参数）一律当作纵向的分隔线——纵向本来就是默认形态。
  */
-export function isSeparatorUrl(url: string | undefined): boolean {
-  if (!url) return false
+export function separatorKind(url: string | undefined): SeparatorKind | undefined {
+  if (!url) return undefined
   try {
     const parsed = new URL(url)
-    return (
-      parsed.hostname.toLowerCase() === SEPARATOR.hostname &&
-      SEPARATOR_PATHS.has(parsed.pathname.toLowerCase())
-    )
+    if (parsed.hostname.toLowerCase() !== SEPARATOR_HOST) return undefined
+    if (!SEPARATOR_PATHS.has(parsed.pathname.toLowerCase())) return undefined
+    const type = (parsed.searchParams.get('t') ?? '').toLowerCase()
+    return type === 'horz' || type === 'horizontal' ? 'gap' : 'sep'
   } catch {
-    return false
+    return undefined
   }
+}
+
+/** 一枚书签是不是记号（不管是分隔线还是间隔）。 */
+export function isSeparatorUrl(url: string | undefined): boolean {
+  return separatorKind(url) !== undefined
+}
+
+/** 某种记号对应的占位网址：转换类型时用它改写书签的 `url`。 */
+export function separatorUrlOf(kind: SeparatorKind): string {
+  return kind === 'gap' ? GAP_URL : SEPARATOR_URL
+}
+
+/** 反过来的一种：行内的转换按钮拿它当目标。 */
+export function toggledSeparatorKind(kind: SeparatorKind): SeparatorKind {
+  return kind === 'gap' ? 'sep' : 'gap'
+}
+
+/**
+ * 浏览器自带书签管理器里某个文件夹的地址。
+ *
+ * 主界面的「打开书签管理器」用它：在那儿能看到整棵树、也能批量整理，
+ * 而扩展本来就不打算重做一套通用收藏管理（见 docs/design.md 二）。
+ */
+export function bookmarkManagerUrl(folderId: string): string {
+  return `chrome://bookmarks/?id=${encodeURIComponent(folderId)}`
 }
 
 /** 分隔线标题两端的手画横杠（`─`）与空白，一起去掉。 */

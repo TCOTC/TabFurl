@@ -2,12 +2,18 @@ import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {
   FAVICON_SIZE,
+  GAP_URL,
+  SEPARATOR_LABELS,
   SEPARATOR_URL,
+  bookmarkManagerUrl,
   faviconUrl,
   hostnameOf,
   isInternalUrl,
   isSeparatorUrl,
-  separatorTitle
+  separatorKind,
+  separatorTitle,
+  separatorUrlOf,
+  toggledSeparatorKind
 } from './urls'
 
 test('isInternalUrl 把空值与内部页面判为不可收藏', () => {
@@ -70,6 +76,48 @@ test('isSeparatorUrl 不误伤同名域名下的其他页面与普通书签', ()
   assert.equal(isSeparatorUrl(undefined), false)
   assert.equal(isSeparatorUrl(''), false)
   assert.equal(isSeparatorUrl('not a url'), false)
+})
+
+test('separatorKind 把两种记号分开：`?t=horz` 是间隔，其余是分隔线', () => {
+  assert.equal(separatorKind(GAP_URL), 'gap')
+  assert.equal(separatorKind(SEPARATOR_URL), 'sep')
+
+  // 写全的 `?t=horizontal` 与省略协议、路径的写法都算同一枚记号。
+  assert.equal(separatorKind('https://separator.mayastudios.com/index.php?t=horizontal'), 'gap')
+  assert.equal(separatorKind('http://separator.mayastudios.com/?t=horz'), 'gap')
+  assert.equal(separatorKind('https://separator.mayastudios.com/index.php?t=vert'), 'sep')
+  assert.equal(separatorKind('https://separator.mayastudios.com/index.php?title=x'), 'sep')
+  assert.equal(separatorKind('https://separator.mayastudios.com'), 'sep')
+
+  // 大小写不敏感：不同工具写出来的参数不保证一致。
+  assert.equal(separatorKind('https://separator.mayastudios.com/index.php?t=HORZ'), 'gap')
+
+  assert.equal(separatorKind('https://example.com'), undefined)
+  assert.equal(separatorKind(undefined), undefined)
+})
+
+test('separatorUrlOf 与 toggledSeparatorKind 互为可往返的一对', () => {
+  // 转换按钮的实现就是这两句：读出现在是哪种、写回另一种的网址。
+  // 它们必须一致，否则「转过去再转回来」会落到第三种网址上（那就不再是记号了）。
+  for (const kind of ['sep', 'gap'] as const) {
+    const other = toggledSeparatorKind(kind)
+    assert.notEqual(other, kind)
+    assert.equal(separatorKind(separatorUrlOf(other)), other, '转过去的网址必须认成另一种')
+    assert.equal(separatorKind(separatorUrlOf(toggledSeparatorKind(other))), kind, '往返要回到自身')
+  }
+
+  assert.equal(separatorUrlOf('gap'), GAP_URL)
+  assert.equal(separatorUrlOf('sep'), SEPARATOR_URL)
+})
+
+test('两种记号各有自己的名字（按钮与状态文案都从这里取）', () => {
+  assert.equal(SEPARATOR_LABELS.sep, '分隔线')
+  assert.equal(SEPARATOR_LABELS.gap, '间隔')
+})
+
+test('bookmarkManagerUrl 带上 id 并转义，交给浏览器打开那一层', () => {
+  assert.equal(bookmarkManagerUrl('1'), 'chrome://bookmarks/?id=1')
+  assert.equal(bookmarkManagerUrl('a b'), 'chrome://bookmarks/?id=a%20b')
 })
 
 test('separatorTitle 剔除首尾手画的横杠，并收掉留下的空白', () => {

@@ -17,16 +17,19 @@ const EXPECTED_ENTRIES = {
   action: 'images/icon-128.png'
 }
 
+/**
+ * 期望的产物文件。
+ *
+ * `shared/commons.js` 只在有**两个以上**入口时才会被构建工具抽出来（它是共享 chunk）。
+ * 删掉阅读页之后只剩 `pages/app` 一个入口，整个共享层就并进了 `pages/app.js`——
+ * 所以这里不再列它（列着就会自检失败，而那并不代表产物有问题）。
+ */
 const EXPECTED_FILES = [
   'manifest.json',
   'background/service_worker.js',
-  'shared/commons.js',
   'pages/app.html',
   'pages/app.js',
   'pages/app.css',
-  'pages/folder.html',
-  'pages/folder.js',
-  'pages/folder.css',
   'images/icon-16.png',
   'images/icon-32.png',
   'images/icon-48.png',

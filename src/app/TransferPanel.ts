@@ -15,11 +15,21 @@ import {
   type WindowChild
 } from '../shared/capture'
 import {formatTimestamp, sanitizeFolderName} from '../shared/naming'
-import {discardCommittedTabs, openFolderViewers, restoreFolder} from '../shared/restore'
+import {discardCommittedTabs, openInBookmarkManager, restoreFolder} from '../shared/restore'
 import {loadSettings} from '../shared/settings'
 import {escapeHtml, faviconMarkup} from '../shared/tile'
 import type {BookmarkNode, RestoreOptions, TabSnapshot} from '../shared/types'
-import {SEPARATOR_URL, hostnameOf, isInternalUrl, isSeparatorUrl, separatorTitle} from '../shared/urls'
+import {
+  SEPARATOR_LABELS,
+  hostnameOf,
+  isInternalUrl,
+  isSeparatorUrl,
+  separatorKind,
+  separatorTitle,
+  separatorUrlOf,
+  toggledSeparatorKind,
+  type SeparatorKind
+} from '../shared/urls'
 import {
   createPanelElement,
   createSelectAll,
@@ -89,7 +99,7 @@ const PIN_ICON = `
 `
 
 /**
- * 文件夹图标。与阅读页的子文件夹卡片用**同一个** `.folder-tile`（见 base.css）。
+ * 文件夹图标。
  *
  * 右栏里它不只是装饰：两种行都带勾选框，而勾选框左边的位置以前是空的，文件夹行看起来就与书签行一样。
  * 放上它之后，「这一行可以进去」与「这一行是个页面」在左侧一眼可分。
@@ -113,6 +123,18 @@ const PLUS_ICON = `
 `
 
 /**
+ * 「分隔线」的图标：一枚竖线。
+ *
+ * 自己画而不是用 `|` 字形：竖线的粗细与基线在各字体里都不一样，与旁边的文件夹图标摆在一排就会歪。
+ * 尺寸交给 CSS（与 `.folder-tile` 同为 26px），所以它落在**与网站图标同一列的中心**上。
+ */
+const VERT_LINE_ICON = `
+  <svg class="marker__vert" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M8 2.5v11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+  </svg>
+`
+
+/**
  * 默认展示文件夹选择器的挂载点 id。
  *
  * `App` 用它把选择器放进右栏表头，而 `TransferPanel` 只管留出这个位置——
@@ -130,7 +152,16 @@ const TEMPLATE = `
       </header>
       <div class="row row--compact" id="window-all-host"></div>
       <div class="box" data-drop-pane="window">
-        <ul class="list" id="window-list"></ul>
+        <!--
+          先放几块骨架：数据是异步读来的（设置 + 标签 + 书签树三处），在它们回来之前列表是空的，
+          而「空列表」与「真的没有标签」长得一模一样——用户看到的是「先空一下、内容再蹦出来」。
+          骨架把这一段变成「正在读」（尺寸见 app.css 的 .skeleton）。
+        -->
+        <ul class="list" id="window-list">
+          <li class="skeleton" aria-hidden="true"></li>
+          <li class="skeleton" aria-hidden="true"></li>
+          <li class="skeleton" aria-hidden="true"></li>
+        </ul>
       </div>
     </section>
 
@@ -192,14 +223,21 @@ const TEMPLATE = `
             <div class="row row--compact">
               <button type="button" class="btn btn--ghost btn--sm" id="new-folder-btn">＋ 新建文件夹</button>
               <button type="button" class="btn btn--ghost btn--sm" id="new-separator-btn"
-                      title="在当前位置插一条分隔线">＋ 分隔线</button>
-              <button type="button" class="btn btn--ghost btn--sm" id="open-root-btn" hidden>打开阅读页</button>
+                      title="在当前位置插一条分隔线（竖线，给横向排列的书签栏用）">＋ 分隔线</button>
+              <button type="button" class="btn btn--ghost btn--sm" id="new-gap-btn"
+                      title="在当前位置插一条间隔（横线，给竖向排列的列表用）">＋ 间隔</button>
+              <button type="button" class="btn btn--ghost btn--sm" id="open-root-btn" hidden>打开书签管理器</button>
             </div>
           </div>
           <!-- 在书签树根上时写入入口会是灰的，用一句话说明为何以及怎么退出去。 -->
           <p class="box__note" id="archive-note" hidden></p>
         </div>
-        <ul class="list" id="archive-list"></ul>
+        <ul class="list" id="archive-list">
+          <li class="skeleton" aria-hidden="true"></li>
+          <li class="skeleton" aria-hidden="true"></li>
+          <li class="skeleton" aria-hidden="true"></li>
+          <li class="skeleton" aria-hidden="true"></li>
+        </ul>
       </div>
     </section>
   </div>
@@ -243,6 +281,7 @@ export function createTransferPanel(events: AppEvents): Panel {
   const noGroupCheck = q<HTMLInputElement>(element, '#no-group-check')
   const newFolderButton = q<HTMLButtonElement>(element, '#new-folder-btn')
   const newSeparatorButton = q<HTMLButtonElement>(element, '#new-separator-btn')
+  const newGapButton = q<HTMLButtonElement>(element, '#new-gap-btn')
   const openRootButton = q<HTMLButtonElement>(element, '#open-root-btn')
   const status = q<HTMLSpanElement>(element, '#status')
 
@@ -295,6 +334,12 @@ export function createTransferPanel(events: AppEvents): Panel {
   let viewPath: {id: string; title: string}[] = []
   let windowChildren: WindowChild[] = []
   let archiveChildren: BookmarkNode[] = []
+  /**
+   * 左栏上一次渲染用的签名。
+   *
+   * 初次为 `undefined`（还没渲染过，列表里是骨架），所以第一次一定会建 DOM。
+   */
+  let windowSignature: string | undefined
   /** 左栏被勾掉的标签 id（保存侧默认全选，所以记排除）。 */
   const windowExcluded = new Set<number>()
   /** 右栏被勾掉的书签 id（打开侧默认全不勾，所以记排除 + 一份「见过的」）。 */
@@ -336,6 +381,9 @@ export function createTransferPanel(events: AppEvents): Panel {
    *
    * 三个 data 属性各有用处：`data-row` 供「点整行切换勾选」找到勾选框；
    * `data-tab-index` 与 `data-tab-group` 供拖拽算落点（插到哪儿、归哪个组）。
+   *
+   * 右侧的「打开」是**切过去**（`active: true` + 聚焦窗口），不是「打开一个新标签」——
+   * 这一栏是活着的标签的清单，对着它点一条就是要跳到那一条上去。
    */
   function tabRowMarkup(tab: TabSnapshot): string {
     const host = hostnameOf(tab.url) ?? tab.url
@@ -349,11 +397,44 @@ export function createTransferPanel(events: AppEvents): Panel {
           <span class="item__title">${escapeHtml(tab.title || tab.url)}${tab.pinned ? PIN_ICON : ''}</span>
           <span class="item__meta">${escapeHtml(host)}</span>
         </span>
+        <span class="tree__actions">
+          <button type="button" class="btn btn--ghost btn--sm"
+                  data-switch-tab="${tab.tabId}" title="切换到这个标签页">打开</button>
+        </span>
       </li>
     `
   }
 
+  /**
+   * 左栏现在的样子：结构 + 文本。
+   *
+   * **勾选不在签名里**：它由 `syncWindowStates()` 回填，把它算进签名反而会因为「勾一下」
+   * 重建整列（而重建又会把勾选框恢复成未勾选）。
+   */
+  function windowSignatureOf(children: readonly WindowChild[]): string {
+    return children
+      .map((child) =>
+        child.kind === 'tab'
+          ? `t ${child.tab.tabId} ${child.tab.title} ${child.tab.url} ${child.tab.pinned ? 1 : 0}`
+          : `g ${child.name} ${child.tabs
+              .map((tab) => `${tab.tabId} ${tab.title} ${tab.url}`)
+              .join('')}`
+      )
+      .join('')
+  }
+
   function renderWindow(): void {
+    // 结构没变就什么都不做。
+    //
+    // `refresh()` 会被频繁重跑（保存、删除、改名、拖一条收藏夹条目…），而它每次都要重建整个左栏：
+    // 用户的屏幕上就是一次无意义的整列重绘（实测：挪一根分隔线时「存过去 (N)」闪一下）。
+    // 凡是「由外部数据驱动、又会被频繁重跑」的渲染，都要先问一句：内容没变时能不能什么都不做。
+    const signature = windowSignatureOf(windowChildren)
+    if (signature === windowSignature) {
+      syncWindowStates()
+      return
+    }
+    windowSignature = signature
     windowCount.textContent = String(allWindowTabs().length)
 
     if (windowChildren.length === 0) {
@@ -421,27 +502,45 @@ export function createTransferPanel(events: AppEvents): Panel {
    * 那时 `title` 里还有完整的一份。
    */
   function archiveBookmarkRow(bookmark: BookmarkNode): string {
-    if (isSeparatorUrl(bookmark.url)) {
+    const kind = separatorKind(bookmark.url)
+    if (kind) {
       const isRenaming = renaming?.id === bookmark.id
+      // 两种记号**外观完全不同**，因为它们在书签栏里的用途就不同：
+      //   间隔（`?t=horz`，横向）画成一条通栏横线 —— 竖排列表里要一条横线才隔得开；
+      //   分隔线（无参数，纵向）画成一枚竖线图标 —— 它是给书签栏那一排横排用的。
+      // 名字与外观必须一起改（见 urls.ts）：光看「一条线」用户分不清自己在两个按钮里点了哪个。
+      const label = SEPARATOR_LABELS[kind]
+      const target = SEPARATOR_LABELS[toggledSeparatorKind(kind)]
+      const rules = isRenaming || kind === 'sep'
+        ? ''
+        : '<span class="marker__rule" aria-hidden="true"></span>'
       // 两条横线用**真实元素**而不是伪元素：`::after` 永远排在所有子元素之后（这是规范定的），
       // 而按钮必须在这条线**右边**——用伪元素就只能得到「线在按钮右边」那种坏排布。
       return `
-        <li class="divider" draggable="true" data-drop-row="separator"
+        <li class="marker marker--${kind}" draggable="true" data-drop-row="separator"
             data-drag-separator="${escapeHtml(bookmark.id)}">
-          <span class="divider__rule" aria-hidden="true"></span>
+          <span class="marker__slot" aria-hidden="true"></span>
+          ${
+            kind === 'sep' ? VERT_LINE_ICON : rules
+          }
           ${
             isRenaming
               ? `<input type="text" class="input input--rename" draggable="false"
                         data-rename-input="${escapeHtml(bookmark.id)}"
                         value="${escapeHtml(separatorTitle(bookmark.title))}"
-                        placeholder="分隔线标题（可留空）" aria-label="分隔线标题" />`
-              : `<span class="divider__title">${escapeHtml(separatorTitle(bookmark.title))}</span>`
+                        placeholder="${label}标题（可留空）" aria-label="${label}标题" />`
+              : `<span class="marker__title">${escapeHtml(separatorTitle(bookmark.title))}</span>`
           }
-          <span class="divider__rule" aria-hidden="true"></span>
+          ${
+            isRenaming || kind === 'sep' ? '' : rules
+          }
           ${
             isRenaming
               ? ''
               : `<span class="tree__actions">
+                   <button type="button" class="btn btn--ghost btn--sm"
+                           data-swap-separator="${escapeHtml(bookmark.id)}"
+                           title="改成${target}">转${target}</button>
                    <button type="button" class="btn btn--ghost btn--sm" data-rename="${escapeHtml(bookmark.id)}">修改</button>
                    ${
                      pendingDeleteId === bookmark.id
@@ -671,6 +770,7 @@ export function createTransferPanel(events: AppEvents): Panel {
     undoButton.disabled = busy || !lastWrite
     newFolderButton.disabled = busy || !canWrite()
     newSeparatorButton.disabled = busy || !canWrite()
+    newGapButton.disabled = busy || !canWrite()
     openRootButton.hidden = !viewFolderId
   }
 
@@ -715,10 +815,19 @@ export function createTransferPanel(events: AppEvents): Panel {
       viewPath = fallback
     }
 
-    const folder = viewFolderId ? await getSubTree(viewFolderId) : undefined
+    renderWindow()
+    applyArchive(viewFolderId ? await getSubTree(viewFolderId) : undefined)
+  }
+
+  /**
+   * 右栏数据到齐后的公共部分：维护「见过的书签 id」并重渲染。
+   *
+   * 打开侧默认一个都不勾，靠这份「见过的」名单实现：没见过的书签一律算排除。
+   * 余下的两个清理是把已经不在这一层的 id 丢掉，不然它们会越涨越大。
+   */
+  function applyArchive(folder: BookmarkNode | undefined): void {
     archiveChildren = folder?.children ?? []
 
-    // 打开侧默认一个都不勾：没见过的书签一律算排除。
     const alive = new Set(archiveBookmarkIds())
     for (const id of alive) {
       if (!knownBookmarks.has(id)) {
@@ -729,7 +838,6 @@ export function createTransferPanel(events: AppEvents): Panel {
     for (const id of [...knownBookmarks]) if (!alive.has(id)) knownBookmarks.delete(id)
     for (const id of [...archiveExcluded]) if (!alive.has(id)) archiveExcluded.delete(id)
 
-    renderWindow()
     renderArchive()
   }
 
@@ -1149,6 +1257,11 @@ export function createTransferPanel(events: AppEvents): Panel {
     if (tabs.length === 0) return
     const tabIds = tabs.map((tab) => tab.tabId)
 
+    // 拖到自己身上 = 原地不动，而不是「与邻居交换」。
+    // `tabs.move` 的 index 是**移动之后**的位置，所以「拖到自己这一行的下缘」会算出
+    // 「自己 + 1」，真把标签往后挪一格；而用户看到的是自己根本没动过的位置（实测就是这一条）。
+    if (drop.kind === 'tab' && tabs.length === 1 && drop.anchorIndex === tabs[0].index) return
+
     const insertAt =
       drop.kind === 'end'
         ? allWindowTabs().length - tabIds.length
@@ -1322,7 +1435,32 @@ export function createTransferPanel(events: AppEvents): Panel {
     row.querySelector<HTMLInputElement>('input[type=checkbox]')?.click()
   }
 
-  windowList.addEventListener('click', (event) => toggleRowFromClick(windowList, event))
+  windowList.addEventListener('click', (event) => {
+    const switchButton = (event.target as HTMLElement).closest<HTMLButtonElement>(
+      '[data-switch-tab]'
+    )
+    if (switchButton?.dataset.switchTab !== undefined) {
+      void switchToTab(Number(switchButton.dataset.switchTab))
+      return
+    }
+    toggleRowFromClick(windowList, event)
+  })
+
+  /**
+   * 切到某一枚标签（左栏行尾的「打开」）。
+   *
+   * 光 `tabs.update({active})` 只在**那一枚标签所在的窗口**里生效：主界面与它在不同的
+   * 浏览器窗口时，视口不会跟过去，看着就是「点了没反应」。所以还要把那扇窗口提到最前。
+   */
+  async function switchToTab(tabId: number): Promise<void> {
+    try {
+      const tab = await chrome.tabs.update(tabId, {active: true})
+      const windowId = tab?.windowId
+      if (windowId !== undefined) await chrome.windows.update(windowId, {focused: true})
+    } catch (error) {
+      setStatus(status, `切换失败：${errorText(error)}`, 'error')
+    }
+  }
 
   element.addEventListener('change', (event) => {
     const input = event.target as HTMLInputElement
@@ -1409,6 +1547,12 @@ export function createTransferPanel(events: AppEvents): Panel {
     const enterButton = target.closest<HTMLButtonElement>('[data-enter]')
     if (enterButton?.dataset.enter) {
       void navigateTo(enterButton.dataset.enter)
+      return
+    }
+
+    const swapButton = target.closest<HTMLButtonElement>('[data-swap-separator]')
+    if (swapButton?.dataset.swapSeparator) {
+      void swapSeparator(swapButton.dataset.swapSeparator)
       return
     }
 
@@ -1570,8 +1714,14 @@ export function createTransferPanel(events: AppEvents): Panel {
   undoButton.addEventListener('click', () => void undo())
 
   // 阅读页开的就是当前展示的这一层，这样「看这一层的全貌」与「打开这一层」是同一处。
-  openRootButton.addEventListener('click', () => {
-    if (viewFolderId) void openFolderViewers([viewFolderId])
+  openRootButton.addEventListener('click', async () => {
+    if (!viewFolderId) return
+    try {
+      await openInBookmarkManager(viewFolderId)
+    } catch (error) {
+      // 这里的错误文案是写给用户看的（含快捷键），不是 API 的原文，所以直接展示。
+      setStatus(status, errorText(error), 'error')
+    }
   })
 
   newFolderButton.addEventListener('click', async () => {
@@ -1594,13 +1744,15 @@ export function createTransferPanel(events: AppEvents): Panel {
     }
   })
 
-  // 分隔线也是「建完就改名」：它的全部意义常常就在那个标题上，而新建时不带标题（就是一条线）。
-  newSeparatorButton.addEventListener('click', async () => {
+  // 两种记号各一个按钮，**不合并成一个再让用户去改**：它们外观完全不同，
+  // 建完再转一次是多余的一步（而且刚建的那一枚还分不清是哪种）。
+  // 建完直接进入改名状态：它的全部意义常常就在那个标题上。
+  async function createMarker(kind: SeparatorKind): Promise<void> {
     if (!canWrite() || busy) return
     busy = true
     updateButtons()
     try {
-      const created = await createBookmark(viewFolderId, '', SEPARATOR_URL)
+      const created = await createBookmark(viewFolderId, '', separatorUrlOf(kind))
       lastWrite = {folderIds: [], bookmarkIds: [created.id]}
       renaming = {id: created.id, committed: false}
       await events.archiveChanged()
@@ -1612,7 +1764,36 @@ export function createTransferPanel(events: AppEvents): Panel {
       busy = false
       updateButtons()
     }
-  })
+  }
+
+  newSeparatorButton.addEventListener('click', () => void createMarker('sep'))
+  newGapButton.addEventListener('click', () => void createMarker('gap'))
+
+  /**
+   * 把一枚记号在两种形态之间转换（分隔线 ⇄ 间隔）。
+   *
+   * 只改 `url`：两种记号的差别就在那个 `?t=horz`，而标题是用户自己写的，
+   * 与它是横线还是竖线无关——顺手把标题也改掉会丢掉用户写的东西。
+   */
+  async function swapSeparator(id: string): Promise<void> {
+    if (busy) return
+    const kind = separatorKind(archiveChildren.find((child) => child.id === id)?.url)
+    if (!kind) return
+    const next = toggledSeparatorKind(kind)
+
+    busy = true
+    pendingDeleteId = undefined
+    updateButtons()
+    try {
+      await updateNode(id, {url: separatorUrlOf(next)})
+      setStatus(status, `已改成${SEPARATOR_LABELS[next]}。`, 'ok')
+    } catch (error) {
+      setStatus(status, `转换失败：${errorText(error)}`, 'error')
+    } finally {
+      busy = false
+      await events.archiveChanged()
+    }
+  }
 
   /**
    * 把光标放到刚出现的重命名输入框的**最前面**。

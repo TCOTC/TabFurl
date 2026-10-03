@@ -1,6 +1,6 @@
 import {getSubTree} from './bookmarks'
 import type {BookmarkNode, RestoreOptions, RestoreResult} from './types'
-import {isInternalUrl, isSeparatorUrl} from './urls'
+import {bookmarkManagerUrl, isInternalUrl, isSeparatorUrl} from './urls'
 
 export interface PlannedBookmark {
   /** 书签 id；界面里取消勾选某一枚标签时用它。 */
@@ -8,10 +8,10 @@ export interface PlannedBookmark {
   title: string
   url: string
   /**
-   * 分隔线（`isSeparatorUrl` 认出的那个占位书签）。
+   * 这是一枚记号（分隔线或间隔，`isSeparatorUrl` 认出的那个占位书签）。
    *
-   * 保留在计划里是为了让界面把它画在**原来的位置**上，但它不是要打开的页面：
-   * 还原时跳过，计数时不算作标签。
+   * 计划里**留着**它，是为了让其他按同一份计划遍历的地方不会漏掉一条（顺序即书签树顺序）；
+   * 但它不是要打开的页面：还原时跳过，计数时不算作标签。
    */
   separator: boolean
 }
@@ -348,17 +348,20 @@ async function currentWindowId(
 }
 
 /**
- * 文件夹启动器：为每个文件夹各开一个标签页（渲染 `pages/folder.html`）。
- * 这是本项目存在的理由之一——浏览器自带的收藏夹做不到并排打开多个文件夹。
+ * 在浏览器自带书签管理器里打开这个文件夹。
+ *
+ * 它取代了早期的「阅读页」（扩展自己渲染一整页卡片）：那等于长期维护第二个界面，
+ * 而它想解决的问题（看一层文件夹的全貌）浏览器本来就做得更好——
+ * 集成已经存在的能力，比自己再实现一遍更合适（见 docs/design.md 二）。
+ *
+ * `chrome://` 不能无脑跳：扩展的访问被限制在一份白名单里。所以这里只试新开一页，
+ * 被挡下来时抛一句**可操作**的错（告知快捷键），而不是静默失败——
+ * 弹一句 API 的原始错误对用户没有任何用。
  */
-export async function openFolderViewers(folderIds: readonly string[]): Promise<number> {
-  let opened = 0
-  for (const folderId of folderIds) {
-    const url = chrome.runtime.getURL(
-      `pages/folder.html?id=${encodeURIComponent(folderId)}`
-    )
-    await chrome.tabs.create({url, active: opened === 0})
-    opened++
+export async function openInBookmarkManager(folderId: string): Promise<void> {
+  try {
+    await chrome.tabs.create({url: bookmarkManagerUrl(folderId), active: true})
+  } catch {
+    throw new Error('浏览器不允许扩展打开书签管理器，请按 Ctrl+Shift+O 打开后再找这个文件夹')
   }
-  return opened
 }
