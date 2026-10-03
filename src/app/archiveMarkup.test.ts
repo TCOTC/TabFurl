@@ -79,12 +79,43 @@ test('文件夹行：展开态写在 class 与 aria-expanded 上，按钮提示�
 })
 
 test('勾选框只给「会被打开」的行：更深层的行不给（勾了却不开是假话）', () => {
-  // 书签：depth ≤ 1 给；文件夹：只有 depth 0 给。
+  // 书签：depth ≤ 1 给；文件夹：只有 depth 0 给（而且里面得真有可打开的书签）。
+  const withBookmark = folder('f', [bookmark('f1')])
   assert.equal(count(archiveRowMarkup(nodeRow(bookmark('a'), 0), ctx()), 'data-archive-item'), 1)
   assert.equal(count(archiveRowMarkup(nodeRow(bookmark('a'), 1), ctx()), 'data-archive-item'), 1)
   assert.equal(count(archiveRowMarkup(nodeRow(bookmark('a'), 2), ctx()), 'data-archive-item'), 0)
-  assert.equal(count(archiveRowMarkup(nodeRow(folder('f'), 0), ctx()), 'data-archive-item'), 1)
-  assert.equal(count(archiveRowMarkup(nodeRow(folder('f'), 1), ctx()), 'data-archive-item'), 0)
+  assert.equal(count(archiveRowMarkup(nodeRow(withBookmark, 0), ctx()), 'data-archive-item'), 1)
+  assert.equal(count(archiveRowMarkup(nodeRow(withBookmark, 1), ctx()), 'data-archive-item'), 0)
+})
+
+test('空文件夹的勾选框不给（勾选框会当场弹回未勾选，看着像「点了没反应」）', () => {
+  const empty = archiveRowMarkup(nodeRow(folder('f')), ctx())
+  assert.equal(count(empty, 'data-archive-item'), 0)
+  assert.equal(count(empty, 'marker__slot'), 1, '要占位，否则整列左移一格')
+})
+
+test('只装着子文件夹的文件夹也不给勾选框（这一层一枚可打开的都没有）', () => {
+  const nested = archiveRowMarkup(nodeRow(folder('f', [folder('sub', [bookmark('s1')])])), ctx())
+  assert.equal(count(nested, 'data-archive-item'), 0)
+})
+
+test('内部页面不参与勾选：书签行不给勾选框，文件夹副文案也不算它', () => {
+  const chromePage: BookmarkNode = {id: 'c', title: 'discards', url: 'chrome://discards/'}
+  const leaf = archiveRowMarkup(nodeRow(chromePage), ctx())
+  assert.equal(count(leaf, 'data-archive-item'), 0)
+  assert.equal(count(leaf, 'marker__slot'), 1)
+
+  assert.equal(count(archiveRowMarkup(nodeRow(folder('f', [chromePage])), ctx()), 'data-archive-item'), 0)
+  // 「N 个书签」只算会被打开的：1 枚可打开 + 1 枚内部页面 → 写 1。
+  assert.match(archiveRowMarkup(nodeRow(folder('f', [chromePage, bookmark('b')])), ctx()), /1 个书签/)
+})
+
+test('书签树根的子级不能拖（Chrome 的 move 会拒，不给拖比拖完报错好）', () => {
+  const locked = archiveRowMarkup(nodeRow(folder('f')), ctx({canEdit: false}))
+  assert.equal(count(locked, 'data-drag-folder'), 0)
+  // 但落点还在：往里拖东西仍然可以（它不是永久节点里最内层那个特例）。
+  assert.match(locked, /data-drop-folder="f"/)
+  assert.match(archiveRowMarkup(nodeRow(folder('f')), ctx()), /data-drag-folder="f"/)
 })
 
 test('没有勾选框的行用等宽占位（不给就整列左移一格）', () => {

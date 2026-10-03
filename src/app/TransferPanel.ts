@@ -1,13 +1,15 @@
 import {createBookmark, getNodePath, removeSubTree} from '../shared/bookmarks'
 import {
+  countSnapshotTabs,
   planWindowChildren,
+  selectTabs,
   snapshotCurrentWindow,
   writeChildren,
   type WindowChild
 } from '../shared/capture'
 import {discardCommittedTabs, restoreFolder} from '../shared/restore'
 import {loadSettings} from '../shared/settings'
-import type {RestoreOptions, TabSnapshot} from '../shared/types'
+import type {RestoreOptions, TabSnapshot, WindowSnapshot} from '../shared/types'
 import {
   createPanelElement,
   createSelectAll,
@@ -415,7 +417,22 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     pane.actionsHost.append(actions)
   }
 
+  /** 上一次采到的窗口快照（**完整**的一份：`planWindowChildren` 的输入）。 */
+  let windowSnapshot: WindowSnapshot | undefined
+  /** 界面上那一份子级（已过滤掉浏览器内部页面）。 */
   let windowChildren: WindowChild[] = []
+  /**
+   * 窗口里**真实**的标签数——含被过滤掉的内部页面（`snapshotCurrentWindow` 把它们计进 `skipped`）。
+   * 拖拽要用它：`tabs.move` 的 index 是「移动之后」的位置，末尾那一格是「真实总数 - 1」。
+   */
+  let windowTotalTabs = 0
+
+  /** 采到快照之后一次性记好账：渲染用的一份、拖拽用的真实总数。 */
+  function applySnapshot(snapshot: WindowSnapshot): void {
+    windowSnapshot = snapshot
+    windowChildren = planWindowChildren(snapshot)
+    windowTotalTabs = countSnapshotTabs(snapshot) + snapshot.skipped
+  }
 
   /**
    * 左栏上一次渲染用的签名。
@@ -515,13 +532,31 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     return tabs.filter((tab) => windowSelected.has(tab.tabId))
   }
 
+  /**
+   * 「这一批会被存下去」的那份窗口快照。
+   *
+   * **不自己遍历**：把「没勾上的」交给 `shared/capture.ts` 的 `selectTabs()`，再走与渲染同一个
+   * `planWindowChildren()`——自己再写一遍过滤就多一处分叉的机会（`存过去 (N)` 与实际存下的枚数、
+   * 写入顺序三者都会各自漂）。排除集是**临时的**（由选中集现算），左栏那份状态仍是选中集。
+   */
+  function keptSnapshot(): WindowSnapshot {
+    const snapshot = windowSnapshot
+    if (!snapshot) return {windowId: -1, capturedAt: 0, groups: [], ungrouped: [], skipped: 0}
+    const notSelected = new Set<number>()
+    for (const tab of allWindowTabs()) {
+      if (!windowSelected.has(tab.tabId)) notSelected.add(tab.tabId)
+    }
+    return selectTabs(snapshot, notSelected)
+  }
+
   /** 左栏里「还会被存下去」的子级：整组没选就不写这个文件夹。 */
   function keptWindowChildren(): WindowChild[] {
-    return windowChildren.flatMap<WindowChild>((child) => {
-      if (child.kind === 'tab') return windowSelected.has(child.tab.tabId) ? [child] : []
-      const tabs = windowKeptTabs(child.tabs)
-      return tabs.length > 0 ? [{...child, tabs}] : []
-    })
+    return planWindowChildren(keptSnapshot())
+  }
+
+  /** 「存过去 (N)」的那个 N。与 `keptWindowChildren()` 出自同一份数据。 */
+  function keptTabCount(): number {
+    return countSnapshotTabs(keptSnapshot())
   }
 
   function renderWindow(): void {
@@ -589,7 +624,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    */
   async function refresh(): Promise<void> {
     favoriteFolderIds = (await loadSettings()).favoriteFolderIds
-    windowChildren = planWindowChildren(await snapshotCurrentWindow())
+    applySnapshot(await snapshotCurrentWindow())
 
     // 标签被关掉之后它的 tabId 不会再出现；留着只会让集合越涨越大。
     const aliveTabs = new Set(allWindowTabs().map((tab) => tab.tabId))
@@ -611,7 +646,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    * 由 `ArchivePane.updateButtons()` 管：合成一个函数会让「谁的按钮在谁手里」变成猜谜。
    */
   function updateButtons(): void {
-    const keptTabs = allWindowTabs().filter((tab) => windowSelected.has(tab.tabId)).length
+    const keptTabs = keptTabCount()
     const keptBookmarks = archive.keptCount()
 
     // 左栏那一枚胸章：说的是「这一栏现在有几条」——窗口档数标签，收藏夹档数那个文件夹里的条目。
@@ -651,7 +686,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
   /** 只重读左栏。窗口里的标签变了（而收藏夹没动）时用它。 */
   async function refreshWindowOnly(): Promise<void> {
-    windowChildren = planWindowChildren(await snapshotCurrentWindow())
+    applySnapshot(await snapshotCurrentWindow())
     // 被关掉的标签不能继续留在选中集里，否则那个集合只会越涨越大。
     const alive = new Set(allWindowTabs().map((tab) => tab.tabId))
     for (const tabId of [...windowSelected]) if (!alive.has(tabId)) windowSelected.delete(tabId)
@@ -748,8 +783,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       const parts = [`已存下 ${result.saved} 个标签页`]
       if (result.groups > 0) parts.push(`${result.groups} 个分组`)
       setStatus(status, parts.join(' · '), 'ok')
+      // `archiveChanged` 就是一次完整刷新（设置 + 两栏），后面再 `refresh()` 白跑一趟 `getSubTree`。
       await events.archiveChanged()
-      await refresh()
     } catch (error) {
       setStatus(status, `保存失败：${errorText(error)}`, 'error')
     } finally {
@@ -806,8 +841,16 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     }
 
     try {
-      await restoreFolder(folderId, options)
-      setStatus(status, '', 'ok')
+      const result = await restoreFolder(folderId, options)
+      // 打开成功不留报账式提示（开出来几个标签页看得见），但**跳过的必须说**：
+      // 内部页面与更深的子文件夹都不在「打开 (N)」里，不说的话用户只看到「我要的那几个没开」。
+      setStatus(
+        status,
+        result.skipped > 0
+          ? `另有 ${result.skipped} 项没打开：它们是浏览器内部页面，或子文件夹里的子文件夹。`
+          : '',
+        'ok'
+      )
     } catch (error) {
       setStatus(status, `打开失败：${errorText(error)}`, 'error')
     } finally {
@@ -827,7 +870,6 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       lastWrite = {folderIds: [], bookmarkIds: ids}
       setStatus(status, `已存下 ${ids.length} 个链接。`, 'ok')
       await events.archiveChanged()
-      await refresh()
     } catch (error) {
       setStatus(status, `保存失败：${errorText(error)}`, 'error')
     } finally {
@@ -947,6 +989,18 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       const row = target.closest<HTMLElement>('[data-drop-row="tab"]')
       return row?.dataset.dragTab === String(dragging.tabId)
     }
+    if (dragging.kind === 'group') {
+      // 分组的「自己那一行」是**整块**：整组一起搬，指着组内任何一枚松手都不会得到新顺序
+      //（`moveIndexFor` 也按这条办），所以整个分组行都算「自己那一行」。
+      const row = target.closest<HTMLElement>('[data-drop-row="group"]')
+      const key = row?.querySelector<HTMLElement>('[data-drag-group]')?.dataset.dragGroup
+      return key === String(dragging.index)
+    }
+    if (dragging.kind === 'selection') {
+      // 一批：指着这批里的任意一行松手 = 原地不动（多选搬运一律追加到目标层末尾）。
+      const rowId = target.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId
+      return rowId !== undefined && dragging.ids.includes(rowId)
+    }
     const id = payloadNodeId(dragging)
     if (id === undefined) return false
     return target.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId === id
@@ -974,9 +1028,11 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       // 多选拖动也是一批收藏夹条目（同一个去向：搬）。
       dragging?.kind === 'selection'
 
-    // 拖到自己那一行上：拒收。`dropEffect = 'none'` 按规范会让浏览器**连 drop 都不派发**，
-    // 所以上面那一句就不只是提示了，而是真的什么都没发生。
-    if ((toArchive && fromArchive) || (!toArchive && dragging?.kind === 'tab')) {
+    // 拖到自己那一行上：不收。按**落点那一栏收哪类载荷**选口径——
+    // 收藏夹栏比节点 id（或那一批里的任意一条），窗口栏比那一枚标签、或那一整个分组。
+    // `dropEffect = 'none'` 按规范会让浏览器**连 drop 都不派发**——否则用户会看到一条提示线、
+    // 松手却什么都没变（**双重假话**）。
+    if (toArchive ? fromArchive : fromWindow) {
       if (overOwnRow(event)) {
         event.dataTransfer.dropEffect = 'none'
         return
@@ -984,8 +1040,10 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     }
 
     event.preventDefault()
-    // 从窗口拖过去是「存一份」（复制），收藏夹之间是「搬」（移动）。
-    event.dataTransfer.dropEffect = toArchive && fromWindow ? 'copy' : 'move'
+    // 「移动」只在**两边是同一种容器**时成立：收藏夹 → 收藏夹、窗口 → 窗口。
+    // 其余都是「复制」（存成书签 / 开成标签 / 从网页拖来）。光标是用户唯一能看到的预判。
+    const moving = (fromArchive && toArchive) || (fromWindow && !toArchive)
+    event.dataTransfer.dropEffect = moving ? 'move' : 'copy'
     clearDropMarks()
 
     if (target && fromArchive) {
@@ -1127,10 +1185,22 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     if (flags.busy) return
     const tabs = windowTabsFor(payload, windowChildren)
     if (tabs.length === 0) return
-    const tabIds = tabs.map((tab) => tab.tabId)
+
+    // 搬一个**分组**时要连**内部页面**一起搬：界面那一份把它们滤掉了（它们存不成书签），
+    // 只搬看得见的那几枚会把分组拆成两半。与「关闭分组」同理：存时跳过对，搬 / 关时跳过错。
+    const groupId = payload.kind === 'group' ? tabs[0]?.groupId : undefined
+    const members = (
+      groupId === undefined
+        ? tabs.map((tab) => ({tabId: tab.tabId, index: tab.index}))
+        : (await chrome.tabs.query({groupId})).flatMap((tab) =>
+            tab.id === undefined ? [] : [{tabId: tab.id, index: tab.index}]
+          )
+    ).sort((a, b) => a.index - b.index)
+    if (members.length === 0) return
+    const tabIds = members.map((member) => member.tabId)
 
     // `undefined` = 拖到自己身上，**原地不动**（不是「与邻居交换」）。
-    const insertAt = moveIndexFor(drop, tabs, allWindowTabs().length)
+    const insertAt = moveIndexFor(drop, members, windowTotalTabs)
     if (insertAt === undefined) return
 
     flags.busy = true
@@ -1228,7 +1298,6 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     } finally {
       flags.busy = false
       await events.archiveChanged()
-      await refresh()
     }
   }
 
@@ -1263,7 +1332,6 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     } finally {
       flags.busy = false
       await events.archiveChanged()
-      await refresh()
     }
   }
 
@@ -1292,8 +1360,9 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       return
     }
 
-    const count = allWindowTabs().length
-    const startAt = drop.kind === 'end' ? count : drop.after ? drop.anchorIndex + 1 : drop.anchorIndex
+    // 落点坐标与行上的 `data-tab-index` 同一个坐标系（窗口里的**真实**下标）→「末尾」就是真实总数。
+    const startAt =
+      drop.kind === 'end' ? windowTotalTabs : drop.after ? drop.anchorIndex + 1 : drop.anchorIndex
 
     flags.busy = true
     updateButtons()
@@ -1441,11 +1510,9 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     if (target.kind === 'tab') {
       tabIds = [target.tabId]
     } else {
-      const child = windowChildren[target.index]
-      // 分组里那一枚的 groupId 取组内第一枚即可（整组同属一个分组）。
-      const groupId = child?.kind === 'group' ? child.tabs[0]?.groupId : undefined
+      // 按 **groupId** 要名单，不按列表下标：确认态跨越两次点击，下标可能已经滑到别的分组上。
       try {
-        tabIds = groupId === undefined ? [] : await allTabIdsInGroup(groupId)
+        tabIds = await allTabIdsInGroup(target.groupId)
       } catch (error) {
         pendingClose = undefined
         renderWindow()

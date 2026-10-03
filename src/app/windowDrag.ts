@@ -90,24 +90,24 @@ export function anchorInsertIndex(anchor: number, after: boolean, dragged: reado
 /**
  * 这次拖动该传给 `tabs.move` 的 index；返回 `undefined` = **原地不动**，调用方直接收工。
  *
- * 三件事在这里说清：
- * - **拖到自己身上就是原地不动**，不是「与邻居交换」。index 是移动**之后**的位置，所以
- *   「拖到自己那一行的下缘」会算出「自己 + 1」，真把标签往后挪一格（实测踩到）。
- * - 落在末尾：结尾那几枚就是它自己，所以目标是 `总数 - 自身枚数`。
+ * - **锚点就是被拖的那几枚之一 → 原地不动**：`anchorInsertIndex` 那个式子只对
+ *   「锚点不在 dragged 里」成立，而拖分组时锚点常常就是组内某一枚（单枚与分组共用这一刀）。
+ * - 落在末尾：给**最后一个下标**（`totalTabs - 1`）。`tabs.move` 把越界 index 钳到 `count - 1`，
+ *   而多枚是「逐个搬、每搬一枚 index + 1」→ 写「总数 - 自身枚数」会差几格。
  * - 其余交给 `anchorInsertIndex`（它会减掉锚点前那几枚）。
+ *
+ * `totalTabs` 是**窗口里的真实标签数**（含被过滤掉的内部页面），否则「最后一个下标」不是最后一个。
+ * 参数只要 `index`：搬分组时给的是浏览器那头的真实成员，不是 `TabSnapshot`。
  */
 export function moveIndexFor(
   drop: WindowDrop,
-  dragged: readonly TabSnapshot[],
+  dragged: readonly {index: number}[],
   totalTabs: number
 ): number | undefined {
   if (dragged.length === 0) return undefined
-  // 只有**一枚**时才可能「拖到自己身上」：分组拖到组内某一枚的位置上是正当的排序。
-  // （`dragged[0]` 在 `noUncheckedIndexedAccess` 下是 `T | undefined`，所以先解构再判。）
-  const [only] = dragged
-  if (drop.kind === 'tab' && dragged.length === 1 && only && drop.anchorIndex === only.index) {
+  if (drop.kind === 'tab' && dragged.some((tab) => tab.index === drop.anchorIndex)) {
     return undefined
   }
-  if (drop.kind === 'end') return totalTabs - dragged.length
+  if (drop.kind === 'end') return totalTabs - 1
   return anchorInsertIndex(drop.anchorIndex, drop.after, dragged.map((tab) => tab.index))
 }

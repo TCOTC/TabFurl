@@ -8,8 +8,12 @@ export interface BookmarkEdit {
   url: string
 }
 
-/** 对话框的 DOM id，用于 `q()` 查找。 */
+/** 对话框的 DOM id 前缀。**每个实例一个**：两栏各建一个，同一份 DOM 里 id 重了就是无效 HTML。 */
 const DIALOG_ID = 'bookmark-dialog'
+
+/** 建过的对话框（按宿主元素认）。用 WeakMap 而不是按 id 查：id 已经不是一个固定值了。 */
+const dialogs = new WeakMap<HTMLElement, HTMLDialogElement>()
+let dialogSeq = 0
 
 /**
  * 「改标题 + 改网址」的模态对话框。
@@ -70,11 +74,13 @@ export function openBookmarkDialog(
 
 /** 建一次、之后复用。挂在面板里，这样它的样式跟随面板的 CSS 作用域。 */
 function ensureDialog(host: HTMLElement): HTMLDialogElement {
-  const existing = host.querySelector<HTMLDialogElement>(`#${DIALOG_ID}`)
+  const existing = dialogs.get(host)
   if (existing) return existing
 
   const dialog = document.createElement('dialog')
-  dialog.id = DIALOG_ID
+  // 两栏（F7）各有一个收藏夹实例，各自在自己的根里建一个对话框：id 必须分开。
+  dialogSeq++
+  dialog.id = `${DIALOG_ID}-${dialogSeq}`
   dialog.className = 'dialog'
   dialog.innerHTML = `
     <form class="dialog__form">
@@ -95,6 +101,7 @@ function ensureDialog(host: HTMLElement): HTMLDialogElement {
     </form>
   `
   host.append(dialog)
+  dialogs.set(host, dialog)
 
   dialog.querySelector<HTMLButtonElement>('[data-field="cancel"]')?.addEventListener('click', () => {
     dialog.close()

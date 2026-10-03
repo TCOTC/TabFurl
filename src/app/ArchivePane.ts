@@ -14,7 +14,7 @@ import {
   getNodePath,
   getSubTree,
   isRealBookmark,
-  realBookmarks,
+  openableBookmarks,
   removeSubTree,
   updateNode
 } from '../shared/bookmarks'
@@ -254,6 +254,11 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   let nodeIndex = new Map<string, BookmarkNode>()
   /** id → 父 id。删掉一个节点后把它的展开状态收掉、不让把文件夹拖进自己的子孙里，都靠它。 */
   let parentById = new Map<string, string>()
+  /**
+   * 这棵子树里「有子级、能展开」的文件夹数量（建索引时一起数）。
+   * 它会被 `updateButtons()` 在**每一帧滚动**里读到，所以不能在那里全量遍历 `nodeIndex`。
+   */
+  let expandableFolderCount = 0
 
   /** 右栏被勾掉的书签 id（打开侧默认全不勾，所以记排除 + 一份「见过的」）。 */
   const archiveExcluded = new Set<string>()
@@ -406,6 +411,15 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     })
   }
   archiveBox.addEventListener('scroll', scheduleArchiveWindow, {passive: true})
+
+  /**
+   * 浏览器缩放会改变真实元素的像素高度，而行高是量一次就缓存的 → 缩放后虚拟滚动会错位。
+   * 缩放会派发 `resize`，那时把量到的行高丢掉重来。
+   */
+  window.addEventListener('resize', () => {
+    archiveRowHeight = 0
+    scheduleArchiveWindow()
+  })
 
   /**
    * 这一栏要不要显示勾选框（见 `ArchivePane.setSelectable`）。
@@ -573,6 +587,12 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
 
   function renderArchive(): void {
     renderArchivePath()
+    /*
+     * 下面那几条提前 return 会直接换掉 `innerHTML`，而 `renderArchiveWindow()`（滚动时每帧都会跑）
+     * 只认这个数组。不清时：内容变短 → 浏览器夹紧 `scrollTop` → 派发 `scroll` →
+     * 下一帧用**上一层的旧行**把空态盖回去。
+     */
+    archiveRows = []
     // 「取消选中」只在真选中了东西时露面。放在**开头**：这个函数有好几条提前 return
     //（空文件夹、书签树根），每一条都得把它算一遍，否则从「选中了一批」的层走到空层时它还会留着。
     clearPickButton.classList.toggle('is-slot-hidden', pickedIds.size === 0)
@@ -691,10 +711,12 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     // 因为 `getSubTree()` 本来就是递归的），这里重建的只是查找表。
     nodeIndex = new Map()
     parentById = new Map()
+    expandableFolderCount = 0
     const indexTree = (nodes: readonly BookmarkNode[]): void => {
       for (const node of nodes) {
         nodeIndex.set(node.id, node)
         for (const child of node.children ?? []) parentById.set(child.id, node.id)
+        if (!node.url && (node.children?.length ?? 0) > 0) expandableFolderCount++
         if (node.children) indexTree(node.children)
       }
     }
@@ -835,13 +857,12 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   /**
    * 这棵子树里**可以展开**（有子级）的文件夹数量。空文件夹不算：展开它只会多出一行「这个文件夹是空的」，
    * 而那一行的副文案已经把同一件事说完了。
+   *
+   * 数在 `applyArchive` 建索引时一起数好（`expandableFolderCount`），这里只读——因为本函数会跟着
+   * `updateButtons()` 在每一帧滚动里被调到，全量遍历一遍 `nodeIndex` 是白花的。
    */
   function expandableCount(): number {
-    let count = 0
-    for (const node of nodeIndex.values()) {
-      if (!node.url && (node.children?.length ?? 0) > 0) count++
-    }
-    return count
+    return expandableFolderCount
   }
 
   /**
@@ -865,7 +886,10 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     renderArchive()
   }
 
-  /** 要开成标签的那几条（书签就是它自己；文件夹取它直属的真书签，内部页面跳过）。 */
+  /**
+   * 要开成标签的那几条（书签就是它自己；文件夹取它直属**能打开**的书签）。
+   * 内部页面在这里就掉掉，不能留给 `tabs.create` 去抛错。
+   */
   function archiveOpenItems(payload: DragPayload): {url: string}[] {
     if (payload.kind === 'bookmark') {
       const url = bookmarkUrl(payload.id)
@@ -874,10 +898,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     if (payload.kind !== 'folder') return []
 
     const folder = nodeIndex.get(payload.id)
-    return realBookmarks(folder?.children ?? [])
-      .map((node) => node.url as string)
-      .filter((url) => !isInternalUrl(url))
-      .map((url) => ({url}))
+    return openableBookmarks(folder?.children ?? []).map((node) => ({url: node.url as string}))
   }
 
   /** 只按 id 取标题（调用方只会传文件夹 id：给新建分组起名）。 */
@@ -995,7 +1016,8 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     const url = bookmarkUrl(id)
     if (!url) return
     if (isInternalUrl(url)) {
-      setStatus(status, '这是浏览器内部页面，扩展打不开它，请手动复制网址。', 'error')
+      // `isInternalUrl` 不只 `chrome://`（还有 `data:` 等），所以不说「浏览器内部页面」。
+      setStatus(status, '这一条扩展打不开（浏览器内部页面或 data: 网址），请手动复制网址。', 'error')
       return
     }
     try {

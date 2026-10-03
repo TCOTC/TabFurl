@@ -1,6 +1,6 @@
 import {listBookmarkBarFolders} from '../shared/bookmarks'
 import {escapeHtml} from '../shared/tile'
-import {q} from './dom'
+import {errorText, q} from './dom'
 import {FOLDER_ICON} from './icons'
 
 /**
@@ -41,6 +41,7 @@ export interface FolderPicker {
  * 三条要点：**打开时才读候选**（刚建的文件夹进来就是最新的，且这个动作本身就是用户主动点的，
  * 读一次远比「看不到刚建的」划算）；**光标先落在搜索框**且 ↓/↑/Enter 能跑（键盘可以一气打完）；
  * **已收藏的层列出来但不可点**（而不是让用户点了之后收到一句「已经在收藏里了」）。
+ * 候选读不出来时（书签栏认不出）在面板里写原因，**不留下一个静默失败**。
  */
 export function createFolderPicker(options: {
   /** id 前缀：两条 chip 栏各有一个选择器，而它们住在同一份 DOM 里。 */
@@ -153,7 +154,20 @@ export function createFolderPicker(options: {
       return
     }
     trigger = button
-    entries = await loadEntries()
+    try {
+      entries = await loadEntries()
+    } catch (error) {
+      // 读不到书签栏（`getBookmarksBarId()` 认不出 id `1` 会抛）——比如书签树还没加载好。
+      // 不接住的话这里是个未捕获的 Promise 拒绝：面板不开，用户看到的是「点了＋没反应」。
+      entries = []
+      list.innerHTML = ''
+      note.hidden = false
+      note.textContent = `读不到书签栏：${errorText(error)}`
+      panel.hidden = false
+      open = true
+      document.addEventListener('pointerdown', onPointerDown, true)
+      return
+    }
     search.value = ''
     render()
     panel.hidden = false

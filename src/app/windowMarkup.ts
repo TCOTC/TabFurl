@@ -14,40 +14,38 @@ export function countLabel(text: string, count: number): string {
   return `${text} (${count})`
 }
 
-/** 左栏里正在等第二次确认的关闭目标。 */
-export type CloseTarget = {kind: 'tab'; tabId: number} | {kind: 'group'; index: number}
+/**
+ * 左栏里正在等第二次确认的关闭目标。
+ *
+ * 分组**按 `groupId` 记，不按下标**：确认态要跨越两次点击，这中间窗口结构可能变，
+ * 下标会滑到另一个分组上（拿标题反查也不行：同名分组合法存在）。
+ */
+export type CloseTarget = {kind: 'tab'; tabId: number} | {kind: 'group'; groupId: number}
 
-/** 关闭目标的主键：`t<tabId>` / `g<分组下标>`。用一个字符串就够了（不分两种状态）。 */
-export function closeKey(kind: 'tab' | 'group', id: number): string {
-  return `${kind === 'tab' ? 't' : 'g'}${id}`
+/** 关闭目标的主键：`t<tabId>` / `g<groupId>`。用一个字符串就够了（不分两种状态）。 */
+export function closeKey(target: CloseTarget): string {
+  return target.kind === 'tab' ? `t${target.tabId}` : `g${target.groupId}`
 }
 
 /** `data-close` 值 → 关闭目标（`closeKey` 的逆运算）。 */
 export function parseCloseKey(value: string): CloseTarget {
   const id = Number(value.slice(1))
-  return value.startsWith('t') ? {kind: 'tab', tabId: id} : {kind: 'group', index: id}
+  return value.startsWith('t') ? {kind: 'tab', tabId: id} : {kind: 'group', groupId: id}
 }
 
 /** 当前正在等确认的那个关闭目标的主键（`undefined` = 没有）。 */
 export function pendingCloseKey(pending: CloseTarget | undefined): string | undefined {
-  if (!pending) return undefined
-  return closeKey(pending.kind, pending.kind === 'tab' ? pending.tabId : pending.index)
+  return pending ? closeKey(pending) : undefined
 }
 
 /**
- * 行尾那一对「关闭 / 确认关闭 + 取消」。
+ * 行尾那一对「关闭 / 确认关闭 + 取消」。`key` 就是 `closeKey(target)` 的结果。
  *
  * 关闭是**不可逆**的（标签里的内容没存下来就没了），而它在行尾离「打开」只有一个按钮的距离，
  * 误点太容易 → 一律两步确认。两档宽度并不相同，但**不刻意定宽**：代价只是这一行里
  * 「打开」往左让一格；反过来若预留那么宽，每一行平时都要白占 70 像素的标题空间。
  */
-export function closeSlotMarkup(
-  kind: 'tab' | 'group',
-  id: number,
-  label: string,
-  pendingKey: string | undefined
-): string {
-  const key = closeKey(kind, id)
+export function closeSlotMarkup(key: string, label: string, pendingKey: string | undefined): string {
   if (pendingKey !== key) {
     return `<button type="button" class="btn btn--ghost btn--sm" data-close="${key}"
                 title="${label}">关闭</button>`
@@ -102,7 +100,7 @@ export function tabRowMarkup(tab: TabSnapshot, pendingKey: string | undefined): 
       <span class="tree__actions">${statusSlotMarkup(tab)}
         <button type="button" class="btn btn--ghost btn--sm"
                 data-switch-tab="${tab.tabId}" title="切换到这个标签页">打开</button>
-        ${closeSlotMarkup('tab', tab.tabId, '关闭这一枚标签页（里面的内容不会存下来）', pendingKey)}
+        ${closeSlotMarkup(closeKey({kind: 'tab', tabId: tab.tabId}), '关闭这一枚标签页（里面的内容不会存下来）', pendingKey)}
       </span>
     </li>
   `
@@ -120,13 +118,18 @@ export function groupRowMarkup(
   const bucketGroupId = child.tabs[0]?.groupId
   const groupAttr = bucketGroupId === undefined ? '' : ` data-group-id="${bucketGroupId}"`
   const label = `解散这一组并关闭它的全部标签页（共 ${child.tabs.length} 枚已列出；组里的浏览器内部页面也会一起关）`
+  // 关闭要按 groupId 问浏览器要这一组的全部标签（界面这份跳过了内部页面，关的时候跳过就错了）。
+  // 拿不到 groupId 时不给按钮：给了也只能按名字 / 下标猜。
+  const close = bucketGroupId === undefined
+    ? ''
+    : closeSlotMarkup(closeKey({kind: 'group', groupId: bucketGroupId}), label, pendingKey)
   return `
     <li class="group" data-row data-drop-row="group"${groupAttr}>
       <div class="item group__head" draggable="true" data-drag-group="${index}">
         <input type="checkbox" data-window-group="${index}" />
         <span class="item__title">${escapeHtml(child.name)}</span>
         <span class="item__meta">${child.tabs.length} 个标签</span>
-        <span class="tree__actions">${closeSlotMarkup('group', index, label, pendingKey)}</span>
+        <span class="tree__actions">${close}</span>
       </div>
       <ul class="kids">${child.tabs.map((tab) => tabRowMarkup(tab, pendingKey)).join('')}</ul>
     </li>
@@ -135,10 +138,23 @@ export function groupRowMarkup(
 
 /**
  * 一行里影响「画出来什么」的字段，顺序即渲染顺序。
- * `active` 不显示在行里，但它决定行尾给不给「释放」→ 也算「画出来的一部分」，漏进签名就会「该重画的没重画」。
+ *
+ * 不止行里看得见的：**写进行上 `data-` 属性的也算**，它们决定下一次拖拽落在哪。
+ * - `active` 不显示，但决定行尾给不给「释放」；
+ * - `index` / `groupId` 写进 `data-tab-index` / `data-tab-group`，漏掉时标签被挪或归组后
+ *   签名不变 → 不重绘 → 行上留着过期下标，下一次拖拽会落到错的位置。
  */
 export function drawnFieldsOf(tab: TabSnapshot): (string | number)[] {
-  return [tab.tabId, tab.title, tab.url, tab.pinned ? 1 : 0, tab.status, tab.active ? 1 : 0]
+  return [
+    tab.tabId,
+    tab.title,
+    tab.url,
+    tab.pinned ? 1 : 0,
+    tab.status,
+    tab.active ? 1 : 0,
+    tab.index,
+    tab.groupId ?? -1
+  ]
 }
 
 /**

@@ -12,11 +12,18 @@ const parents = new Map<string, string>([
   ['c', 'root']
 ])
 
-test('canDropTo：非文件夹载荷一律放行（书签、记号、一批选择都不会成环）', () => {
+test('canDropTo：书签、记号、标签都不装东西，一律放行', () => {
   assert.equal(canDropTo({kind: 'bookmark', id: 'a'}, 'a', parents), true)
   assert.equal(canDropTo({kind: 'separator', id: 'a'}, 'a', parents), true)
-  assert.equal(canDropTo({kind: 'selection', ids: ['a']}, 'a', parents), true)
   assert.equal(canDropTo({kind: 'tab', tabId: 1}, 'a', parents), true)
+})
+
+test('canDropTo：多选载荷同样挡「搬进自己子孙」（否则先画一条提示线、松手才说做不到）', () => {
+  assert.equal(canDropTo({kind: 'selection', ids: ['a']}, 'a', parents), false)
+  assert.equal(canDropTo({kind: 'selection', ids: ['a']}, 'a2x', parents), false)
+  // 批里任何一条的子树都算。
+  assert.equal(canDropTo({kind: 'selection', ids: ['b', 'a2']}, 'a2x', parents), false)
+  assert.equal(canDropTo({kind: 'selection', ids: ['b', 'c']}, 'a', parents), true)
 })
 
 test('canDropTo：拖到自己身上不收', () => {

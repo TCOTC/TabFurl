@@ -127,15 +127,19 @@ test('moveIndexFor：拖到自己那一行 = 原地不动（返回 undefined，�
   assert.equal(moveIndexFor({kind: 'tab', anchorIndex: 1, after: false}, dragged, 4), undefined)
 })
 
-test('moveIndexFor：分组拖到自己组内某一枚的位置上不算「拖到自己」（组里有多枚）', () => {
-  const dragged = [tab(2, 1), tab(3, 2)]
-  // 落在组内第一枚上：不是「原地不动」，而是一次正当的排序。
-  assert.equal(typeof moveIndexFor({kind: 'tab', anchorIndex: 1, after: true}, dragged, 4), 'number')
+test('moveIndexFor：锚点就是被拖的那几枚之一 → 原地不动（单枚与分组同一条规则）', () => {
+  // 分组头的落点是「组内最后一枚的下缘」——锚点就在被拖的里面，公式不再适用，直接不做。
+  const group = [tab(2, 3), tab(3, 4)]
+  assert.equal(moveIndexFor({kind: 'tab', anchorIndex: 4, after: true}, group, 4), undefined)
+  assert.equal(moveIndexFor({kind: 'tab', anchorIndex: 3, after: false}, group, 4), undefined)
+  // 落点在组外才是正当的排序。
+  assert.equal(typeof moveIndexFor({kind: 'tab', anchorIndex: 1, after: true}, group, 4), 'number')
 })
 
-test('moveIndexFor：落在末尾 = 总数 - 自身枚数', () => {
+test('moveIndexFor：落在末尾 = **最后一格**（多枚时不是「总数 - 自身枚数」）', () => {
+  // `tabs.move` 多枚是「逐个搬、每搬一枚 index + 1」，传 `总数 - 枚数` 会差几格。
   assert.equal(moveIndexFor({kind: 'end'}, [tab(2, 1)], 4), 3)
-  assert.equal(moveIndexFor({kind: 'end'}, [tab(2, 1), tab(3, 2)], 4), 2)
+  assert.equal(moveIndexFor({kind: 'end'}, [tab(2, 1), tab(3, 2)], 4), 3)
 })
 
 test('moveIndexFor：没有可拖的标签时返回 undefined', () => {

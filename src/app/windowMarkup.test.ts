@@ -40,33 +40,33 @@ test('countLabel：半角括号 + 一个空格（全角括号在中文字体里�
 })
 
 test('closeKey / parseCloseKey：往返一致，两类目标不混', () => {
-  assert.equal(closeKey('tab', 7), 't7')
-  assert.equal(closeKey('group', 3), 'g3')
+  assert.equal(closeKey({kind: 'tab', tabId: 7}), 't7')
+  assert.equal(closeKey({kind: 'group', groupId: 3}), 'g3')
   assert.deepEqual(parseCloseKey('t7'), {kind: 'tab', tabId: 7})
-  assert.deepEqual(parseCloseKey('g3'), {kind: 'group', index: 3})
-  assert.deepEqual(parseCloseKey(closeKey('tab', 903)), {kind: 'tab', tabId: 903})
+  assert.deepEqual(parseCloseKey('g3'), {kind: 'group', groupId: 3})
+  assert.deepEqual(parseCloseKey(closeKey({kind: 'tab', tabId: 903})), {kind: 'tab', tabId: 903})
 })
 
 test('pendingCloseKey：没有等待中的目标时是 undefined，而不是空串', () => {
   assert.equal(pendingCloseKey(undefined), undefined)
   assert.equal(pendingCloseKey({kind: 'tab', tabId: 4}), 't4')
-  assert.equal(pendingCloseKey({kind: 'group', index: 0}), 'g0')
+  assert.equal(pendingCloseKey({kind: 'group', groupId: 9}), 'g9')
 })
 
 test('closeSlotMarkup：没轮到它时给「关闭」，轮到它时给「确认关闭 + 取消」', () => {
-  const idle = closeSlotMarkup('tab', 7, '关闭这一枚', undefined)
+  const idle = closeSlotMarkup('t7', '关闭这一枚', undefined)
   assert.match(idle, /data-close="t7"/)
   assert.equal(count(idle, 'data-confirm-close'), 0)
 
-  const pending = closeSlotMarkup('tab', 7, '关闭这一枚', 't7')
+  const pending = closeSlotMarkup('t7', '关闭这一枚', 't7')
   assert.match(pending, /data-confirm-close="t7"/)
   assert.match(pending, /data-cancel-close/)
   assert.equal(count(pending, 'data-close="t7"'), 0)
 })
 
-test('closeSlotMarkup：分组那一枚用 g<下标> 作主键，与标签的 t<id> 不会撞', () => {
-  assert.match(closeSlotMarkup('group', 7, 'x', 'g7'), /data-confirm-close="g7"/)
-  assert.match(closeSlotMarkup('group', 7, 'x', 't7'), /data-close="g7"/)
+test('closeSlotMarkup：分组的 g<groupId> 与标签的 t<tabId> 不会撞', () => {
+  assert.match(closeSlotMarkup('g100', 'x', 'g100'), /data-confirm-close="g100"/)
+  assert.match(closeSlotMarkup('g100', 'x', 't100'), /data-close="g100"/)
 })
 
 test('statusSlotMarkup：卸载 → 可点的「加载」', () => {
@@ -129,17 +129,23 @@ test('windowSignatureOf：**不能用自定分隔符**——拼接会撞车的�
   assert.notEqual(windowSignatureOf(one), windowSignatureOf(two))
 })
 
-test('windowSignatureOf：行里画出来的东西都进签名（status / active / pinned / title / url）', () => {
+test('windowSignatureOf：行里画出来的东西都进签名（含写进 data 属性的 index / groupId）', () => {
   const base = [{kind: 'tab', tab: tab()}] as WindowChild[]
   const withStatus = [{kind: 'tab', tab: tab({status: 'unloaded'})}] as WindowChild[]
   const withActive = [{kind: 'tab', tab: tab({active: true})}] as WindowChild[]
   const withPinned = [{kind: 'tab', tab: tab({pinned: true})}] as WindowChild[]
   const withTitle = [{kind: 'tab', tab: tab({title: 'zzz'})}] as WindowChild[]
   const withUrl = [{kind: 'tab', tab: tab({url: 'https://zzz.test/'})}] as WindowChild[]
+  // `index` / `groupId` 不在行里显示，但它们被写进 `data-tab-index` / `data-tab-group`：
+  // 漏掉 → 标签被挪走/归组之后不重绘 → 行上留着过期的落点信息，下一次拖拽落到错的位置。
+  const withIndex = [{kind: 'tab', tab: tab({index: 5})}] as WindowChild[]
+  const withGroup = [{kind: 'tab', tab: tab({groupId: 100})}] as WindowChild[]
   const set = new Set(
-    [base, withStatus, withActive, withPinned, withTitle, withUrl].map((c) => windowSignatureOf(c))
+    [base, withStatus, withActive, withPinned, withTitle, withUrl, withIndex, withGroup].map((c) =>
+      windowSignatureOf(c)
+    )
   )
-  assert.equal(set.size, 6, '漏了某一项 → 那一行改了却不重绘')
+  assert.equal(set.size, 8, '漏了某一项 → 那一行改了却不重绘')
 })
 
 test('windowSignatureOf：`lastAccessed` 不参与（它每点一次标签就变，进了签名就永远在变）', () => {
@@ -179,13 +185,24 @@ test('groupRowMarkup：拖拽下标用**分组在列表里的下标**，不是�
 })
 
 test('groupRowMarkup：确认态只落在命中的那一个上（标签的 t<id> 不会连带分组）', () => {
-  const tabPending = groupRowMarkup({kind: 'group', name: '工作', tabs: [tab()]}, 0, 't1')
+  const group = {kind: 'group', name: '工作', tabs: [tab({groupId: 100})]} as WindowChild & {
+    kind: 'group'
+  }
+  const tabPending = groupRowMarkup(group, 0, 't1')
   assert.match(tabPending, /data-confirm-close="t1"/)
-  // 分组那一枚没轮到：应该是普通的「关闭」。
-  assert.match(tabPending, /data-close="g0"/)
-  assert.equal(count(tabPending, 'data-confirm-close="g0"'), 0)
+  // 分组那一枚没轮到：应该是普通的「关闭」。主键是 **groupId**，不是列表下标。
+  assert.match(tabPending, /data-close="g100"/)
+  assert.equal(count(tabPending, 'data-confirm-close="g100"'), 0)
 
-  const groupPending = groupRowMarkup({kind: 'group', name: '工作', tabs: [tab()]}, 0, 'g0')
-  assert.match(groupPending, /data-confirm-close="g0"/)
+  const groupPending = groupRowMarkup(group, 0, 'g100')
+  assert.match(groupPending, /data-confirm-close="g100"/)
   assert.match(groupPending, /data-close="t1"/)
+})
+
+test('groupRowMarkup：拿不到 groupId 时**不给关闭按钮**（按名字/下标猜会关错组）', () => {
+  const html = groupRowMarkup({kind: 'group', name: '工作', tabs: [tab()]}, 0, undefined)
+  // 组内标签自己那一枚照常（它按 tabId 关，与 groupId 无关）。
+  assert.match(html, /data-close="t1"/)
+  assert.equal(count(html, 'data-close="g'), 0)
+  assert.equal(count(html, 'data-confirm-close'), 0)
 })

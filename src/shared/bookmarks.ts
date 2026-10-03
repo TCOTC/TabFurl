@@ -21,6 +21,22 @@ export function realBookmarks(nodes: readonly BookmarkNode[]): BookmarkNode[] {
   return nodes.filter(isRealBookmark)
 }
 
+/**
+ * 真书签里，**扩展真的能打开**的那一类。
+ *
+ * 与 `isRealBookmark` 是两层，别合并：后者回答「是不是书签」（分隔线不是），
+ * 这一个回答「打开它会不会多一个标签页」（内部页面不会，`restore.ts` 会跳过它们）。
+ * 凡数「会被打开几枚」的地方都要走这一层，否则按钮写 5 枚、实际只开 4 枚。
+ */
+export function isOpenableBookmark(node: BookmarkNode): boolean {
+  return isRealBookmark(node) && !isInternalUrl(node.url)
+}
+
+/** `isOpenableBookmark` 的数组版。先前过 `realBookmarks()`，保持「判是不是书签」只有一套。 */
+export function openableBookmarks(nodes: readonly BookmarkNode[]): BookmarkNode[] {
+  return realBookmarks(nodes).filter((node) => !isInternalUrl(node.url))
+}
+
 function toNode(node: chrome.bookmarks.BookmarkTreeNode): BookmarkNode {
   return {
     id: node.id,
@@ -130,19 +146,20 @@ export async function getNodePath(id: string): Promise<{id: string; title: strin
   return nodes
 }
 
-/** 统计一个文件夹下的全部可收藏书签（递归，跳过内部页面与分隔线）。 */
+/** 统计一个文件夹下的全部**可打开**书签（递归，跳过内部页面与分隔线）。 */
 function countBookmarks(node: BookmarkNode): number {
-  if (node.url) return isRealBookmark(node) && !isInternalUrl(node.url) ? 1 : 0
+  if (node.url) return isOpenableBookmark(node) ? 1 : 0
   return (node.children ?? []).reduce((total, child) => total + countBookmarks(child), 0)
 }
 
+/** 三个计数与界面同一口径：两个书签数都只算**会被打开**的（内部页面与记号不算）。 */
 function describeFolder(node: BookmarkNode, path: string[]): FolderOption {
   const children = node.children ?? []
   return {
     id: node.id,
     title: node.title,
     path,
-    bookmarkCount: realBookmarks(children).length,
+    bookmarkCount: openableBookmarks(children).length,
     totalBookmarkCount: countBookmarks(node),
     folderCount: children.filter((child) => !child.url).length
   }
