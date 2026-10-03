@@ -348,19 +348,22 @@ async function currentWindowId(
 }
 
 /**
- * 在浏览器自带书签管理器里打开这个文件夹。
+ * 在浏览器自带书签管理器里搜出这个文件夹。
  *
  * 它取代了早期的「阅读页」（扩展自己渲染一整页卡片）：那等于长期维护第二个界面，
- * 而它想解决的问题（看一层文件夹的全貌）浏览器本来就做得更好——
+ * 而它想解决的问题（看一层文件夹的全貌、批量整理）浏览器本来就做得更好——
  * 集成已经存在的能力，比自己再实现一遍更合适（见 docs/design.md 二）。
+ *
+ * 传的是**标题**而不是 id：管理器只认它自己的 UUID，而我们的数字 id 在 `?id=` 上不生效
+ * （见 `bookmarkManagerUrl` 的注释）。搜出来之后点一下就是那一层。
  *
  * `chrome://` 不能无脑跳：扩展的访问被限制在一份白名单里。所以这里只试新开一页，
  * 被挡下来时抛一句**可操作**的错（告知快捷键），而不是静默失败——
  * 弹一句 API 的原始错误对用户没有任何用。
  */
-export async function openInBookmarkManager(folderId: string): Promise<void> {
+export async function openInBookmarkManager(folderTitle: string): Promise<void> {
   try {
-    await chrome.tabs.create({url: bookmarkManagerUrl(folderId), active: true})
+    await chrome.tabs.create({url: bookmarkManagerUrl(folderTitle), active: true})
   } catch {
     throw new Error('浏览器不允许扩展打开书签管理器，请按 Ctrl+Shift+O 打开后再找这个文件夹')
   }

@@ -1805,16 +1805,25 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   openWindowButton.addEventListener('click', () => void openSelection('newWindow'))
   undoButton.addEventListener('click', () => void undo())
 
-  // 「打开书签管理器」开的就是当前展示的这一层。
+  // 「打开书签管理器」要的是当前展示的这一层，但给不出能定位的 id：
+  //
+  // 管理器只认它自己的 UUID，而 `chrome.bookmarks` 给的是数字 id（`?id=` 上的旧数字 id 兜底
+  // 实测不生效）。所以我们只能**按标题搜**，把那一层摆到搜索结果里让用户点一下。
+  // 状态行要如实写出这一点——它毕竟不是「直接跳进那一层」。
   openRootButton.addEventListener('click', async () => {
     if (!viewFolderId) return
-    const target = viewPath.map((node) => node.title).join(' / ')
+    // 书签树的根没有自己的标题（`getNodePath` 给它的兜底是「书签」），拿它去搜没有意义，
+    // 那一层就直接开管理器的默认页。
+    const title = canWrite() ? (viewPath.at(-1)?.title ?? '') : ''
     try {
-      await openInBookmarkManager(viewFolderId)
-      // 管理器解析这个 id 是**它自己**的事（`?id=` 既收 UUID 也收旧的数字 id，后者靠
-      // `findIdByLegacyId` 映射），而解析失败时它会静默退回默认的那一层——我们拿不到那个结果。
-      // 所以把「要找的是哪一层」写出来：它落在别处时，用户至少知道该去哪儿找。
-      setStatus(status, `书签管理器已打开，要找的是：${target}`, 'ok')
+      await openInBookmarkManager(title)
+      setStatus(
+        status,
+        title
+          ? `书签管理器已打开，已按「${title}」搜索——扩展拿不到管理器要的 UUID，不能直接跳进去。`
+          : '书签管理器已打开。',
+        'ok'
+      )
     } catch (error) {
       // 这里的错误文案是写给用户看的（含快捷键），不是 API 的原文，所以直接展示。
       setStatus(status, errorText(error), 'error')

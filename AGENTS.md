@@ -303,13 +303,15 @@ pnpm icons          # 重新生成占位图标
       而它想解决的问题浏览器做得更好。`chrome://` 能不开得开由 Chrome 的白名单决定，所以
       `openInBookmarkManager()` 里要 `try/catch` 并给出一句**可操作**的提示（含 Ctrl+Shift+O），
       不要把 API 的原始错误直接丢给用户。
-    - **`?id=` 收的是「旧的数字 id」，也就是 `chrome.bookmarks` 给的那一套**：管理器的 `router.ts` 里
-      `findIdByLegacyId()` 的注释写得很清楚——它存在就是为了支持 `chrome://bookmarks/?id=123`
-      这种由浏览器自己（书签栏右键菜单）生成、或用户很早以前存下来的 URL；
-      而且它**解析成功之后会把 URL 改写成 UUID 形式**，所以你看到 UUID 不代表数字 id 不被接受。
-      结论：不要费劲去拿 UUID——扩展 API 里没有那个字段，而数字 id 是官方支持的入口。
-      它解析失败时是**静默退回默认层**，我们拿不到结果，所以打开之后要用状态行把
-      「要找的是哪一层」写出来，归用户自己确认。
+    - **不要试图用 `?id=` 定位某一层——实测不行**。管理器只认它自己的 UUID（用户看到的
+      `chrome://bookmarks/?id=914d6618-…` 就是 UUID），而 `chrome.bookmarks` 给的 id 是数字。
+      源码里确实有一条旧数字 id 的兜底（`router.ts` 的 `findIdByLegacyId()`，注释说明它就是为了
+      支持 `chrome://bookmarks/?id=123` 这种老 URL），但**实测传数字 id 会静默退回默认层**；
+      而扩展 API 里根本没有 UUID 字段，所以定位这条路是断的。别再把时间花在它上面。
+      现在的做法是**按标题搜**（`?q=`）：管理器的搜索也匹配目录名（只有内置目录因
+      `permanentFolderType` 被排除），搜出来点一下就进去了。状态行必须如实写出
+      「已按「X」搜索……不能直接跳进去」——它不是定位，不能让用户以为打开了那一层。
+      书签树的根没有标题（`getNodePath` 给它兜底的是「书签」），那一层就不搜、开默认页。
     - 左栏每行末尾的「打开」（`data-switch-tab`）也只是 `tabs.update({active: true})`，
       但**必须再 `windows.update({focused: true})`**：主界面与那一枚标签在不同的浏览器窗口时，
       不聚焦窗口看着就是「点了没反应」。
