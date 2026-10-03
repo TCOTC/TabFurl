@@ -417,20 +417,30 @@
 }
 
 /*
- * 右栏行内展开的子级。
+ * 右栏的行是**扁平**的（虚拟滚动要求行与行之间没有嵌套），所以层级靠 `--depth` 表达缩进。
  *
- * 与左栏的 `.kids` 同一套（`list-style` / `margin` 都继承下来），只把缩进换成小一号的
- * `--tree-indent`——右栏的层级更深，缩进必须更省。所以这一条要写在 `.kids` **之后**。
+ * `--tree-indent` 比左栏标签清单那一道（20px）更省：右栏能看到真实数据最深 7 层，
+ * 每层 12px 也只吃掉 84px，而面板宽度是固定的（实测 6 层共 60px 时
+ * `.box` 的 `scrollWidth === clientWidth`，没有横向滚动条）。
  */
-.kids--archive {
-  padding-left: var(--tree-indent);
+#archive-list > li {
+  padding-left: calc(var(--item-pad-x) + var(--depth, 0) * var(--tree-indent));
+}
+
+/*
+ * 虚拟滚动的上下占位行：把被跳过的那些行的高度补回来，让滚动条与真实内容一样长。
+ * `height` 由 JS 按「行高 × 跳过的行数」算出、写在行内。
+ */
+#archive-list > li.vpad {
+  padding: 0;
+  list-style: none;
 }
 
 /*
  * 展开了一个空文件夹。
  *
  * 不给这一行的话，点开之后下面什么都没出现，看着像「点了没反应」；
- * 它没有 `data-drop-row` / `data-parent-id`，所以不参与拖拽落点与计数。
+ * 它没有 `data-drop-row` / `data-sibling-index`，所以不参与拖拽落点与计数。
  */
 .kids__empty {
   display: flex;

@@ -521,11 +521,11 @@ input[type='checkbox'] {
 }
 
 /* 已展开：三角常显并指着下方（收起的入口必须一直看得见，不能只靠悬停）。 */
-.group.is-expanded .folder-tile__icon {
+.is-expanded .folder-tile__icon {
   display: none;
 }
 
-.group.is-expanded .folder-tile__chevron {
+.is-expanded .folder-tile__chevron {
   display: inline-flex;
   transform: rotate(90deg);
 }

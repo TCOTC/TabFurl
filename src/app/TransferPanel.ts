@@ -82,11 +82,11 @@ type ArchiveDrop =
   /*
    * `parentId` 是**落点所在的那一层**，而 `index` 是它在这一层里的下标。
    *
-   * 多了这一项才能支持行内展开：以前右栏一次只显示一层，所以「插到下标 N」永远指当前层；
-   * 现在展开的子级也在同一份清单里，没带父 id 就会把「插到子文件夹里第 2 行」当成
-   * 「插到当前层第 2 行」——它会默默插到另一个地方去。
+   * 多了这一项才能支持行内展开 / 虚拟滚动：以前右栏一次只显示一层、行也全都存在，
+   * 「插到下标 N」永远指当前层；现在展开的子级也在同一份清单里（而视口外的行还不存在），
+   * 没带父 id 就会把「插到子文件夹里第 2 行」当成「插到当前层第 2 行」——它会默默插到另一个地方去。
    */
-  | {kind: 'here'; parentId: string; index: number}
+  | {kind: 'here'; parentId: string; index: number; after: boolean}
 
 /**
  * 中间按钮上的计数。
@@ -190,6 +190,7 @@ const TEMPLATE = `
           <div class="box__bar">
             <nav class="path" id="archive-path" aria-label="当前所在的收藏夹位置"></nav>
             <div class="row row--compact">
+              <button type="button" class="btn btn--ghost btn--sm" id="expand-all-btn">全部展开</button>
               <button type="button" class="btn btn--ghost btn--sm" id="new-folder-btn">＋ 新建文件夹</button>
               <button type="button" class="btn btn--ghost btn--sm" id="new-separator-btn"
                       title="在当前位置插一条分隔线（竖线，给横向排列的书签栏用）">＋ 分隔线</button>
@@ -245,6 +246,13 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
   const windowList = q<HTMLUListElement>(element, '#window-list')
   const archiveList = q<HTMLUListElement>(element, '#archive-list')
+/**
+ * 右栏的滚动容器（`.box`，不是那个 `ul`）。
+ *
+ * 虚拟滚动要读它的 `scrollTop` / `clientHeight`，并且只监听它的滚动——
+ * 设计上整页只有一条滚动条，滚动交给两栏各自的 `.box`，`ul` 自己不滚动。
+ */
+const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
   const windowCount = q<HTMLSpanElement>(element, '#window-count')
   const archiveCount = q<HTMLSpanElement>(element, '#archive-count')
   const archivePath = q<HTMLElement>(element, '#archive-path')
@@ -257,6 +265,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   const openWindowLabel = q<HTMLSpanElement>(element, '#open-window-label')
   const undoButton = q<HTMLButtonElement>(element, '#undo-btn')
   const noGroupCheck = q<HTMLInputElement>(element, '#no-group-check')
+  const expandAllButton = q<HTMLButtonElement>(element, '#expand-all-btn')
   const newFolderButton = q<HTMLButtonElement>(element, '#new-folder-btn')
   const newSeparatorButton = q<HTMLButtonElement>(element, '#new-separator-btn')
   const newGapButton = q<HTMLButtonElement>(element, '#new-gap-btn')
@@ -372,6 +381,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   let lastPathSignature: string | undefined
   let windowChildren: WindowChild[] = []
   let archiveChildren: BookmarkNode[] = []
+  /** 当前展开状态下**可见的行**，扁平成一个数组（虚拟滚动以它为单位，见 `flattenArchive`）。 */
+  let archiveRows: ArchiveRow[] = []
 
   /**
    * 已经在一行行里展开的文件夹 id（Finder 那样就地推开，与「进入」是两件事）。
@@ -616,6 +627,153 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   // ———————————————— 右栏 ————————————————
 
   /**
+   * 扁平化之后的一行。**虚拟滚动以行为单位，行与行之间没有嵌套**——层级靠 `depth` 算出的缩进表达。
+   *
+   * 为什么要扁平（这里是实测，不是估计）：真实数据下「全部展开」是 **11003 行**，
+   * 一次性拼进 `innerHTML` 会产出 **11.5 万个元素 / 12 MB 字符串**，
+   * 同步部分卡 **983 ms**、随后布局又花 **2402 ms**。
+   * 扁平之后可以只渲染视口里那几十行，把这两项都变成常数级。
+   */
+  type ArchiveNodeRow = {
+    kind: 'node'
+    node: BookmarkNode
+    parentId: string
+    depth: number
+    /** 在**同一层**里的下标。拖拽算插入位置用它，不必再去 DOM 里数兄弟。 */
+    siblingIndex: number
+    /** 只有文件夹行有意义。 */
+    expanded: boolean
+  }
+  type ArchiveRow = ArchiveNodeRow | {kind: 'empty'; depth: number}
+
+  /**
+   * 当前展开状态下的**可见行**，扁平成一个数组。
+   *
+   * 只走一遍树、只产出数据，不碰 DOM：所以「全部展开」这一步本身是纯内存操作
+   * （实测真实数据 11003 行约 20 ms），贵的那部分留给了窗口渲染。
+   */
+  function flattenArchive(): ArchiveRow[] {
+    const rows: ArchiveRow[] = []
+    const walk = (nodes: readonly BookmarkNode[], parentId: string, depth: number): void => {
+      nodes.forEach((node, siblingIndex) => {
+        const expanded = !node.url && expandedIds.has(node.id)
+        rows.push({kind: 'node', node, parentId, depth, siblingIndex, expanded})
+        if (!expanded) return
+        const children = node.children ?? []
+        // 空文件夹展开后要有一行交代，否则点开之后什么都没有，看着像「点了没反应」。
+        if (children.length === 0) rows.push({kind: 'empty', depth: depth + 1})
+        else walk(children, node.id, depth + 1)
+      })
+    }
+    walk(archiveChildren, viewFolderId, 0)
+    return rows
+  }
+
+  /** 视口上下各多渲染几行，滚动时不会看到正在补的空行。 */
+  const ARCHIVE_OVERSCAN = 10
+
+  /**
+   * 行高。**从真实元素上量**，不写死 38px——那个数由 `--row-inner` 与 `--item-pad-y` 算出来，
+   * CSS 变量一改，写死的虚拟滚动就会错位（而且它错位是静默的：滚动条长度不对、滚着滚着跳）。
+   */
+  let archiveRowHeight = 0
+  function rowHeight(): number {
+    if (archiveRowHeight > 0) return archiveRowHeight
+    const probe = document.createElement('li')
+    probe.className = 'item'
+    probe.style.visibility = 'hidden'
+    archiveList.append(probe)
+    archiveRowHeight = Math.round(probe.getBoundingClientRect().height) || 38
+    probe.remove()
+    return archiveRowHeight
+  }
+
+  /**
+   * 只渲染视口里的那几十行，用上下两个**撑高的占位行**维持滚动条。
+   *
+   * 行高是定值（所有行都是 `--row-height`，扁平之后连「展开块」这种不等高的东西也没有了），
+   * 所以第 i 行的位置就是 `i * rowHeight`——不需要测量每一行。
+   */
+  function renderArchiveWindow(): void {
+    if (archiveRows.length === 0) return
+    const height = rowHeight()
+    const total = archiveRows.length * height
+    const viewTop = Math.max(0, archiveBox.scrollTop)
+    const viewHeight = archiveBox.clientHeight || height * 20
+    const first = Math.max(0, Math.floor(viewTop / height) - ARCHIVE_OVERSCAN)
+    const last = Math.min(
+      archiveRows.length,
+      Math.ceil((viewTop + viewHeight) / height) + ARCHIVE_OVERSCAN
+    )
+
+    const parts: string[] = []
+    if (first > 0) parts.push(`<li class="vpad" style="height:${first * height}px"></li>`)
+    for (let index = first; index < last; index++) parts.push(archiveRowMarkup(archiveRows[index]))
+    const rest = total - last * height
+    if (rest > 0) parts.push(`<li class="vpad" style="height:${rest}px"></li>`)
+
+    archiveList.innerHTML = parts.join('')
+    syncArchiveStates()
+  }
+
+  /** 把某一行滚进视野（新建 / 改名的那一行可能落在视口外，`focusRenameInput()` 会抓不到输入框）。 */
+  function scrollRowIntoView(id: string): void {
+    const index = archiveRows.findIndex((row) => row.kind === 'node' && row.node.id === id)
+    if (index < 0) return
+    const height = rowHeight()
+    const top = index * height
+    if (top < archiveBox.scrollTop) archiveBox.scrollTop = top
+    else if (top + height > archiveBox.scrollTop + archiveBox.clientHeight) {
+      archiveBox.scrollTop = top + height - archiveBox.clientHeight
+    }
+  }
+
+  /**
+   * 滚动时重画窗口。用 `requestAnimationFrame` 合并同一帧里的多次 scroll。
+   *
+   * **正在改名时不重画**：输入框会被换掉，而 `focusout` 处理器会把「元素被移除」当成
+   * 「用户点开了别处」从而提交改名——打字打到一半被提交是最糟的结果。
+   * 改名期间本来也不该滚动列表。
+   */
+  let archiveWindowQueued = false
+  function scheduleArchiveWindow(): void {
+    if (renaming || archiveWindowQueued) return
+    archiveWindowQueued = true
+    requestAnimationFrame(() => {
+      archiveWindowQueued = false
+      renderArchiveWindow()
+    })
+  }
+  archiveBox.addEventListener('scroll', scheduleArchiveWindow, {passive: true})
+
+  /**
+   * 这一行该不该有勾选框。
+   *
+   * **判据是「这一行在不在『打开』的范围内」**，与 `archiveBookmarkIds()` 严格同一口径：
+   * 那个集合只覆盖「当前层的书签 + 每个直属子文件夹里的书签」（depth ≤ 1），
+   * 因为 `restoreFolder` 只处理一层（子文件夹建分组、散装书签不建分组）。
+   * 文件夹行同理，只有**当前层的直属子文件夹**（depth 0）才有意义。
+   *
+   * 更深层的行是行内展开 / 全部展开才看得见的，它们**不会被打开**，所以不给勾选框：
+   * 给了就是一句假话（勾了却不开），而「列表看着全选、按钮说没选中」正是这个项目
+   * 反复要避免的那类错觉——全部展开会让它一次性放大到近万行。
+   */
+  function selectableAt(depth: number, isFolder: boolean): boolean {
+    return isFolder ? depth === 0 : depth <= 1
+  }
+
+  /** 没有勾选框的行用它占位：`.marker__slot` 与复选框实测都是 14px，不给就会整列左移一格。 */
+  const NO_BOX_SLOT = '<span class="marker__slot" aria-hidden="true"></span>'
+
+  /** 一条行的 HTML（三类行 + 空文件夹提示，都在这里分派）。 */
+  function archiveRowMarkup(row: ArchiveRow): string {
+    if (row.kind === 'empty') {
+      return `<li class="kids__empty" style="--depth:${row.depth}">这个文件夹是空的</li>`
+    }
+    return row.node.url ? archiveBookmarkRow(row) : archiveFolderRow(row)
+  }
+
+  /**
    * 一条书签行。分隔线占位书签也画成一条横线，并且同样给「修改 / 删除」两个按钮。
    *
    * 两种行**都可以拖**（拖动范围与文件夹一致：在右栏里挪位置 / 挪层级，拖到左栏就是打开）：
@@ -627,21 +785,11 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    * 而小一号的字与一行的限制能把绝大多数网址完整装下。真的过长时仍会省略，
    * 那时 `title` 里还有完整的一份。
    */
-  /**
-   * 右栏的子级列表（递归）。
-   *
-   * `parentId` 会写进每一行的 `data-parent-id`：拖拽落点靠它算「插进哪一层的第几格」。
-   * 展开的那一层直接在同一份清单里接下去渲染，而不换页——所以缩进栈是**就地**长的。
-   */
-  function archiveRows(children: readonly BookmarkNode[], parentId: string): string {
-    return children
-      .map((child) =>
-        child.url ? archiveBookmarkRow(child, parentId) : archiveFolderRow(child, parentId)
-      )
-      .join('')
-  }
-
-  function archiveBookmarkRow(bookmark: BookmarkNode, parentId: string): string {
+  function archiveBookmarkRow(row: ArchiveNodeRow): string {
+    const bookmark = row.node
+    // 三样东西每行都要带上：所在层（拖拽算插到哪一层的第几格）、层内下标（同一件事，
+    // 但不必再去 DOM 里数兄弟）、缩进（扁平之后层级只能这样表达）。
+    const boxAttrs = `data-parent-id="${escapeHtml(row.parentId)}" data-sibling-index="${row.siblingIndex}" style="--depth:${row.depth}"`
     const kind = separatorKind(bookmark.url)
     if (kind) {
       const isRenaming = renaming?.id === bookmark.id
@@ -658,8 +806,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       // 而按钮必须在这条线**右边**——用伪元素就只能得到「线在按钮右边」那种坏排布。
       return `
         <li class="marker marker--${kind}" draggable="true" data-drop-row="separator"
-            data-parent-id="${escapeHtml(parentId)}"
-            data-drag-separator="${escapeHtml(bookmark.id)}">
+            ${boxAttrs} data-drag-separator="${escapeHtml(bookmark.id)}">
           <span class="marker__slot" aria-hidden="true"></span>
           ${
             kind === 'sep' ? VERT_LINE_ICON : rules
@@ -700,10 +847,9 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
     return `
       <li class="item leaf" data-row data-drop-row="bookmark" draggable="true"
-          data-parent-id="${escapeHtml(parentId)}"
-          data-drag-bookmark="${escapeHtml(bookmark.id)}"
+          ${boxAttrs} data-drag-bookmark="${escapeHtml(bookmark.id)}"
           data-bookmark-url="${escapeHtml(url)}">
-        <input type="checkbox" data-archive-item="${escapeHtml(bookmark.id)}" />
+        ${selectableAt(row.depth, false) ? `<input type="checkbox" data-archive-item="${escapeHtml(bookmark.id)}" />` : NO_BOX_SLOT}
         ${faviconMarkup(url, FAVICON_BASE)}
         <span class="item__main">
           <span class="item__title">${escapeHtml(bookmark.title.trim() || host)}</span>
@@ -734,7 +880,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    *
    * 那两个计数仍是**直属**的，没有因为能展开就改成递归——口径与「打开（N）」、勾选框保持一致（见下）。
    */
-  function archiveFolderRow(folder: BookmarkNode, parentId: string): string {
+  function archiveFolderRow(row: ArchiveNodeRow): string {
+    const folder = row.node
     // 两个计数都保持**直属**，而且只算真书签（分隔线不是书签，算进去会与文件管理器的直觉不符）。
     //
     // 「直属」而不是递归到后代，是为了让这一行上的三个数字**同一口径**：
@@ -750,7 +897,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     const folderCount = children.filter((child) => !child.url).length
     const isRenaming = renaming?.id === folder.id
     const editable = !atTreeRoot()
-    const expanded = expandedIds.has(folder.id)
+    const expanded = row.expanded
 
     const title = isRenaming
       ? `<input type="text" class="input input--rename" draggable="false"
@@ -773,32 +920,22 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       ? ''
       : `<span class="tree__actions">${enterButton}${editButtons}</span>`
 
-    const kids = expanded
-      ? `<ul class="kids kids--archive">${
-          children.length === 0
-            ? '<li class="kids__empty">这个文件夹是空的</li>'
-            : archiveRows(children, folder.id)
-        }</ul>`
-      : ''
-
     return `
-      <li class="group${expanded ? ' is-expanded' : ''}" data-row data-drop-row="folder"
-          data-parent-id="${escapeHtml(parentId)}"
-          data-drop-folder="${escapeHtml(folder.id)}">
-        <div class="item group__head" data-enter-folder="${escapeHtml(folder.id)}">
-          <input type="checkbox" data-archive-item="${escapeHtml(folder.id)}" />
-          <button type="button" class="folder-tile" data-toggle-folder="${escapeHtml(folder.id)}"
-                  aria-expanded="${expanded}"
-                  title="${expanded ? '收起这一层' : '就地展开这一层（不换页）'}"
-                  aria-label="${expanded ? '收起' : '展开'}${escapeHtml(folder.title)}">${FOLDER_ICON}${CHEVRON_ICON}</button>
-          <span class="item__main item__main--row" draggable="true"
-                data-drag-folder="${escapeHtml(folder.id)}" title="双击进入这一层">
-            ${title}
-            <span class="item__meta">${bookmarks.length} 个书签 • ${folderCount} 个文件夹</span>
-          </span>
-          ${actions}
-        </div>
-        ${kids}
+      <li class="item group__head${expanded ? ' is-expanded' : ''}" data-row data-drop-row="folder"
+          data-parent-id="${escapeHtml(row.parentId)}" data-sibling-index="${row.siblingIndex}"
+          style="--depth:${row.depth}"
+          data-drop-folder="${escapeHtml(folder.id)}" data-enter-folder="${escapeHtml(folder.id)}">
+        ${selectableAt(row.depth, true) ? `<input type="checkbox" data-archive-item="${escapeHtml(folder.id)}" />` : NO_BOX_SLOT}
+        <button type="button" class="folder-tile" data-toggle-folder="${escapeHtml(folder.id)}"
+                aria-expanded="${expanded}"
+                title="${expanded ? '收起这一层' : '就地展开这一层（不换页）'}"
+                aria-label="${expanded ? '收起' : '展开'}${escapeHtml(folder.title)}">${FOLDER_ICON}${CHEVRON_ICON}</button>
+        <span class="item__main item__main--row" draggable="true"
+              data-drag-folder="${escapeHtml(folder.id)}" title="双击进入这一层">
+          ${title}
+          <span class="item__meta">${bookmarks.length} 个书签 • ${folderCount} 个文件夹</span>
+        </span>
+        ${actions}
       </li>
     `
   }
@@ -889,9 +1026,11 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       return
     }
 
-    archiveList.innerHTML = archiveRows(archiveChildren, viewFolderId)
-
-    syncArchiveStates()
+    archiveRows = flattenArchive()
+    // 编辑中的那一行可能不在视口里（新建的文件夹会落在末尾），先把它滚进来再渲染窗口，
+    // 否则 `focusRenameInput()` 抓不到输入框。
+    if (renaming) scrollRowIntoView(renaming.id)
+    renderArchiveWindow()
   }
 
   /** 右栏某个文件夹下的「会被打开」的书签 id。分隔线不在内：它没有勾选框，也不参与计数。 */
@@ -963,6 +1102,13 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     newFolderButton.disabled = busy || !canWrite()
     newSeparatorButton.disabled = busy || !canWrite()
     newGapButton.disabled = busy || !canWrite()
+    // 全部展开 / 全部折叠：字跟着状态走（有展开的就写「全部折叠」），
+    // 而它在两种情况下没得按——这一层没有可展开的子文件夹，或者正忙。
+    // 注意它**不看** `canWrite()`：书签树的根不能写，但「把这几棵树都推开看一眼」完全说得通。
+    const hasExpanded = expandedIds.size > 0
+    expandAllButton.textContent = hasExpanded ? '全部折叠' : '全部展开'
+    expandAllButton.title = hasExpanded ? '把展开的子级都收起来' : '把这一层下面的文件夹全部推开'
+    expandAllButton.disabled = busy || (!hasExpanded && expandableCount() === 0)
     // 与它并排的刷新按钮**不置灰**，而它要灰：它依赖「当前站在哪一层」，站得不对时按了没意义。
     // 用 `disabled` 而不是 `hidden`：hidden 会让它凭空出现 / 消失，而右边那个刷新按钮
     // 靠 `margin-left: auto` 贴右，位置不会因为它的出现而变——但同行里凭空多一个东西
@@ -992,6 +1138,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     pendingDeleteId = undefined
     expandedIds.clear()
     viewFolderId = folderId
+    // 换层之后从头看：上一次停在中途的位置对新的一层没有意义。
+    archiveBox.scrollTop = 0
     await refresh()
   }
 
@@ -1368,27 +1516,16 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   /**
-   * 某一层里的行（同一个 `data-parent-id`），文档顺序即该层顺序。
-   *
-   * 不能用 `archiveList.children`：行内展开之后，子级的行不再挂在 `archiveList` 下面了。
-   */
-  function siblingRows(parentId: string): HTMLElement[] {
-    return [...archiveList.querySelectorAll<HTMLElement>('[data-parent-id]')].filter(
-      (row) => row.dataset.parentId === parentId
-    )
-  }
-
-  /**
    * 右栏的落点：进某个文件夹，或插到某一层的某个位置。
    *
    * 三类行（文件夹 / 书签 / 分隔线）都是可锚定的——分隔线虽然只是个记号，
    * 但用户可以把它拖到任意两条之间，所以它不是特殊行。
    *
-   * 两处与行内展开有关的细节：
+   * 两处与虚拟滚动 / 行内展开有关的细节：
    *
-   * - **三分法要量 `.group__head` 而不是整个 `<li>`**：展开的那一行把子级也包在 `<li>` 里，
-   *   量整个 `li` 的话「中间 = 进去」会变成「在整棵展开块的正中间才算进去」，高度差几倍。
-   * - **下标要按「同一层」算**，所以先看这一行的 `data-parent-id`。
+   * - 插入下标读行上的 `data-sibling-index`，**不再去 DOM 里数兄弟**：
+   *   虚拟滚动之后视口外的行根本不存在，扫 DOM 会数出一个错的层内下标。
+   * - 行里没有嵌套子级了（扁平渲染），所以三分法直接量这一行，不必再找 `.group__head`。
    */
   function archiveDropSpot(event: DragEvent): ArchiveDrop | undefined {
     const target = event.target as HTMLElement
@@ -1397,13 +1534,16 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     )
     if (!row) return undefined
 
-    const parentId = row.dataset.parentId ?? viewFolderId
     const isFolder = row.dataset.dropRow === 'folder'
-    const head = isFolder ? row.querySelector<HTMLElement>('.group__head') ?? row : row
-    const spot = spotIn(head, event.clientY, isFolder)
+    const spot = spotIn(row, event.clientY, isFolder)
     if (isFolder && spot === 'into') return {kind: 'into', folderId: row.dataset.dropFolder ?? ''}
-    const index = siblingRows(parentId).indexOf(row)
-    return {kind: 'here', parentId, index: spot === 'after' ? index + 1 : index}
+    const siblingIndex = Number(row.dataset.siblingIndex ?? 0)
+    return {
+      kind: 'here',
+      parentId: row.dataset.parentId ?? viewFolderId,
+      index: spot === 'after' ? siblingIndex + 1 : siblingIndex,
+      after: spot === 'after'
+    }
   }
 
   /**
@@ -1473,11 +1613,12 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
         return
       }
       if (spot?.kind === 'here') {
-        // 插到这一层的末尾时，线画在最后那一行的下缘。
-        const rows = siblingRows(spot.parentId)
-        const anchor = rows[Math.min(spot.index, rows.length - 1)]
+        // 插入线画在**鼠标底下这一行**上：扁平渲染之后锚点就是它自己，不必再扫兄弟。
+        const anchor = (event.target as HTMLElement).closest<HTMLElement>(
+          '[data-drop-row="bookmark"], [data-drop-row="folder"], [data-drop-row="separator"]'
+        )
         if (anchor) {
-          anchor.classList.add(spot.index >= rows.length ? 'is-drop-after' : 'is-drop-before')
+          anchor.classList.add(spot.after ? 'is-drop-after' : 'is-drop-before')
           return
         }
       }
@@ -1755,6 +1896,47 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     // 默认浏览器行为之外的东西都不要：拖拽与展开是两种手势，别让行上的拖动把它带走。
     if (expandedIds.has(id)) expandedIds.delete(id)
     else expandedIds.add(id)
+    renderArchive()
+  }
+
+  /**
+   * 这一棵子树里**可以展开**（有子级）的文件夹数量。
+   *
+   * 空文件夹不算：展开它只会多出一行「这个文件夹是空的」，而那一行的副文案
+   * （「0 个书签 • 0 个文件夹」）已经把同一件事说完了。
+   */
+  function expandableCount(): number {
+    let count = 0
+    for (const node of nodeIndex.values()) {
+      if (!node.url && (node.children?.length ?? 0) > 0) count++
+    }
+    return count
+  }
+
+  /**
+   * 全部展开 / 全部折叠（一个按钮两档，像行内那个「转成另一种」）。
+   *
+   * 它不是「树视图」，而是给已经展开的那几层加一个「一次全看完」的手势：
+   * 找东西时一排排点开二十几个文件夹很磨人，而全部展开之后可以用浏览器自己的
+   * 页内查找（Ctrl+F）在一屏里找——那是这一档真正解决的问题。
+   *
+   * **有展开的就全部收起，否则全部展开**：不需要第二个按钮，按钮上的字已经说明了下一档是什么。
+   * 判据看的是 `expandedIds` 而不是`当前层里有没有可见的己展开项`——
+   * 展开集在换层时会清空，所以两者实际总是一致，但前者不用再走一遍 DOM。
+   *
+   * 代价（实测量过，不是估计）：真实数据下书签栏子树全部纳入展开集是
+   * **11003 行 / 11.5 万个元素 / 12 MB 的 HTML**。所以这个手势必须配**虚拟滚动**
+   * （只渲染视口里那几十行，见 `renderArchiveWindow`）——否则一次 `innerHTML` 就是
+   * 983 ms 卡顿 + 2402 ms 布局。展开本身是纯内存操作（约 20 ms），贵的是渲染。
+   */
+  function toggleExpandAll(): void {
+    if (expandedIds.size > 0) {
+      expandedIds.clear()
+    } else {
+      for (const [id, node] of nodeIndex) {
+        if (!node.url && (node.children?.length ?? 0) > 0) expandedIds.add(id)
+      }
+    }
     renderArchive()
   }
 
@@ -2210,8 +2392,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   })
 
   newFolderButton.addEventListener('click', async () => {
-    if (!canWrite() || busy) return
-    busy = true
+    if (!canWrite() || busy) return    busy = true
     updateButtons()
     try {
       const name = await nextFolderName(viewFolderId)
@@ -2253,6 +2434,10 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
   newSeparatorButton.addEventListener('click', () => void createMarker('sep'))
   newGapButton.addEventListener('click', () => void createMarker('gap'))
+
+  // 全部展开 / 全部折叠：不置灰按钮、不写状态行——它不是耗时操作，也不改变任何数据，
+  // 行数当场变了一下就是它的全部反馈（与展开单个文件夹一致）。
+  expandAllButton.addEventListener('click', () => toggleExpandAll())
 
   /**
    * 把一枚记号在两种形态之间转换（分隔线 ⇄ 间隔）。
