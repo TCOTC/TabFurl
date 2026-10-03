@@ -1,8 +1,9 @@
-import {getBookmarksBarId, getNodePath, listBookmarkBarFolders} from '../shared/bookmarks'
+import {getBookmarksBarId, getNodePath} from '../shared/bookmarks'
 import {loadSettings, updateSettings} from '../shared/settings'
 import {escapeHtml} from '../shared/tile'
-import type {FolderOption} from '../shared/types'
 import {errorText, q, setStatus, type AppEvents} from './dom'
+import {createFolderPicker, type FolderPicker} from './FolderPicker'
+import {STAR_ICON, plusIcon} from './icons'
 
 /**
  * chip 的拖动载荷类型。
@@ -13,13 +14,18 @@ import {errorText, q, setStatus, type AppEvents} from './dom'
  */
 const CHIP_DRAG_TYPE = 'application/x-tabfurl-favorite'
 
-const PLACEHOLDER = '＋ 添加收藏…'
-
 const TEMPLATE = `
   <div class="favs" id="fav-list" role="list" aria-label="收藏的文件夹"></div>
-  <button type="button" class="btn btn--ghost btn--sm" id="fav-add-current"
-          title="把右栏当前这一层收藏起来">☆ 收藏这一层</button>
-  <select class="input input--sm favs__pick" id="fav-picker" aria-label="从书签栏里挑一层收藏"></select>
+  <!--
+    两个**只有图标**的按钮：文案写在 title / aria-label 上。
+    这一行是「常去的那几层」的快捷栏，chip 才是主角；两个带文字的按钮（尤其「＋ 添加收藏…」）
+    加起来能占掉半行，把 chip 挤到看不见——而它们一个是「收藏当前层」、一个是「从书签栏挑」，
+    悬停一下就知道，不值得常驻半行文字。
+  -->
+  <button type="button" class="btn btn--ghost btn--icon" id="fav-add-current"
+          title="收藏右栏当前这一层" aria-label="收藏右栏当前这一层">${STAR_ICON}</button>
+  <button type="button" class="btn btn--ghost btn--icon" id="fav-add-pick"
+          title="从书签栏里挑一层收藏" aria-label="从书签栏里挑一层收藏">${plusIcon()}</button>
   <p class="status" id="fav-status" hidden></p>
 `
 
@@ -38,8 +44,8 @@ export interface FavoriteFolders {
  *
  * 四条约定：
  * - **顺序就是数组顺序，且第一个是打开界面时的落点**，所以顺序有意义，支持拖拽排序。
- * - **加收藏有两个入口**：`☆ 收藏这一层`（拿右栏当前层）与右侧那个 `＋ 添加收藏…` 下拉框
- *   （从书签栏里挑）。两条路都走同一个 `add()`，不会各写一份去重与落盘逻辑。
+ * - **加收藏有两个入口，都是只有图标的按钮**：☆（拿右栏当前层）与 ＋（打开可搜索的选择器，
+ *   从书签栏里挑一层）。两条路都走同一个 `add()`，不会各写一份去重与落盘逻辑。
  * - **一个收藏都不可用时右栏自己退回书签栏**（那是 `TransferPanel` 的事），
  *   这里只负责让「一条 chip 都没有」看起来不像坏了——栏里留一句说明。
  * - **只能收藏书签栏里的层**：扩展不往「其他书签」里写东西，收藏也不该破这个例。
@@ -56,12 +62,28 @@ export function createFavoriteFolders(
   element.innerHTML = TEMPLATE
 
   const list = q<HTMLDivElement>(element, '#fav-list')
-  const picker = q<HTMLSelectElement>(element, '#fav-picker')
+  const starButton = q<HTMLButtonElement>(element, '#fav-add-current')
+  const plusButton = q<HTMLButtonElement>(element, '#fav-add-pick')
   const status = q<HTMLParagraphElement>(element, '#fav-status')
 
-  let barTitle = ''
-  /** 候选下拉框上一次的签名（内容没变就不重建，与别处同一个理由）。 */
-  let pickerSignature = ''
+  /**
+   * 上一次读到的收藏，供选择器标记「已收藏」。
+   *
+   * 它**必须在选择器之前声明**：`isFavorited` 是个闭包，虽然要到「打开面板」时才会被调用，
+   * 但把被读的变量写在读者后面，读代码的人得先往下翻再翻回来。
+   */
+  let favorited = new Set<string>()
+
+  /**
+   * 选择器是**独立组件**（`FolderPicker.ts`）：它有自己的搜索词与高亮项状态，
+   * 还要能遮住下面的列表，所以不塞在这一行里，只把它的元素挂进来。
+   */
+  const picker: FolderPicker = createFolderPicker({
+    isFavorited: (id) => favorited.has(id),
+    onPick: (id) => void add(id)
+  })
+  element.append(picker.element)
+
   /**
    * chip 栏上一次的签名。
    *
@@ -73,15 +95,6 @@ export function createFavoriteFolders(
   /** 上一次渲染出来的 id 顺序，用来判断拖完之后是否真的要落盘。 */
   let lastOrder: string | undefined
   let dragging: HTMLElement | undefined
-
-  function fullPath(path: readonly string[], title: string): string {
-    return [barTitle, ...path, title].join(' / ')
-  }
-
-  function optionLabel(folder: FolderOption, index: number): string {
-    if (index === 0) return `${folder.title}（书签栏自身）`
-    return fullPath(folder.path, folder.title)
-  }
 
   /** 当前这一层是不是在书签栏里。 */
   async function inBar(path: readonly {id: string}[]): Promise<boolean> {
@@ -147,6 +160,12 @@ export function createFavoriteFolders(
     const path = await getNodePath(folderId)
     if (path.length === 0) {
       setStatus(status, '这一层已经不在了。', 'error')
+      return
+    }
+    // 路径只有一层 = 它就是书签树的根（`书签栏` / `其他书签` / `移动设备书签` 都带一层父）。
+    // 这一条要单独判，否则它会被下面那条说成「扩展不往其他书签里写」——原因其实不一样。
+    if (path.length < 2) {
+      setStatus(status, '这里是书签树的根，它本身不是文件夹，没法收藏。', 'error')
       return
     }
     if (!(await inBar(path))) {
@@ -217,28 +236,12 @@ export function createFavoriteFolders(
         })
       }
       renderChips(entries)
-
-      const {barTitle: title, folders} = await listBookmarkBarFolders()
-      barTitle = title
-      const signature = folders
-        .map((folder, index) => `${folder.id}\u0000${optionLabel(folder, index)}`)
-        .join('\u0001')
-      // 候选没变就不重建：重建会把下拉框已经显示好的那一行闪一下（与别处同一个理由）。
-      if (signature !== pickerSignature) {
-        pickerSignature = signature
-        picker.replaceChildren(new Option(PLACEHOLDER, ''))
-        for (const [index, folder] of folders.entries()) {
-          picker.append(new Option(optionLabel(folder, index), folder.id))
-        }
-      }
-      picker.value = ''
+      favorited = new Set(entries.map((entry) => entry.id))
     } catch (error) {
-      // 认不出书签栏时两个入口都没得选，把原因写出来，而不是留一堆空控件让人猜。
-      picker.disabled = true
-      picker.replaceChildren(new Option('无法读取书签栏', ''))
-      pickerSignature = ''
+      // 认不出书签栏时选择器也拉不到候选，把原因写出来，而不是留一堆空控件让人猜。
       lastChips = undefined
       lastOrder = undefined
+      favorited = new Set()
       list.innerHTML = ''
       setStatus(status, errorText(error), 'error')
     }
@@ -262,14 +265,7 @@ export function createFavoriteFolders(
     }
 
     if (target.closest('#fav-add-current')) void addCurrent()
-  })
-
-  // 选一个就加一个：加完拨回占位项，否则下拉框会一直显示「刚加过的那一层」，
-  // 再点同一项不会触发 change（看着像没反应）。
-  picker.addEventListener('change', () => {
-    const id = picker.value
-    picker.value = ''
-    if (id) void add(id)
+    if (target.closest('#fav-add-pick')) void picker.toggle(plusButton)
   })
 
   list.addEventListener('dragstart', (event) => {

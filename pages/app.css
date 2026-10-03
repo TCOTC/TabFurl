@@ -23,6 +23,7 @@
  * 而不是在标题下面再塞一条横向滚动条。
  */
 .favs-bar {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -48,13 +49,16 @@
  *
  * 它是「标题」与「×」两个按钮包在一个可拖的盒子里，而不是一个按钮里再嵌一个按钮——
  * 后者是非法 HTML，浏览器会把它拆开，然后两次点击都会变成「跳过去」。
+ *
+ * 圆角与 `.btn` / `.box` 同一个尺度（`--radius-sm`）：整页只有这一种小块圆角。
+ * 原来那个 999px 的胶囊圆角会把它变成另一种东西——看着像一枚标签牌，与旁边的按钮不同类。
  */
 .chip {
   display: inline-flex;
   align-items: center;
   max-width: 220px;
   border: 1px solid var(--border-strong);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: var(--bg-elevated);
   cursor: grab;
   overflow: hidden;
@@ -106,15 +110,87 @@
 }
 
 /*
- * 「从书签栏里挑一层」的下拉框。
+ * 可搜索的文件夹选择器（`FolderPicker.ts`）：嵌在 chip 栏里的一个浮层。
  *
- * 选择器必须写到两级：`.input--sm` 里有一条 `max-width: 100%`，与上面这条同优先级、
- * 而且在文件里排在后面，只写 `.favs__pick` 会被它盖掉——实测下拉框会撑满整行（597px），
- * 于是这一栏多出一行，两个列表的起点差了 65px。
+ * 用**绝对定位在触发按钮下面**，而不是原生 `popover` + 锚点定位：
+ * 后者的锚点定位（`anchor-name` / `position-anchor`）要 Chrome 125+，而本项目的下限是 114。
+ * 它不在任何一个滚动容器里（chip 栏在 `.box` 外面），所以不会被裁掉。
+ *
+ * 宽度写死 300px 而不是跟着按钮走：按钮现在是纯图标（24px），而候选要显示完整路径。
  */
-.favs-bar .favs__pick {
-  width: auto;
-  max-width: 140px;
+.picker {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: min(300px, calc(100vw - var(--space-6)));
+  padding: var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+}
+
+/* 列表自己滚，搜索框留在顶上。高度取一个「能看五六行、又不会盖住整页」的值。 */
+.picker__list {
+  max-height: 260px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+/*
+ * 一行候选。
+ *
+ * 复用 `.item` 的排版（图标 + 标题 + 副文案），所以这里只把自己变成一个“像行的按钮”：
+ * 去掉按钮默认的描边与居中，宽度拉满，让悬停底色能铺到整行。
+ */
+.picker__row {
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.picker__row:hover:not(:disabled),
+.picker__row.is-active {
+  background: var(--accent-soft);
+}
+
+/*
+ * 已收藏的层仍然列出来（用户可能就是想确认它在不在），但不可点。
+ * 淡一点让它看起来不像能点，同时还能读清那行字——所以是 `opacity` 而不是把文字变灰。
+ */
+.picker__row:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+.picker__flag {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.picker__note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.picker__empty {
+  padding: var(--space-4) var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-align: center;
 }
 
 .input--sm {

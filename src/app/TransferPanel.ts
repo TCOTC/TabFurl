@@ -43,6 +43,7 @@ import {
   type Panel
 } from './dom'
 import {openBookmarkDialog} from './BookmarkDialog'
+import {FOLDER_ICON, PIN_ICON, VERT_LINE_ICON, plusIcon} from './icons'
 
 /** Chrome 本地 favicon 缓存端点：读缓存、不联网。 */
 const FAVICON_BASE = chrome.runtime.getURL('_favicon/')
@@ -90,52 +91,6 @@ function countLabel(text: string, count: number): string {
 }
 
 /**
- * 「已固定」标记。与文件夹图标同理，不用 emoji：它在灰字里是个突如其来的彩色块。
- */
-const PIN_ICON = `
-  <svg class="icon icon--xs item__pin" viewBox="0 0 24 24" role="img" aria-label="已固定">
-    <path d="M16 9V4h1a1 1 0 0 0 0-2H7a1 1 0 0 0 0 2h1v5a3 3 0 0 1-3 3v2h5.97v7l1 1 1-1v-7H19v-2a3 3 0 0 1-3-3Z"
-          fill="currentColor" />
-  </svg>
-`
-
-/**
- * 文件夹图标。
- *
- * 右栏里它不只是装饰：两种行都带勾选框，而勾选框左边的位置以前是空的，文件夹行看起来就与书签行一样。
- * 放上它之后，「这一行可以进去」与「这一行是个页面」在左侧一眼可分。
- */
-const FOLDER_ICON = `
-  <svg class="folder-tile__icon" viewBox="0 0 16 16" aria-hidden="true">
-    <path d="M1.75 4.5A1.5 1.5 0 0 1 3.25 3h2.6a1 1 0 0 1 .8.4l.9 1.2h5.2A1.5 1.5 0 0 1 14.25 6.1v5.4A1.5 1.5 0 0 1 12.75 13H3.25A1.5 1.5 0 0 1 1.75 11.5Z"
-          fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round" />
-  </svg>
-`
-
-/**
- * 「在新窗口打开」的加号。SVG 而不是 `＋` 字形：全角加号在各字体里的字身与基线都不同，
- * 摆在旁边的 `→` / `←` 中间会明显错位（与文件夹图标、刷新图标同一个理由）。
- */
-const PLUS_ICON = `
-  <svg class="move__icon" viewBox="0 0 16 16" aria-hidden="true">
-    <path d="M8 3v10M3 8h10" fill="none" stroke="currentColor"
-          stroke-width="1.9" stroke-linecap="round" />
-  </svg>
-`
-
-/**
- * 「分隔线」的图标：一枚竖线。
- *
- * 自己画而不是用 `|` 字形：竖线的粗细与基线在各字体里都不一样，与旁边的文件夹图标摆在一排就会歪。
- * 尺寸交给 CSS（与 `.folder-tile` 同为 26px），所以它落在**与网站图标同一列的中心**上。
- */
-const VERT_LINE_ICON = `
-  <svg class="marker__vert" viewBox="0 0 16 16" aria-hidden="true">
-    <path d="M8 2.5v11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
-  </svg>
-`
-
-/**
  * 收藏文件夹 chip 栏的挂载点 id。
  *
  * `App` 用它把 chip 栏放进右栏表头**下面那一行**，而 `TransferPanel` 只管留出这个位置——
@@ -178,7 +133,7 @@ const TEMPLATE = `
       </button>
       <button type="button" class="btn btn--move" id="open-window-btn" disabled
               title="在新窗口打开勾选的内容">
-        <span class="move__icon">${PLUS_ICON}</span>
+        ${plusIcon('move__icon')}
         <span id="open-window-label">新窗口</span>
       </button>
       <!--
