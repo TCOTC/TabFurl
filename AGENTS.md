@@ -365,12 +365,12 @@ pnpm icons          # 重新生成占位图标
     - 左栏每行末尾的「打开」（`data-switch-tab`）也只是 `tabs.update({active: true})`，
       但**必须再 `windows.update({focused: true})`**：主界面与那一枚标签在不同的浏览器窗口时，
       不聚焦窗口看着就是「点了没反应」。
-    - **行尾那个位置是「加载 / 加载中」两档，判据是 `Tab.status`（卸载 / 正在加载 / 加载完）**，
+    - **行尾那个位置是三档：加载 / 加载中 / 释放，判据全部是 `Tab.status`**（卸载 / 正在加载 / 加载完），
       用 `status` 而不是 `Tab.discarded`：两者在「卸载」这一档等价（Chrome 自己的 API 测试断言
       卸载时 `status === 'unloaded'`），但 `status` 能把「正在加载」也表达出来，而界面恰好需要那一档。
-      「加载」只 `tabs.reload()`、**不切过去**：对卸载掉的标签，重载就是「加载」（内容丢了、地址还记着），
-      `active` 根本不动——这正是「先把几页读出来、又不离开手上这一页」需要的动作；
-      而「打开」虽然也能让它加载，但那是**跳过去**。这不是猜的：Chrome 自己的 API 测试就覆盖了这条路径
+      「加载」只 `tabs.reload()`、「释放」只 `tabs.discard()`，**两者都不切过去**：
+      对卸载掉的标签，重载就是「加载」（内容丢了、地址还记着），`active` 根本不动。
+      「打开」也能让它加载，但那是**跳过去**。这不是猜的：Chrome 自己的 API 测试就覆盖了 `reload` 这条路径
       （`chrome/test/data/extensions/api_test/tabs/basics/discarded/discarded.js`：
       「Tab is already discarded」→ `chrome.tabs.reload(id)` → 断言 `changeInfo.discarded` 为假）。
       **`tabs.onUpdated` 的过滤里必须有 `changeInfo.status`**，否则点完那一行不会变，看着像「点了没反应」
@@ -378,7 +378,19 @@ pnpm icons          # 重新生成占位图标
       **但「标题」什么时候到位不由扩展决定**：标题是页面自己给的，重 SPA 在标签不可见时往往走不到
       设置标题那一步，那些页面的标题要等用户切过去才更新。所以点过之后是「加载中」而不是按钮无声消失——
       状态要诚实，不要让人以为自己的点击丢了。
-      两档共用一个 `.btn--load`（定宽 `--load-btn-min`）：两个字与三个字不定宽就会差一个字宽。
+      **活动标签不给「释放」**：它就在屏幕上，卸载它没意义（浏览器马上就会读回来）。
+      注意这不是 API 拒绝（`tabs.discard` 用的 EXTERNAL 理由连活动标签都允许，
+      只有 URGENT / PROACTIVE / SUGGESTED 受保护），是**我们自己的选择**，
+      判据与 Chromium 自己的 discards 页同源（`visibility !== VISIBLE`）。
+      因此 `Tab.active` 也算「画出来的一部分」，**必须进签名**，并且 `tabs.onActivated` 也要触发刷新。
+      三档共用 `.btn--load`（定宽 `--load-btn-min`）：两个字与三个字不定宽就会在切档时差一个字宽。
+    - **释放可能把 tab id 换掉，`tabs.onReplaced` 里必须把勾选搬过去**。
+      扩展看到的 `Tab.id` 是 `SessionTabHelper::IdForTab(webContents)`，而释放的旧实现会把 WebContents
+      换成一个空的（新的那个有自己的 id）——Chrome 自己的 API 测试里就写着「the id changes after a tab is discarded」。
+      而「勾选了哪几枚」正是按 tabId 存的，不管的话勾选会在释放的那一刻**静默丢掉**
+      （`refreshWindowOnly()` 会把不认识的 id 剪掉，实测：把一枚勾上的标签移出窗口后计数从 1 变 0）。
+      所以 `onReplaced(addedTabId, removedTabId)` 要把 `windowSelected` 里的旧 id 换成新的，
+      而且**迁移必须在刷新之前**（刷新就会剪掉旧 id）。
 31. **落在末尾画的是「最后一行下缘的一条线」，不是整栏高亮**：两栏的落点提示都走
     `markEndDrop(list, pane)`——它取该列表**所有** `[data-drop-row]`（含分组 / 文件夹内部的）里的最后一行，
     只有列表真的是空的才退化成整栏高亮。

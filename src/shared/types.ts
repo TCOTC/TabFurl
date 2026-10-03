@@ -59,10 +59,20 @@ export interface TabSnapshot {
   /**
    * 网页的加载状态（`Tab.status`）。
    *
-   * 只给界面用：左栏的行尾据此决定要不要给一个「加载」按钮（`unloaded` 时可点、
-   * `loading` 时显示「加载中」）。不参与写入与还原——书签只认标题与网址。
+   * 只给界面用：左栏的行尾据此决定给不给「加载」/「释放」（`unloaded` 时可点「加载」、
+   * `loading` 时显示「加载中」、`complete` 时显示「释放」）。
+   * 不参与写入与还原——书签只认标题与网址。
    */
   status: TabStatus
+  /**
+   * 这一枚是否是所在窗口的**活动**标签（`Tab.active`）。
+   *
+   * 只给界面用，而且只决定一件事：**活动标签不给「释放」**。
+   * 理由不是 API 拒绝（`tabs.discard` 用的 EXTERNAL 理由连活动标签都允许），
+   * 而是它就在屏幕上：卸载一个看得见的页面没意义（浏览器马上就会把它读回来）。
+   * Chromium 自己的 discards 页用的是同一条判据（`visibility !== VISIBLE`）。
+   */
+  active: boolean
 }
 
 /** 一个标签分组，以及组内标签。 */

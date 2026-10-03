@@ -233,37 +233,82 @@ TabFurl 把它们当成书签树里的组织记号，而不是页面：
 代价要说清楚：等待提交意味着**每个标签仍会发起首次请求**（DNS、连接、响应头）。
 省下的是最贵的那部分（渲染、JS、子资源、内存），省不掉网络往返本身。
 
-#### 行尾的「加载 / 加载中」：把卸载掉的标签读回来，但不切过去
+#### 行尾的「加载 / 加载中 / 释放」：内存的取与还，都不切过去
 
 懒加载有个代价：用户想「先把这几页读出来」时，只能一个个点过去，而点过去就换页了。
-所以左栏在**已卸载**的行上给一个「加载」，它只做 `chrome.tabs.reload()`：
-对卸载掉的标签，重载就是「加载」——内容被丢掉、地址还记着，重新加载它**不会**改变 `active`。
+反过来也有代价：几十枚页面同时驻留内存时，「这几个我还想看、其余先放掉」办不到。
+所以左栏行尾那一个位置承担两个方向的动作，都**不改变 `active`**（不切走手上这一页）：
 
-这不是猜的，是 Chrome 自己的 API 测试覆盖的路径
+- 「加载」只做 `chrome.tabs.reload()`：对卸载掉的标签，重载就是「加载」——内容被丢掉、地址还记着。
+- 「释放」只做 `chrome.tabs.discard()`：丢掉内容、保留标题与地址，点开时才重新加载。
+
+`reload` 这条路径是 Chrome 自己的 API 测试覆盖过的
 （`chrome/test/data/extensions/api_test/tabs/basics/discarded/discarded.js`：先断言标签已卸载，
 再 `chrome.tabs.reload(id)`，然后在 `onUpdated` 里断言 `changeInfo.discarded` 为 **false**）。
 
-判据是 `Tab.status`，一共三档，行尾各有各的样子：
+判据是 `Tab.status`，一共三档：
 
 | 状态 | 行尾 | 说明 |
 | --- | --- | --- |
 | `unloaded` | 「加载」（可点） | 内容被 Chrome 丢掉了（懒加载出来的，或它自己卸的） |
 | `loading` | 「加载中」（禁用） | 点过「加载」之后、到页面给出标题之前 |
-| `complete` | 什么都不占 | — |
+| `complete` 且非活动 | 「释放」（可点） | 已经把这一页读进内存了 |
+| `complete` 且**活动** | 什么都不占 | 它就在屏幕上，卸载它没有意义 |
 
 用 `status` 而不是 `Tab.discarded`：两者在「卸载」这一档**等价**（Chrome 自己的 API 测试断言
 卸载时 `status === 'unloaded'`），但 `status` 能把「正在加载」也表达出来，而界面恰好需要那一档。
 
-四条实现要点：
+#### 为什么活动标签不给「释放」
+
+**这不是 API 拒绝，是我们自己的选择**，而且理由很具体：活动标签就在屏幕上，
+卸载一个看得见的页面没有意义——浏览器马上就会把它读回来。
+
+来源核查（因为它反直觉）：`tabs.discard` 用的理由是 `EXTERNAL`，而
+`DiscardEligibilityPolicyTest.TestCannotDiscardActiveTab` 明确写着只有 `URGENT` / `PROACTIVE` /
+`SUGGESTED` 受保护，`EXTERNAL` 对活动标签**是允许的**（扩展就是 EXTERNAL 这条路）。
+所以判据得自己给：Chromium 自己的 discards 页用的是 `visibility !== VISIBLE`（`canDiscardViaUi_`），
+扩展能看到的最接近的信号就是 `Tab.active`。
+
+因此 `Tab.active` **也必须进 `windowSignatureOf()`**：它不显示在行里，但决定给不给那个按钮，
+漏掉就会出现「该重画的没重画」——把标签切走之后那一行还挂着「释放」。
+`tabs.onActivated` 同样要触发刷新（去抖过的一次 `tabs.query`，不值得为此记住「我们的窗口 id 是几」）。
+
+#### 释放可能换掉 tab id：勾选必须搬过去
+
+**这是本轮最容易静默出错的一条。** 扩展看到的 `Tab.id` 是
+`SessionTabHelper::IdForTab(webContents).id()`（`extension_tab_util.cc`），
+而释放的旧实现会把 WebContents **换成一个新的**（`TabLifecycleUnit::FinishDiscard` →
+`tab_strip_model_->DiscardWebContents`），新的那个有自己的 SessionTabHelper → **新的 tab id**。
+Chrome 自己的 API 测试里就写着这件事（`discarded.js`：「the id changes after a tab is discarded」）；
+`TabListInterfaceObserver::OnWebContentsReplaced` 的注释也点明了这条路径的存在
+（「used on Desktop to maintain backwards compatibility with the old discard path」）。
+新的 `kWebContentsDiscard` 路径会保留 WebContents（`FinishDiscardAndPreserveWebContents`），
+所以这个行为**取决于一个 feature flag**，扩展不能假设 id 稳定。
+
+而界面里「勾选了哪几枚」正是按 tabId 存的，`refreshWindowOnly()` 又会把「不在窗口里」的 id 剪掉 ——
+于是不处理的话，勾选会在释放的那一刻**静默丢掉**（实测把一枚勾上的标签移出窗口，计数从 1 变 0）。
+
+`tabs.onReplaced(addedTabId, removedTabId)` 给的正好是这张新旧对照表，所以迁移就是一行：
+
+```ts
+if (windowSelected.delete(removedTabId)) windowSelected.add(addedTabId)
+```
+
+**迁移必须在刷新之前**：`scheduleWindowRefresh()` 是去抖的，但一旦跑起来就会剪掉那个已经不在窗口里的旧 id。
+实测（预览桩模拟一次换 id）：勾选从 `1` 变成 `903`，「存过去 (1)」纹丝不动。
+
+其余四条实现要点：
 
 1. **`tabs.onUpdated` 的过滤必须带上 `changeInfo.status`**。它只在卸载 / 开始 / 加载完三种时候派发
    （Chrome 把它与 `discarded` 塞在同一个事件里，两者永远同时到达），少了它点完那一行不会变。
-2. **`status` 必须进 `windowSignatureOf()`**。签名是用来「结构没变就跳过重建」的，
+2. **`status` 与 `active` 都必须进 `windowSignatureOf()`**。签名是用来「结构没变就跳过重建」的，
    漏一个字段的后果正是「该重画的没重画」——那一行会停在上一个样子。
-3. **两档共用 `.btn--load`（定宽 `--load-btn-min`）**。「加载」两个字、「加载中」三个字，
-   不定宽就会在点下去的那一刻差一个字宽。它在「打开」**左边**（按钮组贴右，
+3. **三档共用 `.btn--load`（定宽 `--load-btn-min`）**。「加载」两个字、「加载中」三个字，
+   不定宽就会在切档时差一个字宽。它在「打开」**左边**（按钮组贴右，
    在右边的话消失时会推走「打开」；实测放左边时右边那枚纹丝不动，全程 592px）。
-4. **点下去只报「已在后台加载」，不承诺标题**。
+4. **点下去只报「已在后台加载」，不承诺标题**；释放则不写成功提示（那一行自己会变成「加载」），
+   但失败要写——它是有真实拒绝条件的（已是 `unloaded`、没有 WebContents、有未提交的导航在等），
+   而且此时 Chrome 抛的是 `Cannot discard tab with id: N`。
 
 #### 为什么点了「加载」标题可能不变（x.com 这类站点）
 

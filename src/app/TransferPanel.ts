@@ -418,7 +418,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    * 右侧的「打开」是**切过去**（`active: true` + 聚焦窗口），不是「打开一个新标签」——
    * 这一栏是活着的标签的清单，对着它点一条就是要跳到那一条上去。
    *
-   * 行尾那个「加载」/「加载中」的位置见 `loadSlotMarkup()`。
+   * 行尾那个「加载 / 释放」的位置见 `statusSlotMarkup()`。
    */
   function tabRowMarkup(tab: TabSnapshot): string {
     const url = tab.url
@@ -432,7 +432,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
           <span class="item__title">${escapeHtml(tab.title || url)}${tab.pinned ? PIN_ICON : ''}</span>
           <span class="item__meta item__meta--url" title="${escapeHtml(url)}">${escapeHtml(url)}</span>
         </span>
-        <span class="tree__actions">${loadSlotMarkup(tab)}
+        <span class="tree__actions">${statusSlotMarkup(tab)}
           <button type="button" class="btn btn--ghost btn--sm"
                   data-switch-tab="${tab.tabId}" title="切换到这个标签页">打开</button>
         </span>
@@ -441,20 +441,22 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   /**
-   * 行尾那个「加载」位置的三种样子。
+   * 行尾那个位置的三种样子（加载 / 加载中 / 释放）。
    *
-   * - `unloaded`：标签被 Chrome 卸载了（懒加载出来的，或它自己卸的）→ 给一个可点的「加载」。
-   * - `loading`：点过「加载」之后、到页面给出标题之前的那一段 → 显示「加载中」并禁用。
+   * - `unloaded`：标签被 Chrome 卸载了（懒加载出来的，或它自己卸的）→ 可点的「加载」。
+   * - `loading`：点过「加载」之后、到页面给出标题之前的那一段 → 「加载中」并禁用。
    *   这一段可能持续很久，而**页面什么时候给出标题由网站自己决定**：
    *   有的站点（x.com 这类重 SPA）在标签不可见时走不到设置标题那一步，
    *   于是标题要等用户切过去才更新。显示「加载中」比让按钮无声消失诚实得多——
    *   否则用户看到的是「点了没反应」。
-   * - 其余（`complete`）：什么都不占。
+   * - `complete` 且**不是活动标签**：给一个「释放」，把这一页占的内存交回去（点开时才重新加载）。
+   *   活动标签不给：它就在屏幕上，卸载它没意义（浏览器马上就会读回来）。
+   *   Chromium 自己的 discards 页用的是同一条判据（`visibility !== VISIBLE`）。
    *
-   * 两档都用 `.btn--load`（定宽）：
-   * 「加载」是两个字、「加载中」是三个，不定宽就会差一个字宽。
+   * 三个分支都占同一个位置（`.btn--load` 定宽）：
+   * 「加载」两个字、「加载中」三个字，不定宽就会在切换时差一个字宽。
    */
-  function loadSlotMarkup(tab: TabSnapshot): string {
+  function statusSlotMarkup(tab: TabSnapshot): string {
     if (tab.status === 'unloaded') {
       return `<button type="button" class="btn btn--ghost btn--sm btn--load" data-load-tab="${tab.tabId}"
                   title="在后台加载这一页（标签已卸载）">加载</button>`
@@ -463,12 +465,19 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       return `<button type="button" class="btn btn--ghost btn--sm btn--load" disabled
                   title="这一页正在加载">加载中</button>`
     }
-    return ''
+    if (tab.active) return ''
+    return `<button type="button" class="btn btn--ghost btn--sm btn--load" data-release-tab="${tab.tabId}"
+                title="释放这一页占用的内存（点开时才重新加载，地址不会丢）">释放</button>`
   }
 
-  /** 一行里真正**画出来**的字段，顺序即渲染顺序。 */
+  /**
+   * 一行里影响「画出来什么」的字段，顺序即渲染顺序。
+   *
+   * 不只是文字：`active` 不显示在行里，但它决定行尾给不给「释放」，
+   * 所以它也算「画出来的一部分」——漏进签名就会出现「该重画的没重画」。
+   */
   function drawnFieldsOf(tab: TabSnapshot): (string | number)[] {
-    return [tab.tabId, tab.title, tab.url, tab.pinned ? 1 : 0, tab.status]
+    return [tab.tabId, tab.title, tab.url, tab.pinned ? 1 : 0, tab.status, tab.active ? 1 : 0]
   }
 
   /**
@@ -973,11 +982,37 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   chrome.tabs.onAttached.addListener(scheduleWindowRefresh)
   chrome.tabs.onDetached.addListener(scheduleWindowRefresh)
   chrome.tabGroups.onUpdated.addListener(scheduleWindowRefresh)
+
+  /**
+   * 活动标签变了也要重读：行尾给不给「释放」取决于 `Tab.active`。
+   *
+   * 别的窗口激活标签也会派发这个事件，而它只有一次去抖过的 `tabs.query`，
+   * 不值得为此记住「我们的窗口 id 是几」（那还会多一份会过期的状态）。
+   */
+  chrome.tabs.onActivated.addListener(scheduleWindowRefresh)
+
+  /**
+   * 标签在 Chrome 内部被换掉了 WebContents —— 目前只有一条路会走到这里：**释放**。
+   *
+   * 为什么必须处理：扩展看到的 `Tab.id` 是 `SessionTabHelper::IdForTab(webContents)`，
+   * 而释放的旧实现会把 WebContents 换成一个空的（新的那个有自己的 id），
+   * 也就是**释放之后这一枚的 tab id 会变**（Chrome 自己的 API 测试里就写着
+   * 「the id changes after a tab is discarded」）。而界面里「勾选了哪几枚」正是按 tabId 存的，
+   * 不管的话勾选会在释放的那一刻**静默丢掉**（`refreshWindowOnly()` 会把不认识的 id 剪掉）。
+   *
+   * `onReplaced(addedTabId, removedTabId)` 给的正好是这张新旧对照表，所以把勾选搬过去。
+   * 迁移必须在刷新之前做完：刷新会剪掉「不在窗口里」的 id，而此刻旧 id 已经不在窗口里了。
+   */
+  chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+    if (windowSelected.delete(removedTabId)) windowSelected.add(addedTabId)
+    scheduleWindowRefresh()
+  })
+
   chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
     // 只关心会改变这一行长相的字段。
     //
     // `status` 是必需的，不是顺手加的：卸载 / 正在加载 / 加载完三种状态各对应行尾的一种样子
-    // （「加载」按钮 / 「加载中」/ 什么都不显示），而且它与 `discarded` **永远在同一个事件里
+    // （「加载」/「加载中」/「释放」），而且它与 `discarded` **永远在同一个事件里
     // 一起到达**（Chrome 那边同时插入两个 key）。少了它，点「加载」之后那行不会变，
     // 看起来就是「点了没反应」。
     if (
@@ -1662,6 +1697,11 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       void loadTab(Number(loadButton.dataset.loadTab))
       return
     }
+    const releaseButton = target.closest<HTMLButtonElement>('[data-release-tab]')
+    if (releaseButton?.dataset.releaseTab !== undefined) {
+      void releaseTab(Number(releaseButton.dataset.releaseTab))
+      return
+    }
     const switchButton = target.closest<HTMLButtonElement>('[data-switch-tab]')
     if (switchButton?.dataset.switchTab !== undefined) {
       void switchToTab(Number(switchButton.dataset.switchTab))
@@ -1708,6 +1748,33 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       setStatus(status, '已在后台加载这一页；标题要等页面自己给出。', 'ok')
     } catch (error) {
       setStatus(status, `加载失败：${errorText(error)}`, 'error')
+    }
+  }
+
+  /**
+   * 把一枚已加载的标签的内存交回去（左栏行尾的「释放」）。
+   *
+   * 与「加载」是同一个 API 的逆方向：`chrome.tabs.discard()` 丢掉页面内容、保留地址与标题，
+   * 点开时才重新加载。这一栏是活着的标签的清单，几十枚页面同时驻留内存时，
+   * 「我还想看这几个，其余先放掉」是常有的需要。
+   *
+   * 两个不做的事：
+   *
+   * - **不给活动标签这个按钮**（见 `statusSlotMarkup()`）：它就在屏幕上，卸载马上会被读回来。
+   *   注意这不是 API 限制——`tabs.discard` 用的是 EXTERNAL 理由，连活动标签都是允许的
+   *   （`DiscardEligibilityPolicyTest.TestCannotDiscardActiveTab` 里只有 URGENT / PROACTIVE /
+   *   SUGGESTED 被算作受保护），所以这一条是**我们自己的选择**，不是防御。
+   * - **不写成功提示**：卸载 / 解除卸载由 Chrome 派发 `onUpdated{status, discarded}`，
+   *   那一行自己会变成「加载」，比文字更直接。
+   *
+   * 失败倒是要说话：它是有真实拒绝条件的（已是 unloaded、没有 WebContents、
+   * 有未提交的导航等待提交等），而且此时 Chrome 会抛 `Cannot discard tab with id: N`。
+   */
+  async function releaseTab(tabId: number): Promise<void> {
+    try {
+      await chrome.tabs.discard(tabId)
+    } catch (error) {
+      setStatus(status, `释放失败：${errorText(error)}`, 'error')
     }
   }
 

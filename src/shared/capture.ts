@@ -79,7 +79,9 @@ export async function snapshotCurrentWindow(): Promise<WindowSnapshot> {
       // `unloaded` 就是懒加载出来的那种：内容被丢掉了、地址还留着。
       // 类型里 status 是可选的，缺了就当成已加载——**不能**当成卸载，
       // 那会让每一行都冒出一个「加载」按钮。
-      status: isTabStatus(tab.status) ? tab.status : 'complete'
+      status: isTabStatus(tab.status) ? tab.status : 'complete',
+      // 与 pinned 同理：@types 里是必填，但真跑起来给个兜底更安全。
+      active: tab.active === true
     }
 
     const groupId = tab.groupId
