@@ -433,6 +433,13 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
   const archiveExcluded = new Set<string>()
   const knownBookmarks = new Set<string>()
   let pendingDeleteId: string | undefined
+  /**
+   * 左栏里正在等第二次确认的关闭目标。
+   *
+   * 与右栏的 `pendingDeleteId` 分开一个变量：两边长得像，但一个是书签 id、一个是
+   * tabId / 分组下标，合成一个变量只会让两处的判断互相干扰。
+   */
+  let pendingClose: {kind: 'tab'; tabId: number} | {kind: 'group'; index: number} | undefined
   let renaming: {id: string; committed: boolean} | undefined
   /** 撤销目标：最近一次写入新建的 id。只存在内存里（见 docs/design.md）。 */
   let lastWrite: {folderIds: string[]; bookmarkIds: string[]} | undefined
@@ -464,6 +471,48 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
   }
 
   /**
+   * 行尾那一对「关闭 / 确认关闭 + 取消」（左栏用）。
+   *
+   * 与右栏的「删除」同一套两步确认：关闭是**不可逆**的（标签里的内容没存下来就没了），
+   * 而它在行尾离「打开」只有一个按钮的距离，误点太容易。
+   *
+   * 两档的宽度并不相同（「确认关闭」四个字 + 一个「取消」比「关闭」宽 70 多像素）——**不刻意定宽**：
+   * 与右栏的「删除 → 确认删除」同一套做法，代价只是**这一行**里「打开」往左让一格、
+   * 标题短一点；行高不变、别的行一个都不动。反过来若给它预留那么宽，
+   * 每一行平时都要白占 70 像素的标题空间，那更亏。
+   */
+  function closeSlotMarkup(kind: 'tab' | 'group', id: number, label: string): string {
+    const key = closeKey(kind, id)
+    if (pendingCloseKey() !== key) {
+      return `<button type="button" class="btn btn--ghost btn--sm" data-close="${key}"
+                  title="${label}">关闭</button>`
+    }
+    return `<button type="button" class="btn btn--danger btn--sm" data-confirm-close="${key}"
+                title="${label}">确认关闭</button>
+            <button type="button" class="btn btn--ghost btn--sm" data-cancel-close="">取消</button>`
+  }
+
+  /** 左栏关闭目标的主键：`t<tabId>` / `g<分组下标>`。用一个字符串就够了（不分两种状态）。 */
+  function closeKey(kind: 'tab' | 'group', id: number): string {
+    return `${kind === 'tab' ? 't' : 'g'}${id}`
+  }
+
+  /** 当前正在等确认的那个关闭目标的主键。渲染时用它决定画「关闭」还是「确认关闭」。 */
+  function pendingCloseKey(): string | undefined {
+    if (!pendingClose) return undefined
+    return closeKey(
+      pendingClose.kind,
+      pendingClose.kind === 'tab' ? pendingClose.tabId : pendingClose.index
+    )
+  }
+
+  /** `data-close` 值 → 关闭目标。 */
+  function parseCloseKey(value: string): {kind: 'tab'; tabId: number} | {kind: 'group'; index: number} {
+    const id = Number(value.slice(1))
+    return value.startsWith('t') ? {kind: 'tab', tabId: id} : {kind: 'group', index: id}
+  }
+
+  /**
    * 一条标签行。
    *
    * 三个 data 属性各有用处：`data-row` 供「点整行切换勾选」找到勾选框；
@@ -472,10 +521,8 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
    * 副文案是**完整网址**（与右栏收藏夹条目一致）：同一站点下的不同页面靠路径区分，
    * 只显示主机名时两条看起来一模一样。太长的仍会省略，完整那份在 `title` 里。
    *
-   * 右侧的「打开」是**切过去**（`active: true` + 聚焦窗口），不是「打开一个新标签」——
-   * 这一栏是活着的标签的清单，对着它点一条就是要跳到那一条上去。
-   *
-   * 行尾那个「加载 / 释放」的位置见 `statusSlotMarkup()`。
+   * 行尾三个按钮从左到右是：**加载 / 释放·打开·关闭**。左边那个是「这一页的状态」
+   * （见 `statusSlotMarkup()`），中间是「跳过去」，右边是「关掉它」。
    */
   function tabRowMarkup(tab: TabSnapshot): string {
     const url = tab.url
@@ -492,6 +539,7 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
         <span class="tree__actions">${statusSlotMarkup(tab)}
           <button type="button" class="btn btn--ghost btn--sm"
                   data-switch-tab="${tab.tabId}" title="切换到这个标签页">打开</button>
+          ${closeSlotMarkup('tab', tab.tabId, '关闭这一枚标签页（里面的内容不会存下来）')}
         </span>
       </li>
     `
@@ -574,7 +622,7 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
     // `refresh()` 会被频繁重跑（保存、删除、改名、拖一条收藏夹条目…），而它每次都要重建整个左栏：
     // 用户的屏幕上就是一次无意义的整列重绘（实测：挪一根分隔线时「存过去 (N)」闪一下）。
     // 凡是「由外部数据驱动、又会被频繁重跑」的渲染，都要先问一句：内容没变时能不能什么都不做。
-    const signature = windowSignatureOf(windowChildren)
+    const signature = windowSignatureOf(windowChildren) + '|' + (pendingCloseKey() ?? '')
     if (signature === windowSignature) {
       syncWindowStates()
       return
@@ -603,6 +651,11 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
               <input type="checkbox" data-window-group="${index}" />
               <span class="item__title">${escapeHtml(child.name)}</span>
               <span class="item__meta">${child.tabs.length} 个标签</span>
+              <span class="tree__actions">${closeSlotMarkup(
+                'group',
+                index,
+                `关闭这一组标签页（共 ${child.tabs.length} 枚，里面的内容不会存下来）`
+              )}</span>
             </div>
             <ul class="kids">${child.tabs.map(tabRowMarkup).join('')}</ul>
           </li>
@@ -1268,6 +1321,11 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
    */
   chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
     if (windowSelected.delete(removedTabId)) windowSelected.add(addedTabId)
+    // 正在等确认的那一枚也要搬：不搬的话确认按钮会指向一个已经不在的 id，
+    // 点了之后 Chrome 抛「No tab with id」，而那本来是个正常操作。
+    if (pendingClose?.kind === 'tab' && pendingClose.tabId === removedTabId) {
+      pendingClose = {kind: 'tab', tabId: addedTabId}
+    }
     scheduleWindowRefresh()
   })
 
@@ -2117,6 +2175,22 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
       void releaseTab(Number(releaseButton.dataset.releaseTab))
       return
     }
+    const closeButton = target.closest<HTMLButtonElement>('[data-close]')
+    if (closeButton?.dataset.close !== undefined) {
+      pendingClose = parseCloseKey(closeButton.dataset.close)
+      renderWindow()
+      return
+    }
+    const confirmClose = target.closest<HTMLButtonElement>('[data-confirm-close]')
+    if (confirmClose?.dataset.confirmClose !== undefined) {
+      void closeTarget(parseCloseKey(confirmClose.dataset.confirmClose))
+      return
+    }
+    if (target.closest('[data-cancel-close]')) {
+      pendingClose = undefined
+      renderWindow()
+      return
+    }
     const switchButton = target.closest<HTMLButtonElement>('[data-switch-tab]')
     if (switchButton?.dataset.switchTab !== undefined) {
       void switchToTab(Number(switchButton.dataset.switchTab))
@@ -2190,6 +2264,49 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
       await chrome.tabs.discard(tabId)
     } catch (error) {
       setStatus(status, `释放失败：${errorText(error)}`, 'error')
+    }
+  }
+
+  /**
+   * 关闭左栏里的一条标签或一整个分组（第二步确认之后才走到这里）。
+   *
+   * **不可逆**，所以只有两步确认这一道门：关闭本身调 `chrome.tabs.remove`，
+   * 而它没有「软关闭」这回事。
+   *
+   * 关闭之后**不等去抖就立刻重读窗口**：`onRemoved` 那条路要 120 ms（`WINDOW_REFRESH_DEBOUNCE_MS`），
+   * 而这一段时间里那一行还留在屏幕上、且停在新出现的「确认关闭」状态上——
+   * 看着就像「点了没反应」。直接 `refreshWindowOnly()` 一次只多一次 `tabs.query`。
+   */
+  async function closeTarget(target: {kind: 'tab'; tabId: number} | {kind: 'group'; index: number}): Promise<void> {
+    if (busy) return
+    const tabIds =
+      target.kind === 'tab'
+        ? [target.tabId]
+        : (() => {
+            const child = windowChildren[target.index]
+            return child?.kind === 'group' ? child.tabs.map((tab) => tab.tabId) : []
+          })()
+    if (tabIds.length === 0) {
+      pendingClose = undefined
+      renderWindow()
+      return
+    }
+
+    // 不置灰按钮：关闭几乎是瞬时的，而「置灰 → 恢复」会让一整排按钮闪一下
+    // （与 `moveArchiveNode` 同一个理由）。`busy` 只当防重入的闩。
+    busy = true
+    pendingClose = undefined
+    try {
+      await chrome.tabs.remove(tabIds)
+      // 从选中集里剔掉：虽然 `refreshWindowOnly()` 也会剪（那一刻它们已经不在窗口里了），
+      // 但这里先剔一次，这一行的话更直白。
+      for (const tabId of tabIds) windowSelected.delete(tabId)
+      setStatus(status, tabIds.length === 1 ? '已关闭这一枚标签页。' : `已关闭 ${tabIds.length} 枚标签页。`, 'ok')
+    } catch (error) {
+      setStatus(status, `关闭失败：${errorText(error)}`, 'error')
+    } finally {
+      busy = false
+      await refreshWindowOnly()
     }
   }
 
