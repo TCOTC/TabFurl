@@ -27,6 +27,23 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]+/g
 const WHITESPACE = /\s+/g
 
 /**
+ * 默认的新建文件夹名：本地时间的 `2026-10-02 23:51`。
+ *
+ * 为什么用时间当默认名：用户按「新建文件夹」时多数只是想要一个「先放一下」的容器，
+ * 而手打的名字想不出来（还要先删掉默认的「新建文件夹」）。时间戳一眼能区分、自带顺序感，
+ * 回车就能建；想改名的人接着在前面打自己的名字即可（光标会放在最前面）。
+ *
+ * 用**本地时间**而不是 `toISOString()`：名字是给人看的，与系统时间保持一致。
+ */
+export function formatTimestamp(date: Date): string {
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    ` ${pad(date.getHours())}:${pad(date.getMinutes())}`
+  )
+}
+
+/**
  * 清洗文件夹名：去控制字符 → 折叠空白 → 截断。
  *
  * **可打印字符一律保留原文**——包括 `/ \ : * ? " < > |`。Chrome 不禁这些字符，

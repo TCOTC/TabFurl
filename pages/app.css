@@ -151,9 +151,9 @@
 }
 
 /*
- * 框内顶部：当前位置（面包屑）与导航按钮。
+ * 框内顶部：第一行是「当前位置 + 导航按钮」，第二行是必要的说明。
  *
- * 粘住不滚走——左栏的列表可以很长，滚到一半时「上一层」这个唯一的退路不该消失。
+ * 粘住不滚走——列表可以很长，滚到一半时「我在哪、怎么退出去」不该消失。
  * 背景色必须自己带上，否则底下的行会从它身上透出来。
  */
 .box__top {
@@ -166,6 +166,26 @@
   padding: var(--space-2) var(--item-pad-x);
   border-bottom: 1px solid var(--border);
   background: var(--bg-elevated);
+}
+
+/*
+ * 路径与按钮组同一行：路径吃掉剩余宽度，按钮组推到最右（`flex: 0 0 auto` + `margin-left: auto`）。
+ * 按钮是「在当前位置做事」，与「我在哪」不是一回事，所以靠右分开而不是接在路径后面。
+ */
+.box__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.box__bar > .path {
+  flex: 1;
+}
+
+.box__bar > .row {
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 /* 框内顶部的一行说明（目前只在书签树根上出现）。 */
@@ -199,23 +219,35 @@
 /*
  * 当前所在位置的路径。
  *
- * 框内顶部的第一行，紧跟后面一行是导航按钮。除了当前层都能点（包括默认展示文件夹之上的层）：
- * 右栏是一个自由的浏览器，不是「只能往下走」的向导。用按钮而不是 `<a>`——它不换页，只换右栏的内容。
+ * 除了当前层都能点（包括默认展示文件夹之上的层）：右栏是一个自由的浏览器，
+ * 不是「只能往下走」的向导。用按钮而不是 `<a>`——它不换页，只换右栏的内容。
+ *
+ * 盒子宽度必须与可点状态无关：`书签 / 书签栏 / 临时` 往下走一层之后，「临时」会从
+ * 「当前层」变成「可点的祖先」，如果两者内边距不同，那一整排字就会横向抽动一下。
+ * 所以不可点的也用 `.path__label`，两者共用同一条内边距规则。
  */
 .path {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-1);
+  gap: 0;
   min-width: 0;
   color: var(--text-muted);
   font-size: var(--text-xs);
 }
 
+.path__label,
 .path__link {
   padding: 0 var(--space-1);
   border: 0;
   border-radius: var(--space-1);
+}
+
+.path__label {
+  color: var(--text);
+}
+
+.path__link {
   background: transparent;
   color: inherit;
   font: inherit;
@@ -278,6 +310,12 @@
   display: none;
 }
 
+/* 编辑标题时把两条线收起来，否则输入框两边各挂一截线，看着像坏了。 */
+.divider--editing::before,
+.divider--editing::after {
+  display: none;
+}
+
 /* ———————————————— 中间那列 ———————————————— */
 
 /*
@@ -316,6 +354,22 @@
   display: block;
   width: 15px;
   height: 15px;
+}
+
+/*
+ * 按钮里的计数。
+ *
+ * `min-width: 3ch` 把位置给三位数字占好（`ch` 就是「0」的宽度，配 `tabular-nums` 后每个数字同宽），
+ * 所以「打开 (3)」与「打开 (123)」一样宽。不预留的话勾选一变按钮就横向抽动，
+ * 而这两个按钮恰好就出现在勾选的瞬间。
+ *
+ * 右对齐（不是居中）：这样右括号不会随位数左右跑。
+ */
+.num {
+  display: inline-block;
+  min-width: 3ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ———————————————— 拖拽 ———————————————— */

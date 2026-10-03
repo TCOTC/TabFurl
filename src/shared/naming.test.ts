@@ -1,6 +1,23 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {MAX_FOLDER_NAME_LENGTH, groupFolderName, sanitizeFolderName} from './naming'
+import {
+  MAX_FOLDER_NAME_LENGTH,
+  formatTimestamp,
+  groupFolderName,
+  sanitizeFolderName
+} from './naming'
+
+test('formatTimestamp 用本地时间并补齐两位', () => {
+  // 传本地时间构造的 Date（月从 0 起），得到的一定是同一个墙上时间，与运行机器的时区无关。
+  assert.equal(formatTimestamp(new Date(2026, 9, 2, 23, 51)), '2026-10-02 23:51')
+  assert.equal(formatTimestamp(new Date(2026, 0, 5, 9, 7)), '2026-01-05 09:07')
+})
+
+test('formatTimestamp 的形态能被 sanitizeFolderName 原样通过', () => {
+  // 冒号是合法的书签名，默认名不该被清洗改掉，否则「时间戳」看起来就不像时间了。
+  const name = formatTimestamp(new Date(2026, 9, 2, 23, 51))
+  assert.equal(sanitizeFolderName(name, 'x'), name)
+})
 
 test('sanitizeFolderName 折叠连续空白并去掉首尾空白', () => {
   assert.equal(sanitizeFolderName('  a   b  ', 'x'), 'a b')

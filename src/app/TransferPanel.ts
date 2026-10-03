@@ -14,12 +14,12 @@ import {
   writeChildren,
   type WindowChild
 } from '../shared/capture'
-import {sanitizeFolderName} from '../shared/naming'
+import {formatTimestamp, sanitizeFolderName} from '../shared/naming'
 import {openFolderViewers, restoreFolder} from '../shared/restore'
 import {loadSettings} from '../shared/settings'
 import {escapeHtml, faviconMarkup} from '../shared/tile'
 import type {BookmarkNode, RestoreOptions, TabSnapshot} from '../shared/types'
-import {hostnameOf, isSeparatorUrl, separatorTitle} from '../shared/urls'
+import {SEPARATOR_URL, hostnameOf, isSeparatorUrl, separatorTitle} from '../shared/urls'
 import {
   createPanelElement,
   createSelectAll,
@@ -51,6 +51,17 @@ type DragPayload =
   | {kind: 'folder'; id: string}
 
 type RestoreKind = 'newWindow' | 'currentWindow' | 'onlyTabs'
+
+/**
+ * 中间按钮上的计数。
+ *
+ * 两件事一起做：括号用**半角并留一个空格**（全角括号在中文字体里占满一格，与数字之间看着空得发虚），
+ * 数字单独包一层 `.num` —— 它有 `min-width: 3ch` 与等宽数字，所以「打开 (3)」与「打开 (12)」
+ * 一样宽。不预留的话，勾选一变按钮就会横向抽动，而这两个按钮本来就出现在勾选的瞬间。
+ */
+function countLabel(text: string, count: number): string {
+  return `${text} (<span class="num">${count}</span>)`
+}
 
 /**
  * 「已固定」标记。与文件夹图标同理，不用 emoji：它在灰字里是个突如其来的彩色块。
@@ -123,19 +134,25 @@ const TEMPLATE = `
       <div class="row row--compact" id="archive-all-host"></div>
       <div class="box" data-drop-pane="archive">
         <!--
-          当前所在位置与导航按钮都在**列表框里面**的顶部，而且粘住不滚走。
-          它们与列表是同一份内容的两个视角（"我在哪"与"这里有什么"），
-          摆在一起才不用在两个区域之间来回对；粘住是因为左栏的列表可以很长，
+          当前位置与导航按钮都在**列表框里面**的顶部，而且粘住不滚走：
+          它们与列表是同一份内容的两个视角（「我在哪」与「这里有什么」），
+          摆在一起才不用在两个区域之间来回对；粘住是因为列表可以很长，
           滚到一半时退路不该消失。
+
+          退路就是面包屑本身，所以旁边不再单放一个「上一层」按钮：一样东西两个入口，
+          总有一个会先被人遗忘。按钮组推到最右，它们与「往哪走」无关。
         -->
         <div class="box__top">
-          <nav class="path" id="archive-path" aria-label="当前所在的收藏夹位置"></nav>
-          <div class="row row--compact">
-            <button type="button" class="btn btn--ghost btn--sm" id="archive-up-btn" disabled>↑ 上一层</button>
-            <button type="button" class="btn btn--ghost btn--sm" id="new-folder-btn">＋ 新建文件夹</button>
-            <button type="button" class="btn btn--ghost btn--sm" id="open-root-btn" hidden>打开阅读页</button>
+          <div class="box__bar">
+            <nav class="path" id="archive-path" aria-label="当前所在的收藏夹位置"></nav>
+            <div class="row row--compact">
+              <button type="button" class="btn btn--ghost btn--sm" id="new-folder-btn">＋ 新建文件夹</button>
+              <button type="button" class="btn btn--ghost btn--sm" id="new-separator-btn"
+                      title="在当前位置插一条分隔线">＋ 分隔线</button>
+              <button type="button" class="btn btn--ghost btn--sm" id="open-root-btn" hidden>打开阅读页</button>
+            </div>
           </div>
-          <!-- 在书签树根上时两个按钮会是灰的，用一句话说明为何以及怎么退出去。 -->
+          <!-- 在书签树根上时写入入口会是灰的，用一句话说明为何以及怎么退出去。 -->
           <p class="box__note" id="archive-note" hidden></p>
         </div>
         <ul class="list" id="archive-list"></ul>
@@ -177,7 +194,7 @@ export function createTransferPanel(events: AppEvents): Panel {
   const openWindowLabel = q<HTMLSpanElement>(element, '#open-window-label')
   const undoButton = q<HTMLButtonElement>(element, '#undo-btn')
   const newFolderButton = q<HTMLButtonElement>(element, '#new-folder-btn')
-  const upButton = q<HTMLButtonElement>(element, '#archive-up-btn')
+  const newSeparatorButton = q<HTMLButtonElement>(element, '#new-separator-btn')
   const openRootButton = q<HTMLButtonElement>(element, '#open-root-btn')
   const openTabsButton = q<HTMLButtonElement>(element, '#open-tabs-btn')
   const status = q<HTMLSpanElement>(element, '#status')
@@ -269,10 +286,16 @@ export function createTransferPanel(events: AppEvents): Panel {
     })
   }
 
+  /**
+   * 一条标签行。
+   *
+   * `data-row` 让「点整行」能找到它该切哪个勾选框（见 `toggleRowFromClick`）——
+   * 它必须落在**包含**勾选框的那一层上，所以分组行上的标记在 `li` 而不是标题区。
+   */
   function tabRowMarkup(tab: TabSnapshot): string {
     const host = hostnameOf(tab.url) ?? tab.url
     return `
-      <li class="item leaf" draggable="true" data-drag-tab="${tab.tabId}">
+      <li class="item leaf" draggable="true" data-row data-drag-tab="${tab.tabId}">
         <input type="checkbox" data-window-tab="${tab.tabId}" />
         ${faviconMarkup(tab.url, FAVICON_BASE)}
         <span class="item__main">
@@ -297,7 +320,7 @@ export function createTransferPanel(events: AppEvents): Panel {
         child.kind === 'tab'
           ? tabRowMarkup(child.tab)
           : `
-          <li class="group">
+          <li class="group" data-row>
             <div class="item group__head" draggable="true" data-drag-group="${index}">
               <input type="checkbox" data-window-group="${index}" />
               <span class="item__title">${escapeHtml(child.name)}</span>
@@ -336,9 +359,23 @@ export function createTransferPanel(events: AppEvents): Panel {
 
   // ———————————————— 右栏 ————————————————
 
-  /** 一条书签行。分隔线占位书签也画成一条横线，且没有勾选框。 */
+  /**
+   * 一条书签行。分隔线占位书签也画成一条横线。
+   *
+   * 两者都不带勾选框（分隔线不是书签，见 `isRealBookmark`），所以也都没有 `data-row`：
+   * 「点整行切换勾选」对它们无意义。分隔线在编辑中会临时变成一个输入框。
+   */
   function archiveBookmarkRow(bookmark: BookmarkNode): string {
     if (isSeparatorUrl(bookmark.url)) {
+      if (renaming?.id === bookmark.id) {
+        return `
+          <li class="divider divider--editing">
+            <input type="text" class="input input--rename" data-rename-input="${escapeHtml(bookmark.id)}"
+                   value="${escapeHtml(separatorTitle(bookmark.title))}"
+                   placeholder="分隔线标题（可留空）" aria-label="分隔线标题" />
+          </li>
+        `
+      }
       const title = separatorTitle(bookmark.title)
       return title
         ? `<li class="divider"><span>${escapeHtml(title)}</span></li>`
@@ -348,7 +385,7 @@ export function createTransferPanel(events: AppEvents): Panel {
     const url = bookmark.url ?? ''
     const host = hostnameOf(url) ?? url
     return `
-      <li class="item leaf" draggable="true"
+      <li class="item leaf" data-row draggable="true"
           data-drag-bookmark="${escapeHtml(bookmark.id)}"
           data-bookmark-url="${escapeHtml(url)}">
         <input type="checkbox" data-archive-item="${escapeHtml(bookmark.id)}" />
@@ -395,7 +432,7 @@ export function createTransferPanel(events: AppEvents): Panel {
          </span>`
 
     return `
-      <li class="group" data-drop-folder="${escapeHtml(folder.id)}"
+      <li class="group" data-row data-drop-folder="${escapeHtml(folder.id)}"
           data-enter-folder="${escapeHtml(folder.id)}">
         <div class="item group__head">
           <input type="checkbox" data-archive-item="${escapeHtml(folder.id)}" />
@@ -415,16 +452,12 @@ export function createTransferPanel(events: AppEvents): Panel {
    * 能不能往当前这一层写。
    *
    * 书签树的根（路径长度为 1 的那个节点）只是三个内置目录的容器，Chrome 不接受在它下面直接建书签/文件夹，
-   * 所以导航到那里时「存过去」与「新建文件夹」都要禁用。它也是唯一一个没有父的节点，
-   * 于是「有没有父」就是「是不是根」——不需要把 id `0` 这个魔法值写进业务代码。
+   * 所以导航到那里时「存过去」、「新建文件夹」与「＋ 分隔线」都要禁用。
+   * 它也是唯一一个没有父的节点，于是「路径只有一层」就是「是不是根」——
+   * 不需要把 id `0` 这个魔法值写进业务代码。
    */
   function canWrite(): boolean {
     return viewPath.length > 1
-  }
-
-  /** 上一层的 id；已经在书签树根上（或路径取不到）时返回 undefined。 */
-  function parentFolderId(): string | undefined {
-    return viewPath.at(-2)?.id
   }
 
   /**
@@ -433,6 +466,9 @@ export function createTransferPanel(events: AppEvents): Panel {
    * **除了当前层都能点**：当前层就是眼前这一页，做成链接只是噪声；其余每一层都能跳过去，
    * 包括默认展示文件夹**之上**的那几层——右栏是一个自由的浏览器，不是「只能往下走」的向导。
    * 用按钮而不是 `<a>`：它不换页，只换右栏的内容。
+   *
+   * 不可点的当前层也套一层 `.path__label`（与链接**同一个盒子**）：进了子文件夹后，
+   * 原来那段文字会从「当前层」变成「可点的祖先」，盒子不同就会整排左右抽动一下。
    */
   function renderArchivePath(): void {
     archivePath.innerHTML = viewPath.length === 0
@@ -440,16 +476,18 @@ export function createTransferPanel(events: AppEvents): Panel {
       : viewPath
           .map((node, index) => {
             const label = escapeHtml(node.title)
-            if (index === viewPath.length - 1) return `<span>${label}</span>`
+            if (index === viewPath.length - 1) {
+              return `<span class="path__label" aria-current="location">${label}</span>`
+            }
             return `<button type="button" class="path__link"
                             data-goto-folder="${escapeHtml(node.id)}">${label}</button>`
           })
           .join('<span class="path__sep">/</span>')
 
-    // 书签树的根上「上一层」与「存过去」都是灰的，说清楚原因与退路，
+    // 书签树的根上写入入口都是灰的，说清楚原因与退路，
     // 否则那个界面看起来就是「到了这里啥也干不了」。
     archiveNote.hidden = !viewFolderId || canWrite()
-    archiveNote.textContent = '这里是书签树的根，不能直接往里存。双击下面任意一个文件夹进去即可。'
+    archiveNote.textContent = '这里是书签树的根，Chrome 不允许直接在它下面存东西。双击下面任意一个文件夹进去即可。'
   }
 
   function renderArchive(): void {
@@ -531,9 +569,9 @@ export function createTransferPanel(events: AppEvents): Panel {
     const keptTabs = allWindowTabs().filter((tab) => !windowExcluded.has(tab.tabId)).length
     const keptBookmarks = archiveKeptCount()
 
-    saveLabel.textContent = `存过去（${keptTabs}）`
-    openLabel.textContent = `打开（${keptBookmarks}）`
-    openWindowLabel.textContent = `新窗口（${keptBookmarks}）`
+    saveLabel.innerHTML = countLabel('存过去', keptTabs)
+    openLabel.innerHTML = countLabel('打开', keptBookmarks)
+    openWindowLabel.innerHTML = countLabel('新窗口', keptBookmarks)
     // 落点写在按钮自己的提示里：写入目标是「当前展示的这一层」，而那一层远在右栏里侧的路径行里，
     // 中间的按钮与它隔了一整栏。悬停能确认「到底存进哪个文件夹」，不必来回对路径。
     saveButton.title = canWrite()
@@ -546,7 +584,7 @@ export function createTransferPanel(events: AppEvents): Panel {
     undoButton.hidden = !lastWrite
     undoButton.disabled = busy
     newFolderButton.disabled = busy || !canWrite()
-    upButton.disabled = busy || !parentFolderId()
+    newSeparatorButton.disabled = busy || !canWrite()
     openRootButton.hidden = !viewFolderId
   }
 
@@ -870,6 +908,24 @@ export function createTransferPanel(events: AppEvents): Panel {
 
   // ———————————————— 勾选 ————————————————
 
+  /**
+   * 点整行 = 点它的勾选框。
+   *
+   * 实现上是**替用户点那个复选框**，而不是另写一份勾选逻辑：三态（分组行与文件夹行）的
+   * 「全选 ↔ 全不选」意图判定只在 `change` 处理器里写了一次，再写一份必然分叉。
+   *
+   * 勾选框、行内按钮、重命名输入框各有自己的语义，落在它们身上不算「点行」。
+   */
+  function toggleRowFromClick(list: HTMLElement, event: MouseEvent): void {
+    const target = event.target as HTMLElement
+    if (target.closest('input, button, a')) return
+    const row = target.closest<HTMLElement>('[data-row]')
+    if (!row || !list.contains(row)) return
+    row.querySelector<HTMLInputElement>('input[type=checkbox]')?.click()
+  }
+
+  windowList.addEventListener('click', (event) => toggleRowFromClick(windowList, event))
+
   element.addEventListener('change', (event) => {
     const input = event.target as HTMLInputElement
 
@@ -942,12 +998,18 @@ export function createTransferPanel(events: AppEvents): Panel {
       renaming = {id: renameButton.dataset.rename, committed: false}
       pendingDeleteId = undefined
       renderArchive()
-      archiveList.querySelector<HTMLInputElement>('[data-rename-input]')?.focus()
+      focusRenameInput()
       return
     }
 
     const enterButton = target.closest<HTMLButtonElement>('[data-enter]')
-    if (enterButton?.dataset.enter) void navigateTo(enterButton.dataset.enter)
+    if (enterButton?.dataset.enter) {
+      void navigateTo(enterButton.dataset.enter)
+      return
+    }
+
+    // 剩下的情况就是「点在行上」：切换这一行的勾选。按钮与输入框在上面已经拦住了。
+    toggleRowFromClick(archiveList, event)
   })
 
   /**
@@ -1050,11 +1112,6 @@ export function createTransferPanel(events: AppEvents): Panel {
     if (viewFolderId) void openFolderViewers([viewFolderId])
   })
 
-  upButton.addEventListener('click', () => {
-    const parent = parentFolderId()
-    if (parent) void navigateTo(parent)
-  })
-
   newFolderButton.addEventListener('click', async () => {
     if (!canWrite() || busy) return
     busy = true
@@ -1066,7 +1123,7 @@ export function createTransferPanel(events: AppEvents): Panel {
       renaming = {id: created.id, committed: false}
       await events.archiveChanged()
       await refresh()
-      archiveList.querySelector<HTMLInputElement>('[data-rename-input]')?.focus()
+      focusRenameInput()
     } catch (error) {
       setStatus(status, `新建失败：${errorText(error)}`, 'error')
     } finally {
@@ -1075,16 +1132,56 @@ export function createTransferPanel(events: AppEvents): Panel {
     }
   })
 
-  /** 新建文件夹的默认名。这里**只**为避免同一层里出现完全相同的默认名，不是去重机制。 */
-  async function nextFolderName(parentId: string): Promise<string> {
-    const {children} = await getSubtreeChildren(parentId)
-    const taken = children.map((child) => child.title)
-    if (!taken.includes('新建文件夹')) return '新建文件夹'
-    for (let n = 2; n < 1000; n++) {
-      const candidate = `新建文件夹 ${n}`
-      if (!taken.includes(candidate)) return candidate
+  // 分隔线也是「建完就改名」：它的全部意义常常就在那个标题上，而新建时不带标题（就是一条线）。
+  newSeparatorButton.addEventListener('click', async () => {
+    if (!canWrite() || busy) return
+    busy = true
+    updateButtons()
+    try {
+      const created = await createBookmark(viewFolderId, '', SEPARATOR_URL)
+      lastWrite = {folderIds: [], bookmarkIds: [created.id]}
+      renaming = {id: created.id, committed: false}
+      await events.archiveChanged()
+      await refresh()
+      focusRenameInput()
+    } catch (error) {
+      setStatus(status, `新建失败：${errorText(error)}`, 'error')
+    } finally {
+      busy = false
+      updateButtons()
     }
-    return `新建文件夹 ${Date.now()}`
+  })
+
+  /**
+   * 把光标放到刚出现的重命名输入框的**最前面**。
+   *
+   * `focus()` 只给焦点，插入点会落在内容末尾；而新建出来的默认名是时间戳，
+   * 用户十有八九要在前面加自己的名字——放到开头，直接打字就是「我的名字 + 时间戳」。
+   */
+  function focusRenameInput(): void {
+    const input = archiveList.querySelector<HTMLInputElement>('[data-rename-input]')
+    if (!input) return
+    input.focus()
+    // 有些浏览器在 focus 时会全选内容，所以显式把选区收成开头处的空选区。
+    input.setSelectionRange(0, 0)
+  }
+
+  /**
+   * 新建文件夹的默认名：本地时间（`2026-10-02 23:51`）。
+   *
+   * 这里**只**避开同一层里完全相同的默认名（同一分钟内连建两个才会撞上），不是去重机制：
+   * 用户自己打的重名一律放行，见 docs/design.md。
+   */
+  async function nextFolderName(parentId: string): Promise<string> {
+    const base = formatTimestamp(new Date())
+    const {children} = await getSubtreeChildren(parentId)
+    const taken = new Set(children.map((child) => child.title))
+    if (!taken.has(base)) return base
+    for (let n = 2; n < 1000; n++) {
+      const candidate = `${base} ${n}`
+      if (!taken.has(candidate)) return candidate
+    }
+    return `${base} ${Date.now()}`
   }
 
   async function getSubtreeChildren(
