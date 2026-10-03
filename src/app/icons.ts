@@ -13,6 +13,14 @@
  * 读屏不该把「一个加号」念出来。
  */
 
+/**
+ * Chrome 本地 favicon 缓存端点（`_favicon/`）：读缓存、不联网。
+ *
+ * 放在这里而不是各栏各写一份：两栏现在都要画网站图标，而这个端点的拼法写错
+ * 不会报错——它只是静默地让每一行都退化成默认地球。
+ */
+export const FAVICON_BASE = chrome.runtime.getURL('_favicon/')
+
 /** 「已固定」标记。与文件夹图标同理，不用 emoji：它在灰字里是个突如其来的彩色块。 */
 export const PIN_ICON = `
   <svg class="icon icon--xs item__pin" viewBox="0 0 24 24" role="img" aria-label="已固定">
