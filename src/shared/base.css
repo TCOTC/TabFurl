@@ -358,6 +358,31 @@ input[type='checkbox'] {
   object-fit: contain;
 }
 
+/*
+ * 文件夹图标：占住宅与网站图标相同的 22px 位。
+ *
+ * 两处都用它（阅读页的子文件夹卡片、主界面右栏的文件夹行），所以放在这里而不是各自的页面样式里：
+ * 它要解决的是同一个问题——同一列里文件夹与书签两种行的高度与左侧宽度必须一致，
+ * 否则两类卡片/行会参差不齐。底色用的是淡强调色，与 favicon 的彩色相映而不抢镜。
+ */
+.folder-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--space-1);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.folder-tile__icon {
+  /* 与同行真实网站图标（22px 满格）的重量对齐：略小于容器，但描边不能太细。 */
+  width: 15px;
+  height: 15px;
+}
+
 [hidden] {
   display: none !important;
 }

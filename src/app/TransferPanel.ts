@@ -53,23 +53,36 @@ type DragPayload =
 type RestoreKind = 'newWindow' | 'currentWindow' | 'onlyTabs'
 
 /**
- * 折叠三角。SVG 而不是字形：三角形在字体里比字身小得多，大小与粗细全看系统字体怎么画。
- * 顶点朝下表示已展开，朝右表示已收起。
+ * 「已固定」标记。与文件夹图标同理，不用 emoji：它在灰字里是个突如其来的彩色块。
  */
-function caretSvg(open: boolean): string {
-  const points = open ? '2,3 12,3 7,11' : '3,2 11,7 3,12'
-  return (
-    '<svg class="caret" viewBox="0 0 14 14" aria-hidden="true">' +
-    `<polygon points="${points}" fill="currentColor" />` +
-    '</svg>'
-  )
-}
-
-/** 「已固定」标记。与折叠三角同理，不用 emoji：它在灰字里是个突如其来的彩色块。 */
 const PIN_ICON = `
   <svg class="icon icon--xs item__pin" viewBox="0 0 24 24" role="img" aria-label="已固定">
     <path d="M16 9V4h1a1 1 0 0 0 0-2H7a1 1 0 0 0 0 2h1v5a3 3 0 0 1-3 3v2h5.97v7l1 1 1-1v-7H19v-2a3 3 0 0 1-3-3Z"
           fill="currentColor" />
+  </svg>
+`
+
+/**
+ * 文件夹图标。与阅读页的子文件夹卡片用**同一个** `.folder-tile`（见 base.css）。
+ *
+ * 右栏里它不只是装饰：两种行都带勾选框，而勾选框左边的位置以前是空的，文件夹行看起来就与书签行一样。
+ * 放上它之后，「这一行可以进去」与「这一行是个页面」在左侧一眼可分。
+ */
+const FOLDER_ICON = `
+  <svg class="folder-tile__icon" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M1.75 4.5A1.5 1.5 0 0 1 3.25 3h2.6a1 1 0 0 1 .8.4l.9 1.2h5.2A1.5 1.5 0 0 1 14.25 6.1v5.4A1.5 1.5 0 0 1 12.75 13H3.25A1.5 1.5 0 0 1 1.75 11.5Z"
+          fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round" />
+  </svg>
+`
+
+/**
+ * 「在新窗口打开」的加号。SVG 而不是 `＋` 字形：全角加号在各字体里的字身与基线都不同，
+ * 摆在旁边的 `→` / `←` 中间会明显错位（与文件夹图标、刷新图标同一个理由）。
+ */
+const PLUS_ICON = `
+  <svg class="move__icon" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M8 3v10M3 8h10" fill="none" stroke="currentColor"
+          stroke-width="1.9" stroke-linecap="round" />
   </svg>
 `
 
@@ -89,9 +102,14 @@ const TEMPLATE = `
         <span id="save-label">存过去</span>
       </button>
       <button type="button" class="btn btn--move" id="open-btn" disabled
-              title="在新窗口打开勾选的内容">
+              title="在当前窗口打开勾选的内容">
         <span class="move__arrow">←</span>
         <span id="open-label">打开</span>
+      </button>
+      <button type="button" class="btn btn--move" id="open-window-btn" disabled
+              title="在新窗口打开勾选的内容">
+        <span class="move__icon">${PLUS_ICON}</span>
+        <span id="open-window-label">新窗口</span>
       </button>
       <button type="button" class="btn btn--ghost btn--sm" id="undo-btn" hidden>撤销上次保存</button>
     </div>
@@ -99,12 +117,12 @@ const TEMPLATE = `
     <section class="col">
       <header class="col__head">
         <h2 class="col__title">存档 <span class="badge" id="archive-count">0</span></h2>
-        <span class="muted" id="archive-path"></span>
+        <button type="button" class="btn btn--ghost btn--sm col__head-action"
+                id="archive-up-btn" disabled>↑ 上一层</button>
       </header>
+      <nav class="path" id="archive-path" aria-label="当前所在的存档文件夹"></nav>
       <div class="row row--compact">
-        <button type="button" class="btn btn--ghost btn--sm" id="new-folder-btn">＋新建文件夹</button>
-        <button type="button" class="btn btn--ghost btn--sm" id="expand-all-btn">全部展开</button>
-        <button type="button" class="btn btn--ghost btn--sm" id="collapse-all-btn">全部折叠</button>
+        <button type="button" class="btn btn--ghost btn--sm" id="new-folder-btn">＋ 新建文件夹</button>
         <button type="button" class="btn btn--ghost btn--sm" id="open-root-btn" hidden>打开阅读页</button>
       </div>
       <div class="row row--compact" id="archive-all-host"></div>
@@ -113,8 +131,7 @@ const TEMPLATE = `
   </div>
 
   <div class="row">
-    <button type="button" class="btn" id="open-current-btn" disabled>还原到当前窗口</button>
-    <button type="button" class="btn" id="open-tabs-btn" disabled>只开标签页</button>
+    <button type="button" class="btn btn--ghost btn--sm" id="open-tabs-btn" disabled>只开标签页（不建分组）</button>
     <span class="status" id="status" hidden></span>
   </div>
 `
@@ -137,17 +154,17 @@ export function createTransferPanel(events: AppEvents): Panel {
   const archiveList = q<HTMLUListElement>(element, '#archive-list')
   const windowCount = q<HTMLSpanElement>(element, '#window-count')
   const archiveCount = q<HTMLSpanElement>(element, '#archive-count')
-  const archivePath = q<HTMLSpanElement>(element, '#archive-path')
+  const archivePath = q<HTMLElement>(element, '#archive-path')
   const saveButton = q<HTMLButtonElement>(element, '#save-btn')
   const saveLabel = q<HTMLSpanElement>(element, '#save-label')
   const openButton = q<HTMLButtonElement>(element, '#open-btn')
   const openLabel = q<HTMLSpanElement>(element, '#open-label')
+  const openWindowButton = q<HTMLButtonElement>(element, '#open-window-btn')
+  const openWindowLabel = q<HTMLSpanElement>(element, '#open-window-label')
   const undoButton = q<HTMLButtonElement>(element, '#undo-btn')
   const newFolderButton = q<HTMLButtonElement>(element, '#new-folder-btn')
-  const expandAllButton = q<HTMLButtonElement>(element, '#expand-all-btn')
-  const collapseAllButton = q<HTMLButtonElement>(element, '#collapse-all-btn')
+  const upButton = q<HTMLButtonElement>(element, '#archive-up-btn')
   const openRootButton = q<HTMLButtonElement>(element, '#open-root-btn')
-  const openCurrentButton = q<HTMLButtonElement>(element, '#open-current-btn')
   const openTabsButton = q<HTMLButtonElement>(element, '#open-tabs-btn')
   const status = q<HTMLSpanElement>(element, '#status')
 
@@ -182,6 +199,16 @@ export function createTransferPanel(events: AppEvents): Panel {
   })
 
   let archiveRootId = ''
+  /**
+   * 右栏当前展示的哪一层。
+   *
+   * 右栏不是一棵可展开的树，而是一个**可导航的浏览器**：双击子文件夹行进去，`↑ 上一层` 退回来，
+   * 面包屑可以跳到路径上的任意一层。理由见 `docs/design.md`：层级一深，缩进链会把面板压成一条细缝，
+   * 而「上一层」是 O(1) 的退路，缩进不是。
+   */
+  let viewFolderId = ''
+  /** 当前展示的文件夹从树根到自身的完整路径（含自身），用于面包屑与「上一层」。 */
+  let viewPath: {id: string; title: string}[] = []
   let windowChildren: WindowChild[] = []
   let archiveChildren: BookmarkNode[] = []
   /** 左栏被勾掉的标签 id（保存侧默认全选，所以记排除）。 */
@@ -189,13 +216,14 @@ export function createTransferPanel(events: AppEvents): Panel {
   /** 右栏被勾掉的书签 id（打开侧默认全不勾，所以记排除 + 一份「见过的」）。 */
   const archiveExcluded = new Set<string>()
   const knownBookmarks = new Set<string>()
-  const expanded = new Set<string>()
   let pendingDeleteId: string | undefined
   let renaming: {id: string; committed: boolean} | undefined
   /** 撤销目标：最近一次写入新建的 id。只存在内存里（见 docs/design.md）。 */
   let lastWrite: {folderIds: string[]; bookmarkIds: string[]} | undefined
   /** 正在拖的是什么；`dragover` 靠它决定收不收。 */
   let dragging: DragPayload | undefined
+  /** 上一次跳转的时刻，用于吞掉双击带来的第二次跳转（见 `navigateTo`）。 */
+  let lastNavigationAt = 0
   let busy = false
 
   // ———————————————— 左栏 ————————————————
@@ -287,7 +315,7 @@ export function createTransferPanel(events: AppEvents): Panel {
   // ———————————————— 右栏 ————————————————
 
   /** 一条书签行。分隔线占位书签也画成一条横线，且没有勾选框。 */
-  function archiveBookmarkRow(bookmark: BookmarkNode, nested: boolean): string {
+  function archiveBookmarkRow(bookmark: BookmarkNode): string {
     if (isSeparatorUrl(bookmark.url)) {
       const title = separatorTitle(bookmark.title)
       return title
@@ -298,7 +326,7 @@ export function createTransferPanel(events: AppEvents): Panel {
     const url = bookmark.url ?? ''
     const host = hostnameOf(url) ?? url
     return `
-      <li class="item leaf${nested ? ' leaf--nested' : ''}" draggable="true"
+      <li class="item leaf" draggable="true"
           data-drag-bookmark="${escapeHtml(bookmark.id)}"
           data-bookmark-url="${escapeHtml(url)}">
         <input type="checkbox" data-archive-item="${escapeHtml(bookmark.id)}" />
@@ -311,11 +339,19 @@ export function createTransferPanel(events: AppEvents): Panel {
     `
   }
 
+  /**
+   * 一个子文件夹行。
+   *
+   * 它是**可以进去的一层**，不是可展开的分组：双击这一行（或点「进入」）把它变成当前展示的文件夹，
+   * `↑ 上一层` 与面包屑负责往回走。这样层级再深也不会把面板撑成一根越来越长的缩进链。
+   *
+   * 勾选框仍然是「这一层里的书签全都要 / 全不要」的三态，与 `restoreFolder` 的口径一致
+   * （它只处理一层：子文件夹建分组，散装书签不建分组）。所以**进不进去与勾不勾它是两件事**——
+   * 勾上是「打开它里面的书签」，进去是「往它里面存东西 / 接着往下看」。
+   */
   function archiveFolderRow(folder: BookmarkNode): string {
-    const childNodes = folder.children ?? []
-    // 计数只算真书签，但下面渲染要把分隔线一并画出来（它保持原位）。
-    const bookmarks = realBookmarks(childNodes)
-    const open = expanded.has(folder.id)
+    // 计数只算真书签：分隔线不是书签，算进去会与文件管理器的直觉不符。
+    const bookmarks = realBookmarks(folder.children ?? [])
     const isRenaming = renaming?.id === folder.id
 
     const title = isRenaming
@@ -326,6 +362,7 @@ export function createTransferPanel(events: AppEvents): Panel {
     const actions = isRenaming
       ? '<span class="item__meta">回车保存，Esc 取消</span>'
       : `<span class="tree__actions">
+           <button type="button" class="btn btn--ghost btn--sm" data-enter="${escapeHtml(folder.id)}">进入</button>
            <button type="button" class="btn btn--ghost btn--sm" data-rename="${escapeHtml(folder.id)}">改名</button>
            ${
              pendingDeleteId === folder.id
@@ -336,37 +373,61 @@ export function createTransferPanel(events: AppEvents): Panel {
          </span>`
 
     return `
-      <li class="group" data-drop-folder="${escapeHtml(folder.id)}">
+      <li class="group" data-drop-folder="${escapeHtml(folder.id)}"
+          data-enter-folder="${escapeHtml(folder.id)}">
         <div class="item group__head">
-          <button type="button" class="tree__caret" data-toggle="${escapeHtml(folder.id)}"
-                  aria-expanded="${open}" aria-label="${open ? '折叠' : '展开'}"
-                  title="${open ? '折叠' : '展开'}">${caretSvg(open)}</button>
           <input type="checkbox" data-archive-item="${escapeHtml(folder.id)}" />
+          <span class="folder-tile" aria-hidden="true">${FOLDER_ICON}</span>
           <span class="item__main item__main--row" draggable="true"
-                data-drag-folder="${escapeHtml(folder.id)}">
+                data-drag-folder="${escapeHtml(folder.id)}" title="双击进入这一层">
             ${title}
             <span class="item__meta">${bookmarks.length} 个书签</span>
           </span>
           ${actions}
         </div>
-        ${
-          isRenaming
-            ? ''
-            : `<ul class="kids" data-children="${escapeHtml(folder.id)}"${open ? '' : ' hidden'}>
-                 ${childNodes
-                   .filter((node) => node.url)
-                   .map((node) => archiveBookmarkRow(node, true))
-                   .join('')}
-               </ul>`
-        }
       </li>
     `
   }
 
-  function renderArchive(): void {
-    archiveCount.textContent = String(archiveChildren.filter((child) => !child.url).length)
+  /** 存档根在当前路径里的下标：它及它下面那些层可以跳，上面的只作上下文。 */
+  function rootIndexInPath(): number {
+    return viewPath.findIndex((node) => node.id === archiveRootId)
+  }
 
-    if (!archiveRootId) {
+  /**
+   * 上一层的 id；已经在存档根上（或路径取不到）时返回 undefined。
+   *
+   * 不允许退回存档根之上：「存过去」写的是当前层，退到存档外面去写入就跑到用户指定的范围之外了。
+   */
+  function parentFolderId(): string | undefined {
+    const rootIndex = rootIndexInPath()
+    if (rootIndex < 0) return undefined
+    return viewPath.length - 2 >= rootIndex ? viewPath[viewPath.length - 2].id : undefined
+  }
+
+  function renderArchivePath(): void {
+    const rootIndex = rootIndexInPath()
+    archivePath.innerHTML = viewPath.length === 0
+      ? '<span class="muted">尚未指定存档位置</span>'
+      : viewPath
+          .map((node, index) => {
+            const label = escapeHtml(node.title)
+            // 当前层是这一页自身，做成链接只是噪声；存档根之上不属于存档范围，不给跳。
+            if (index < rootIndex || index === viewPath.length - 1) return `<span>${label}</span>`
+            return `<button type="button" class="path__link"
+                            data-goto-folder="${escapeHtml(node.id)}">${label}</button>`
+          })
+          .join('<span class="path__sep">/</span>')
+  }
+
+  function renderArchive(): void {
+    renderArchivePath()
+    // 胸章数的是「这一层里能干活的东西」：子文件夹可以进去，书签可以打开。分隔线两样都不是。
+    archiveCount.textContent = String(
+      archiveChildren.filter((child) => !child.url).length + realBookmarks(archiveChildren).length
+    )
+
+    if (!viewFolderId) {
       archiveList.innerHTML =
         '<li class="empty">还没有指定存档位置，请在上方选一个书签栏里的文件夹。</li>'
       updateButtons()
@@ -381,7 +442,7 @@ export function createTransferPanel(events: AppEvents): Panel {
     }
 
     archiveList.innerHTML = archiveChildren
-      .map((child) => (child.url ? archiveBookmarkRow(child, false) : archiveFolderRow(child)))
+      .map((child) => (child.url ? archiveBookmarkRow(child) : archiveFolderRow(child)))
       .join('')
 
     syncArchiveStates()
@@ -438,19 +499,45 @@ export function createTransferPanel(events: AppEvents): Panel {
 
     saveLabel.textContent = `存过去（${keptTabs}）`
     openLabel.textContent = `打开（${keptBookmarks}）`
-    saveButton.disabled = busy || keptTabs === 0 || !archiveRootId
+    openWindowLabel.textContent = `新窗口（${keptBookmarks}）`
+    // 落点写在按钮自己的提示里：写入目标是「当前展示的这一层」，而那一层远在右栏顶部的路径里，
+    // 中间的按钮与它隔了一整栏。悬停能确认「到底存进哪个文件夹」，不必来回对路径。
+    saveButton.title = viewFolderId
+      ? `存进「${viewPath.at(-1)?.title ?? ''}」`
+      : '还没有指定存档位置'
+    saveButton.disabled = busy || keptTabs === 0 || !viewFolderId
     openButton.disabled = busy || keptBookmarks === 0
-    openCurrentButton.disabled = busy || keptBookmarks === 0
+    openWindowButton.disabled = busy || keptBookmarks === 0
     openTabsButton.disabled = busy || keptBookmarks === 0
     undoButton.hidden = !lastWrite
     undoButton.disabled = busy
-    newFolderButton.disabled = busy || !archiveRootId
-    expandAllButton.disabled = busy || archiveChildren.length === 0
-    collapseAllButton.disabled = busy || archiveChildren.length === 0
-    openRootButton.hidden = !archiveRootId
+    newFolderButton.disabled = busy || !viewFolderId
+    upButton.disabled = busy || !parentFolderId()
+    openRootButton.hidden = !viewFolderId
   }
 
   // ———————————————— 载入 ————————————————
+
+  /**
+   * 双击的两次 click 是两个独立事件，而第一次跳转会立刻重绘——第二次 click 打到的是**新的一层**，
+   * 于是「双击进入」会变成「一下进去两层」。所以在跳转后短暂忽略新的跳转请求。
+   * 人有意的两次点击间隔通常小于这个值，而真要连进两层就多点一次，代价很小。
+   */
+  const NAVIGATION_GUARD_MS = 350
+
+  /** 跳到某一层（双击子文件夹、点「进入」、点面包屑、点「上一层」都走这里）。 */
+  async function navigateTo(folderId: string): Promise<void> {
+    if (busy || !folderId || folderId === viewFolderId) return
+    const now = Date.now()
+    if (now - lastNavigationAt < NAVIGATION_GUARD_MS) return
+    lastNavigationAt = now
+
+    // 换层时把行内编辑状态丢掉：那些控件已经不在眼前了。
+    renaming = undefined
+    pendingDeleteId = undefined
+    viewFolderId = folderId
+    await refresh()
+  }
 
   async function refresh(): Promise<void> {
     archiveRootId = (await loadSettings()).archiveRootId
@@ -460,11 +547,16 @@ export function createTransferPanel(events: AppEvents): Panel {
     const aliveTabs = new Set(allWindowTabs().map((tab) => tab.tabId))
     for (const tabId of [...windowExcluded]) if (!aliveTabs.has(tabId)) windowExcluded.delete(tabId)
 
-    const root = archiveRootId ? await getSubTree(archiveRootId) : undefined
-    archiveChildren = root?.children ?? []
-    archivePath.textContent = root
-      ? `· ${(await getNodePath(root.id)).map((node) => node.title).join(' / ')}`
-      : ''
+    // 视图落点：能留在原地就留在原地——用户在浏览存档，不该因为一次刷新被弹回根。
+    // 但存档根换了（或那一层被删了）就得回根，否则「存过去」会写到一个已经不是存档的位置。
+    viewPath = viewFolderId ? await getNodePath(viewFolderId) : []
+    if (!archiveRootId || !viewPath.some((node) => node.id === archiveRootId)) {
+      viewFolderId = archiveRootId
+      viewPath = archiveRootId ? await getNodePath(archiveRootId) : []
+    }
+
+    const folder = viewFolderId ? await getSubTree(viewFolderId) : undefined
+    archiveChildren = folder?.children ?? []
 
     // 打开侧默认一个都不勾：没见过的书签一律算排除。
     const alive = new Set(archiveBookmarkIds())
@@ -476,9 +568,6 @@ export function createTransferPanel(events: AppEvents): Panel {
     }
     for (const id of [...knownBookmarks]) if (!alive.has(id)) knownBookmarks.delete(id)
     for (const id of [...archiveExcluded]) if (!alive.has(id)) archiveExcluded.delete(id)
-    for (const id of [...expanded]) {
-      if (!archiveChildren.some((child) => child.id === id)) expanded.delete(id)
-    }
 
     renderWindow()
     renderArchive()
@@ -537,11 +626,12 @@ export function createTransferPanel(events: AppEvents): Panel {
   /**
    * 打开右栏当前勾选的内容。
    *
-   * 直接复用 `restoreFolder(存档根, …)`：存档根的直接子级就是还原计划要的那一层，
+   * 直接复用 `restoreFolder(当前层, …)`：当前层的直接子级就是还原计划要的那一层，
    * 而排除集已经表达了「哪些不要」——所以这里不需要自己拼装标签与分组。
+   * 排除集是**跟随展示的层**的：换一层就自然换成那一层的选择，不会把别处的勾选悄悄带过来。
    */
   async function openSelection(kind: RestoreKind): Promise<void> {
-    if (busy || !archiveRootId) return
+    if (busy || !viewFolderId) return
     busy = true
     updateButtons()
     setStatus(status, '正在打开…', 'ok')
@@ -552,7 +642,7 @@ export function createTransferPanel(events: AppEvents): Panel {
         : {target: kind, excludeBookmarkIds: archiveExcluded}
 
     try {
-      await restoreFolder(archiveRootId, options)
+      await restoreFolder(viewFolderId, options)
       setStatus(status, '', 'ok')
     } catch (error) {
       setStatus(status, `打开失败：${errorText(error)}`, 'error')
@@ -678,7 +768,8 @@ export function createTransferPanel(events: AppEvents): Panel {
     clearDropMarks()
 
     if (pane.dataset.dropPane === 'archive') {
-      const parentId = dropFolderOf(event) ?? archiveRootId
+      // 没落在某个文件夹行上 = 落在当前展示的这一层里（而不是无条件落在存档根）。
+      const parentId = dropFolderOf(event) ?? viewFolderId
       if (!parentId) return
       const children = payload ? childrenFor(payload) : []
       if (children.length > 0) await writeInto(parentId, children)
@@ -817,12 +908,25 @@ export function createTransferPanel(events: AppEvents): Panel {
       return
     }
 
-    const toggle = target.closest<HTMLButtonElement>('[data-toggle]')
-    if (!toggle?.dataset.toggle) return
-    const id = toggle.dataset.toggle
-    if (expanded.has(id)) expanded.delete(id)
-    else expanded.add(id)
-    renderArchive()
+    const enterButton = target.closest<HTMLButtonElement>('[data-enter]')
+    if (enterButton?.dataset.enter) void navigateTo(enterButton.dataset.enter)
+  })
+
+  /**
+   * 双击进入下一层。
+   *
+   * 勾选框与行内按钮有自己的语义，落在它们身上不算「进入」——否则双击「删除」会顺手进去一层。
+   */
+  archiveList.addEventListener('dblclick', (event) => {
+    const target = event.target as HTMLElement
+    if (target.closest('input, button, [data-rename-input]')) return
+    const row = target.closest<HTMLElement>('[data-enter-folder]')
+    if (row?.dataset.enterFolder) void navigateTo(row.dataset.enterFolder)
+  })
+
+  archivePath.addEventListener('click', (event) => {
+    const link = (event.target as HTMLElement).closest<HTMLElement>('[data-goto-folder]')
+    if (link?.dataset.gotoFolder) void navigateTo(link.dataset.gotoFolder)
   })
 
   archiveList.addEventListener('keydown', (event) => {
@@ -878,7 +982,7 @@ export function createTransferPanel(events: AppEvents): Panel {
     updateButtons()
     try {
       await removeSubTree(id)
-      expanded.delete(id)
+      // 删的是当前层里的子项，所以视图本身不用动——删掉之后再刷新自然少一行。
       setStatus(status, '已删除。', 'ok')
     } catch (error) {
       setStatus(status, `删除失败：${errorText(error)}`, 'error')
@@ -890,27 +994,36 @@ export function createTransferPanel(events: AppEvents): Panel {
 
   // ———————————————— 按钮 ————————————————
 
+  // 「存过去」写的是**当前展示的这一层**，不是存档根：右栏是一个可导航的浏览器，
+  // 「站在哪儿就往哪儿存」才说得通。
   saveButton.addEventListener('click', () => {
-    if (archiveRootId) void writeInto(archiveRootId, keptWindowChildren())
+    if (viewFolderId) void writeInto(viewFolderId, keptWindowChildren())
   })
 
-  openButton.addEventListener('click', () => void openSelection('newWindow'))
-  openCurrentButton.addEventListener('click', () => void openSelection('currentWindow'))
+  // 三个打开入口按「这一次要开到哪里」分：当前窗口 / 新窗口 / 新窗口但不建分组。
+  // 它们与拖拽共用 restoreFolder，口径不会分叉。
+  openButton.addEventListener('click', () => void openSelection('currentWindow'))
+  openWindowButton.addEventListener('click', () => void openSelection('newWindow'))
   openTabsButton.addEventListener('click', () => void openSelection('onlyTabs'))
   undoButton.addEventListener('click', () => void undo())
 
+  // 阅读页开的就是当前展示的这一层，这样「看这一层的全貌」与「打开这一层」是同一处。
   openRootButton.addEventListener('click', () => {
-    if (archiveRootId) void openFolderViewers([archiveRootId])
+    if (viewFolderId) void openFolderViewers([viewFolderId])
+  })
+
+  upButton.addEventListener('click', () => {
+    const parent = parentFolderId()
+    if (parent) void navigateTo(parent)
   })
 
   newFolderButton.addEventListener('click', async () => {
-    if (!archiveRootId || busy) return
+    if (!viewFolderId || busy) return
     busy = true
     updateButtons()
     try {
-      const name = await nextFolderName(archiveRootId)
-      const created = await createFolder(archiveRootId, name)
-      expanded.add(created.id)
+      const name = await nextFolderName(viewFolderId)
+      const created = await createFolder(viewFolderId, name)
       // 建完直接进入改名状态：空文件夹只有名字可改，先让用户把名字定下来。
       renaming = {id: created.id, committed: false}
       await events.archiveChanged()
@@ -942,16 +1055,6 @@ export function createTransferPanel(events: AppEvents): Panel {
     const node = await getSubTree(parentId)
     return {children: node?.children ?? []}
   }
-
-  expandAllButton.addEventListener('click', () => {
-    for (const child of archiveChildren) if (!child.url) expanded.add(child.id)
-    renderArchive()
-  })
-
-  collapseAllButton.addEventListener('click', () => {
-    expanded.clear()
-    renderArchive()
-  })
 
   return {element, refresh}
 }

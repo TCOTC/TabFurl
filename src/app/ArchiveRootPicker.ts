@@ -20,7 +20,7 @@ const RELOAD_ICON = `
 
 const TEMPLATE = `
   <label class="root-pick__field">
-    <span class="root-pick__label">存档位置</span>
+    <span class="root-pick__label">默认存档位置</span>
     <select class="input input--sm" id="root-select"></select>
   </label>
   <button type="button" class="btn btn--ghost btn--sm" id="root-reload"
@@ -34,10 +34,14 @@ export interface ArchiveRootPicker {
 }
 
 /**
- * 存档位置选择器，挂在顶部标签栏的右边。
+ * 默认存档位置选择器，挂在顶部工具栏的右边。
  *
- * **为什么不放在面板里**：保存与存档两块都要用它，塞进任意一块都会让另一块看起来「没配置」。
- * 它不依赖任何面板，所以由 `App` 直接挂在标签栏旁边。
+ * **「默认」两个字不能省**：它决定的是**起点**，不是唯一的写入目标。右栏可以在书签树里
+ * 往里走（双击进入子文件夹），而「存过去」写的是**当前所在的层**——所以选中的这一项是
+ * 打开界面时落在哪里、以及不导航时写到哪里。叫它「存档位置」会让人以为只能存这一个文件夹。
+ *
+ * **为什么不放在面板里**：它不依赖任何面板，所以由 `App` 直接挂在工具栏旁边，
+ * 放到任意一栏里都会看起来像是那一栏的属性。
  *
  * **为什么没有「当前存档根：…」这类状态行**：`<select>` 选中的那一项本身就写着完整路径。
  * 只有读不到书签栏、或写不进存储时才出现一行红字——正常状态下这块 UI 只有两个控件。
@@ -96,7 +100,7 @@ export function createArchiveRootPicker(events: AppEvents): ArchiveRootPicker {
       // 存档根换了，保存与存档两块的数据都跟着变。
       await events.settingsChanged()
     } catch (error) {
-      setStatus(status, `存档位置没能保存：${errorText(error)}`, 'error')
+      setStatus(status, `默认存档位置没能保存：${errorText(error)}`, 'error')
       select.value = (await loadSettings()).archiveRootId
     } finally {
       select.disabled = false

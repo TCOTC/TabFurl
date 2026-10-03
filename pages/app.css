@@ -161,40 +161,62 @@
   list-style: none;
 }
 
-/* 存档栏里的子级缩进两级：一级给折叠三角，一级给父分组的存在感。 */
-.leaf--nested {
-  padding-left: calc(var(--space-3) + 14px);
-}
-
-.tree__caret {
-  flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--space-1);
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-/* 三角形自己画（见 TransferPanel 的 caretSvg），所以这里只需居中。 */
-.tree__caret .caret {
-  display: block;
-  width: 14px;
-  height: 14px;
-  margin: 0 auto;
-}
-
-.tree__caret:hover {
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-}
-
 .tree__actions {
   display: flex;
   flex: 0 0 auto;
   gap: var(--space-1);
+}
+
+/*
+ * 存档栏表头右侧的「上一层」推到最右。
+ *
+ * 它是导航器唯一的退路，所以放在表头（永远可见），而不是列表里的一行——
+ * 列表是滚动区，进了深层再想退出来就得先滚回去。
+ */
+.col__head-action {
+  margin-left: auto;
+}
+
+/*
+ * 当前所在位置的路径。它在表头下面单独占一行，而不是挤在标题旁边：
+ * 路径很长（书签栏 / 工具 / 桌面软件 / …），挤在标题行会把标题与按钮一起顶掉。
+ *
+ * 存档根之上那几层只作上下文（不属于可写入的范围），所以它们只是文字；
+ * 存档根及以下可以点着跳过去。用按钮而不是 `<a>`，因为它不换页、只换右栏的内容。
+ */
+.path {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.path__link {
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--space-1);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.path__link:hover {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.path__link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.path__sep {
+  color: var(--border-strong);
 }
 
 /* 分组行里「标题 + 枚数」那一段自己成行：它是可拖的，所以要能整体抓起来。 */
@@ -262,6 +284,20 @@
 .move__arrow {
   font-size: var(--text-lg);
   line-height: 1;
+}
+
+/* 加号与箭头占同一个大小，三个按钮的图标才会对齐。 */
+.move__icon {
+  display: block;
+  width: 15px;
+  height: 15px;
+}
+
+/* 加号与箭头占同一个位置、同一个大小，三个按钮的图标才会对齐。 */
+.move__icon {
+  display: block;
+  width: 15px;
+  height: 15px;
 }
 
 /* ———————————————— 拖拽 ———————————————— */

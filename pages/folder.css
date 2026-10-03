@@ -17,25 +17,6 @@
   gap: var(--space-4);
 }
 
-/* 子文件夹卡片没有网站图标，用一个文件夹图标占住同一个 22px 位，免得两类卡片参差不齐。 */
-.folder-tile {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
-  border-radius: var(--space-1);
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-}
-
-.folder-tile__icon {
-  /* 与同行真实网站图标（22px 满格）的重量对齐：略小于容器，但描边不能太细。 */
-  width: 15px;
-  height: 15px;
-}
-
 /*
  * 卡片：行排版（`.item`）之外只剩「这是一张卡片」的部分——
  * 它有边框与更大的内边距，而列表里的行没有。
