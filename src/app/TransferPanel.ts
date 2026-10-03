@@ -23,7 +23,6 @@ import {
   type AppEvents,
   type ArchiveDrop,
   type DragPayload,
-  type MoveItem,
   type Panel
 } from './dom'
 import {createArchivePane, type ArchivePane} from './ArchivePane'
@@ -127,7 +126,7 @@ function archiveColumnMarkup(prefix: string): string {
           而「空列表」与「真的没有内容」长得一模一样——用户看到的是「先空一下、内容再蹦出来」。
           骨架把这一段变成「正在读」（尺寸见 app.css 的 .skeleton）。
         -->
-        <ul class="list" id="${prefix}-list">
+        <ul class="list list--archive" id="${prefix}-list">
           <li class="skeleton" aria-hidden="true"></li>
           <li class="skeleton" aria-hidden="true"></li>
           <li class="skeleton" aria-hidden="true"></li>
@@ -138,7 +137,7 @@ function archiveColumnMarkup(prefix: string): string {
 }
 
 const TEMPLATE = `
-  <div class="split">
+  <div class="split" id="split">
     <section class="col" id="left-col">
       <header class="col__head">
         <!--
@@ -184,7 +183,7 @@ ${archiveColumnMarkup('left-archive')}
       </div>
     </section>
 
-    <div class="mid">
+    <div class="mid" id="mid">
       <button type="button" class="btn btn--primary btn--move" id="save-btn" disabled>
         <span class="move__arrow">→</span>
         <span id="save-label">存过去</span>
@@ -214,24 +213,6 @@ ${archiveColumnMarkup('left-archive')}
         一出现就把上面三个按钮顶上去，看着像界面跳了一下。
       -->
       <button type="button" class="btn btn--ghost btn--sm" id="undo-btn" disabled>撤销上次保存</button>
-
-      <!--
-        两栏都是收藏夹时，中间这一列换成「搬」而不是「开」：
-        书签到书签用的是 bookmarks.move（**移动**，不是复制），而上面那一整组
-        （存过去 / 打开 / 新窗口 / 不建分组 / 撤销）都是窗口语义，在这个档下没有意义。
-
-        箭头方向就是两栏的方向：箭头指哪边，就是把勾选的东西送到哪边。
-      -->
-      <div class="mid__archive" id="mid-archive" hidden>
-        <button type="button" class="btn btn--primary btn--move" id="move-right-btn" disabled>
-          <span class="move__arrow">→</span>
-          <span id="move-right-label">移动过去</span>
-        </button>
-        <button type="button" class="btn btn--move" id="move-left-btn" disabled>
-          <span class="move__arrow">←</span>
-          <span id="move-left-label">移动过来</span>
-        </button>
-      </div>
     </div>
 
     <section class="col" id="right-col">
@@ -285,16 +266,13 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   element.innerHTML = TEMPLATE
 
   const status = q<HTMLSpanElement>(element, '#status')
+  const split = q<HTMLElement>(element, '#split')
+  const mid = q<HTMLElement>(element, '#mid')
   const windowView = q<HTMLElement>(element, '#window-view')
   const leftArchiveView = q<HTMLElement>(element, '#left-archive-view')
   const leftCol = q<HTMLElement>(element, '#left-col')
   const rightCol = q<HTMLElement>(element, '#right-col')
   const leftFavoritesHost = q<HTMLElement>(element, `#${LEFT_FAVORITE_HOST_ID}`)
-  const midArchive = q<HTMLElement>(element, '#mid-archive')
-  const moveRightButton = q<HTMLButtonElement>(element, '#move-right-btn')
-  const moveRightLabel = q<HTMLSpanElement>(element, '#move-right-label')
-  const moveLeftButton = q<HTMLButtonElement>(element, '#move-left-btn')
-  const moveLeftLabel = q<HTMLSpanElement>(element, '#move-left-label')
 
   /**
    * 共享的忙标记。
@@ -343,7 +321,6 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   const openWindowButton = q<HTMLButtonElement>(element, '#open-window-btn')
   const openWindowLabel = q<HTMLSpanElement>(element, '#open-window-label')
   const undoButton = q<HTMLButtonElement>(element, '#undo-btn')
-  const noGroupHost = q<HTMLElement>(element, '#no-group-host')
   const noGroupCheck = q<HTMLInputElement>(element, '#no-group-check')
 
   const windowSelectAll = createSelectAll(q<HTMLDivElement>(element, '#window-all-host'), {
@@ -484,10 +461,12 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   /**
-   * 让界面反映 `mode`：换左栏那一块、换中间那一列、给出两档的选中态。
+   * 让界面反映 `mode`：换左栏那一块、收起中间那一列、给出两档的选中态，
+   * 并让两栏的勾选框该出现的出现、该收起的收起。
    *
-   * 中间那一列**整组换掉**而不是留一半：窗口语义的五个控件（存过去 / 打开 / 新窗口 /
-   * 不建分组 / 撤销）在书签 ⇄ 书签时一个都不成立，留着它们只会让人以为那也能用。
+   * 中间那一列**整列收起**，而不是把里面的按钮逐个藏起来：
+   * 两栏都是收藏夹时，窗口语义的五个控件（存过去 / 打开 / 新窗口 / 不建分组 / 撤销）
+   * 一个都不成立。这一档完全靠拖拽，所以列里也没有別的东西可放——空的列就该真的没有。
    */
   function applyMode(): void {
     const isArchive = mode === 'archive'
@@ -500,12 +479,12 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       button.classList.toggle('is-active', active)
       button.setAttribute('aria-pressed', String(active))
     }
-    saveButton.hidden = isArchive
-    openButton.hidden = isArchive
-    openWindowButton.hidden = isArchive
-    noGroupHost.hidden = isArchive
-    undoButton.hidden = isArchive
-    midArchive.hidden = !isArchive
+    mid.hidden = isArchive
+    // 轨道同时从三条收到两条：不收的话中间那个空轨道还会吃掉一格 `gap`。
+    split.classList.toggle('split--archive', isArchive)
+    // 勾选框只在窗口档下有意义（右栏的驱动「打开 (N)」），两栏都是收藏夹时两栏都不要。
+    archive.setSelectable(!isArchive)
+    leftArchive.setSelectable(!isArchive)
   }
 
   // ———————————————— 左栏 ————————————————
@@ -800,27 +779,6 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     // 这样它出现 / 消失都不会把上面三个按钮上下推一下。
     undoButton.classList.toggle('is-slot-hidden', !lastWrite)
     undoButton.disabled = flags.busy || !lastWrite
-
-    // 「移动过去」搬的是**左栏**勾选的那些东西，落到右栏当前这一层；
-    // 「移动过来」反过来。所以一个按钮的计数来自一边、落点来自另一边——别弄反。
-    //
-    // 计数是**要搬走的条目数**：一个整选的文件夹算一条（搬的是它本身），
-    // 与旁边「打开 (N)」按书签数是两个口径——打开出来的是一枚枚标签，
-    // 搬走的是一个文件夹，这两件事的单位本来就不是一回事。具体搬什么写在悬停提示里。
-    const leftItems = leftArchive.keptItems()
-    const rightItems = archive.keptItems()
-    moveRightLabel.textContent = countLabel('移动过去', leftItems.length)
-    moveLeftLabel.textContent = countLabel('移动过来', rightItems.length)
-    moveRightButton.title =
-      leftItems.length === 0
-        ? '左栏还没有勾选任何东西'
-        : `把左栏勾选的 ${describeItems(leftItems)}移到「${archive.currentFolderTitle()}」`
-    moveLeftButton.title =
-      rightItems.length === 0
-        ? '右栏还没有勾选任何东西'
-        : `把右栏勾选的 ${describeItems(rightItems)}移到「${leftArchive.currentFolderTitle()}」`
-    moveRightButton.disabled = flags.busy || leftItems.length === 0 || !archive.isWritable()
-    moveLeftButton.disabled = flags.busy || rightItems.length === 0 || !leftArchive.isWritable()
 
     archive.updateButtons()
     leftArchive.updateButtons()
@@ -1458,83 +1416,6 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     }
   }
 
-  /** 把一份搬走清单说成人话（按钮的悬停提示与状态行都用它）。 */
-  function describeItems(items: readonly MoveItem[]): string {
-    const folders = items.filter((item) => item.kind === 'folder').length
-    const bookmarks = items.length - folders
-    // 两种混在一起时写「A 个文件夹与 B 枚书签」：数字与前面的单位之间本来就留一个空格，
-    // 连起来写会变成「1 个文件夹与1 枚书签」，读起来像是漏字。
-    if (folders === 0) return `${bookmarks} 枚书签`
-    if (bookmarks === 0) return `${folders} 个文件夹`
-    return `${folders} 个文件夹与 ${bookmarks} 枚书签`
-  }
-
-  /**
-   * 把某一栏**勾选的东西**搬到另一栏当前这一层（中间那排「移动过去 / 移动过来」）。
-   *
-   * 搬什么由 `keptItems()` 决定，而那份清单与行上的勾选框严格同一口径：
-   * **文件夹整选 = 搬文件夹本身**（连子树），**里面有没勾的 = 只搬勾上的那几枚书签**。
-   * 所以「取消勾选其中几枚」这件事本身就改变了搬的单位，不需要再多给一个选项——
-   * 而用户能从行上那个三态勾选框直接看到自己在哪一种情况里。
-   *
-   * 三种情况会留在原地，而且都要说出来（不说的话用户看到的是「点了没反应」）：
-   * - **本来就在这一层的**：两栏停在同一层是很常见的状态（都是打开界面时的起点），
-   *   而「搬到同一个父级」在 `bookmarks.move` 里是**追加到末尾**——
-   *   用户要的不是「把这几个排到最后」，所以跳过。
-   *   （**拖拽那条路不跳**：拖动指的是具体位置，同层重排本来就是它的正当用法。）
-   * - **要被搬进它自己里面的文件夹**：另一栏完全可以导航进那个文件夹，那时 `move` 会成环。
-   * - 一条都搬不动时整件事直接说不做，而不是报「已移动 0 条」。
-   *
-   * 一条一条地调（省略 `index` 就是追加到末尾），所以搬过去的顺序与勾选时的顺序一致。
-   */
-  async function moveSelection(source: ArchivePane, target: ArchivePane): Promise<void> {
-    if (flags.busy) return
-    const destId = target.currentFolderId()
-    if (!destId || !target.isWritable()) return
-    const items = source.keptItems()
-    if (items.length === 0) return
-
-    // 目的地的祖先链：文件夹落在它里面就会成环（`move` 会失败）。
-    const destPath = new Set((await getNodePath(destId)).map((node) => node.id))
-    const movable: MoveItem[] = []
-    let here = 0
-    let cyclic = 0
-    for (const item of items) {
-      if (item.kind === 'folder' && destPath.has(item.id)) cyclic++
-      else if (source.parentOf(item.id) === destId) here++
-      else movable.push(item)
-    }
-
-    const destName = target.currentFolderTitle()
-    if (movable.length === 0) {
-      setStatus(
-        status,
-        cyclic > 0 ? '不能把文件夹搬进它自己里面。' : `这些已经在「${destName}」里了。`,
-        cyclic > 0 ? 'error' : 'ok'
-      )
-      return
-    }
-
-    flags.busy = true
-    updateButtons()
-    try {
-      for (const item of movable) await chrome.bookmarks.move(item.id, {parentId: destId})
-      const notes: string[] = []
-      if (here > 0) notes.push(`${here} 条本来就在这一层`)
-      if (cyclic > 0) notes.push('文件夹不能搬进它自己里面')
-      setStatus(
-        status,
-        `已把 ${describeItems(movable)}移到「${destName}」。${notes.length > 0 ? `（${notes.join('；')}）` : ''}`,
-        'ok'
-      )
-    } catch (error) {
-      setStatus(status, `移动失败：${errorText(error)}`, 'error')
-    } finally {
-      flags.busy = false
-      await events.archiveChanged()
-      await refresh()
-    }
-  }
 
 
 
@@ -1842,9 +1723,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     button.addEventListener('click', () => void setMode(button.dataset.mode as Mode))
   }
 
-  // 两栏互相搬（只在收藏夹档下出现）。箭头指哪边，就把勾选的东西送到哪边。
-  moveRightButton.addEventListener('click', () => void moveSelection(leftArchive, archive))
-  moveLeftButton.addEventListener('click', () => void moveSelection(archive, leftArchive))
+  // 两栏互相搬东西**只有拖拽这一条路**（见 docs/design.md 七）：没有可点版本，所以这里没有按钮。
+  // 好处是「一次搬多少」这件事根本不存在——拖哪一行就搬哪一行，不用为搬的单位再定一套规则。
 
   // 初始那一档要在建完两个实例之后摆一次：模板里写的是窗口档，但可见性与
   // 按钮的 disabled / 文案都得按当前状态算一遍。

@@ -204,12 +204,10 @@
  *
  * 那行文字的长度会变（`已全选 3 个标签页` ↔ `已选 2 / 127 个标签页`），紧跟就会左右滑。
  *
- * **两个 id 都要列**：只写左栏那个，右栏的按钮就会紧跟在文字后面（实测右缘 784 而不是 1384）。
- * 这里不按「共同祖先」选（`.col .row > .btn--icon` 之类）：那一行里将来再放别的图标按钮时，
- * 它会被莫名其妙地推到右边。
+ * 只有窗口那一栏需要这条规则（它是直接插进那一行的）；两个收藏夹栏的按钮包在
+ * `.row--push-end` 里，靠那个壳子的一个 `auto` 就贴右了（两个 `auto` 会把剩余空间平分的教训见下）。
  */
-#window-refresh-btn,
-#archive-refresh-btn {
+#window-refresh-btn {
   margin-left: auto;
 }
 
@@ -266,6 +264,16 @@
   gap: var(--space-4);
   flex: 1;
   min-height: 0;
+}
+
+/*
+ * 两栏都是收藏夹时那一列直接没了（`applyMode()` 把整列藏起来），所以轨道也要从三条收到两条。
+ *
+ * 不收的话剩下两个 `auto` 轨道会各占一格 `gap`——两栏之间白多出 16px，而中间什么都没有。
+ * `minmax(0, 1fr)` 里的 `0` 依旧不能省（理由见 AGENTS「主界面只允许有一条滚动条」那条）。
+ */
+.split--archive {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
 /*
@@ -336,21 +344,6 @@
 }
 
 .left-view[hidden] {
-  display: none;
-}
-
-/*
- * 中间那一列在「两栏都是收藏夹」时换成的那一组。
- *
- * 与那五个窗口语义的控件互斥（见 `applyMode`），所以各自成块、各自 `hidden`。
- */
-.mid__archive {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.mid__archive[hidden] {
   display: none;
 }
 
@@ -503,13 +496,17 @@
 }
 
 /*
- * 右栏的行是**扁平**的（虚拟滚动要求行与行之间没有嵌套），所以层级靠 `--depth` 表达缩进。
+ * 收藏夹那一栏的行是**扁平**的（虚拟滚动要求行与行之间没有嵌套），所以层级靠 `--depth` 表达缩进。
  *
- * `--tree-indent` 比左栏标签清单那一道（20px）更省：右栏能看到真实数据最深 7 层，
+ * **用 class 而不是 id**：两栏各有一个收藏夹列表（F7），按 id 写死时左栏那一个拿不到这些规则
+ * ——实测漏掉的就是这里：左栏的行全都不缩进，连「这个文件夹是空的」那行也贴在左边
+ *（它本来靠的就是同一条 `padding-left`）。
+ *
+ * `--tree-indent` 比窗口那一栏标签清单那一道（20px）更省：收藏夹能看到真实数据最深 7 层，
  * 每层 12px 也只吃掉 84px，而面板宽度是固定的（实测 6 层共 60px 时
  * `.box` 的 `scrollWidth === clientWidth`，没有横向滚动条）。
  */
-#archive-list > li {
+.list--archive > li {
   padding-left: calc(var(--item-pad-x) + var(--depth, 0) * var(--tree-indent));
 }
 
@@ -517,7 +514,7 @@
  * 虚拟滚动的上下占位行：把被跳过的那些行的高度补回来，让滚动条与真实内容一样长。
  * `height` 由 JS 按「行高 × 跳过的行数」算出、写在行内。
  */
-#archive-list > li.vpad {
+.list--archive > li.vpad {
   padding: 0;
   list-style: none;
 }
@@ -852,7 +849,16 @@
   background: var(--accent-soft);
 }
 
-.group.is-drop-active {
+/*
+ * 「进入这一格」的圈。
+ *
+ * `.group` 是窗口栏里的标签分组行，`[data-enter-folder]` 是收藏夹栏里的文件夹行——
+ * **两个都要写**。收藏夹那一行的 `<li>` 是 `item group__head`，并没有 `group` 这个 class，
+ * 只写 `.group` 的话拖到文件夹上什么都不显示；而这类失效是**静默**的（不报错、
+ * 界面上看起来就是「拖拽坏了」）。
+ */
+.group.is-drop-active,
+[data-enter-folder].is-drop-active {
   box-shadow: inset 0 0 0 2px var(--accent);
   border-radius: var(--radius-sm);
 }

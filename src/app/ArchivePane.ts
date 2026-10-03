@@ -50,8 +50,7 @@ import {
   triState,
   type AppEvents,
   type ArchiveDrop,
-  type DragPayload,
-  type MoveItem
+  type DragPayload
 } from './dom'
 import {openBookmarkDialog} from './BookmarkDialog'
 import {CHEVRON_ICON, FAVICON_BASE, FOLDER_ICON, VERT_LINE_ICON} from './icons'
@@ -113,15 +112,13 @@ export interface ArchivePane {
   /** 这一层里「还会被打开」的书签枚数。 */
   keptCount(): number
   /**
-   * 勾选之后**会被搬走的东西**（见 `keptItems`）。文件夹整选时它是文件夹本身，
-   * 里面有没勾的时它是勾上的那几枚书签。
+   * 这一栏要不要显示勾选框。
    *
-   * 它刻意**不等于**上面那个计数：「打开（N）」数的是一枚枚书签（打开出来的就是标签），
-   * 而搬走的可能是一个文件夹——两个计数的单位本来就不是一回事。
+   * 窗口档下右栏要（勾选驱动「存过去 / 打开 (N)」）；而**两栏都是收藏夹时两栏都不要**：
+   * 那一档完全靠拖拽（拖哪一行就搬哪一行），勾选框在那里只会让人以为
+   * 「先勾上、再点中间的按钮」——而中间那一列在那个档下整个不在了。
    */
-  keptItems(): MoveItem[]
-  /** 这一条现在挂在哪一层（判「本来就在目的地那一层」用）。 */
-  parentOf(nodeId: string): string | undefined
+  setSelectable(enabled: boolean): void
   /** 被勾掉的书签 id（打开侧默认全不勾）。 */
   excluded(): ReadonlySet<string>
   /** 重新读自己这一层并重绘。 */
@@ -426,9 +423,32 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
    * 更深层的行是行内展开 / 全部展开才看得见的，它们**不会被打开**，所以不给勾选框：
    * 给了就是一句假话（勾了却不开），而「列表看着全选、按钮说没选中」正是这个项目
    * 反复要避免的那类错觉——全部展开会让它一次性放大到近万行。
+   *
+   * 另外整个开关在 `selectable` 上：两栏都是收藏夹时根本没有勾选这回事（见 `setSelectable`）。
    */
   function selectableAt(depth: number, isFolder: boolean): boolean {
+    if (!selectable) return false
     return isFolder ? depth === 0 : depth <= 1
+  }
+
+  /**
+   * 这一栏要不要显示勾选框（见 `ArchivePane.setSelectable`）。
+   *
+   * 窗口档下的右栏要：勾选驱动「打开 (N)」。两栏都是收藏夹时不要。
+   */
+  let selectable = true
+
+  /**
+   * 切换勾选框的显示，并当场重画。
+   *
+   * **不重读书签树**：这一档只影响列两行的长相，数据早就手上（与展开文件夹同一个道理）。
+   * 全选框那一行也要跟着收起——只剩右端那几枚按钮（那一行本来就是它们的容身之处）。
+   */
+  function setSelectable(enabled: boolean): void {
+    if (selectable === enabled) return
+    selectable = enabled
+    archiveSelectAll.input.closest('label')?.toggleAttribute('hidden', !enabled)
+    renderArchive()
   }
 
   /** 没有勾选框的行用它占位：`.marker__slot` 与复选框实测都是 14px，不给就会整列左移一格。 */
@@ -670,7 +690,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     // 书签树的根上写入入口都是灰的，说清楚原因与退路，
     // 否则那个界面看起来就是「到了这里啥也干不了」。
     archiveNote.hidden = !viewFolderId || canWrite()
-    archiveNote.textContent = '这里是书签树的根，Chrome 不允许直接在它下面存东西。双击下面任意一个文件夹进去即可。'
+    archiveNote.textContent = '这里是书签树的根，Chrome 不允许直接在它下面放东西。双击下面任意一个文件夹进去即可。'
   }
 
   function renderArchive(): void {
@@ -682,7 +702,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
 
     if (!viewFolderId) {
       archiveList.innerHTML =
-        '<li class="empty">读不到书签栏，右栏无法显示内容。</li>'
+        '<li class="empty">读不到书签栏，这一栏无法显示内容。</li>'
       // 早退分支**必须**也调同步：全选框的文案与三态在它里面算，
       // 漏掉就会停在上一次的层（实测从一层进到空文件夹时，右上角还写着「已选 0 / 234 个标签页」）。
       syncArchiveStates()
@@ -690,8 +710,9 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     }
 
     if (archiveChildren.length === 0) {
+      // 文案**不写「左侧」「右栏」**：两栏都可能是收藏夹（F7），写死方向在另一栏里就是错的。
       archiveList.innerHTML = canWrite()
-        ? '<li class="empty">这个文件夹还是空的。把左侧的标签拖过来即可存下。</li>'
+        ? '<li class="empty">这个文件夹还是空的。从另一栏拖一条过来即可。</li>'
         : '<li class="empty">这里是书签树的根，只能往下走。点下面的「书签栏」进去吧。</li>'
       syncArchiveStates()
       return
@@ -730,58 +751,6 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
 
   function archiveKeptCount(): number {
     return archiveBookmarkIds().filter((id) => !archiveExcluded.has(id)).length
-  }
-
-  /**
-   * 这一栏勾选之后**真正会被搬走的东西**。
-   *
-   * 与「打开 (N)」那份名单（`archiveBookmarkIds()` 减掉排除集）有一条关键差别：
-   * **一个文件夹只要它的书签全留着，搬的就是文件夹本身**（连它的子文件夹与里面的东西一起），
-   * 而不是「先搬 7 枚书签、把空壳文件夹留在原地」——后者是没人想要的结果。
-   * 反过来，**只要里面还有一枚没勾，就只搬勾上的那几枚**：那时用户明确表达的是
-   * 「这几条我要、那几条不要」，文件夹不能整个跟着走。
-   *
-   * 判据就是行上那个勾选框已经显示出来的三态（`triState(kept, total)`）：
-   * 全选 = 这一枚代表文件夹，部分 / 全不选 = 代表里面的书签。所以界面上的勾选框与
-   * 搬走的东西**永远说同一句话**，用户不需要再学一套读法。
-   *
-   * 第二趟遍历补的是「所属文件夹没有整个搬走、但自己被单独勾上」的那些
-   *（子文件夹里的书签只有展开之后才看得见，所以它们不在上一趟里）。
-   * 已经被文件夹整搬带走的要跳过：否则会对同一枚 id 再发一次 `move`。
-   */
-  function keptItems(): MoveItem[] {
-    const items: MoveItem[] = []
-    const taken = new Set<string>()
-    for (const child of archiveChildren) {
-      if (child.url) {
-        if (isRealBookmark(child) && !archiveExcluded.has(child.id)) {
-          items.push({kind: 'bookmark', id: child.id})
-          taken.add(child.id)
-        }
-        continue
-      }
-      // 空文件夹的全选框永远勾不上（`total <= 0` 一律算 none），所以这里也要求「有东西且全留着」。
-      const ids = folderBookmarkIds(child)
-      if (ids.length > 0 && ids.every((id) => !archiveExcluded.has(id))) {
-        items.push({kind: 'folder', id: child.id})
-        for (const id of ids) taken.add(id)
-      }
-    }
-    for (const id of archiveBookmarkIds()) {
-      if (taken.has(id) || archiveExcluded.has(id)) continue
-      items.push({kind: 'bookmark', id})
-    }
-    return items
-  }
-
-  /**
-   * 这一条现在挂在哪一层。
-   *
-   * 搬东西时用来判「它本来就在目的地那一层」——那种情况不该再 `move` 一次：
-   * 同一个父级下省略 index 是**追加到末尾**，而用户要的显然不是「把这几个排到最后」。
-   */
-  function parentOf(nodeId: string): string | undefined {
-    return parentById.get(nodeId)
   }
 
   function syncArchiveStates(): void {
@@ -1477,8 +1446,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     currentFolderId: () => viewFolderId,
     currentFolderTitle: () => viewPath.at(-1)?.title ?? '',
     keptCount: archiveKeptCount,
-    keptItems,
-    parentOf,
+    setSelectable,
     excluded: () => archiveExcluded,
     reload: refresh,
     navigateTo,
