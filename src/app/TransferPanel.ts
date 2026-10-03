@@ -654,7 +654,7 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
               <span class="tree__actions">${closeSlotMarkup(
                 'group',
                 index,
-                `关闭这一组的全部标签页（共 ${child.tabs.length} 枚已列出；组里的浏览器内部页面也会一起关，分组会随之消失）`
+                `解散这一组并关闭它的全部标签页（共 ${child.tabs.length} 枚已列出；组里的浏览器内部页面也会一起关）`
               )}</span>
             </div>
             <ul class="kids">${child.tabs.map(tabRowMarkup).join('')}</ul>
@@ -2289,12 +2289,22 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
    * **不可逆**，所以只有两步确认这一道门：关闭本身调 `chrome.tabs.remove`，
    * 而它没有「软关闭」这回事。
    *
+   * 分组**先解散（`tabs.ungroup`）再关闭（`tabs.remove`）**，顺序是有意的：
+   * 解散让这些标签先**离开**那个分组，于是分组是因为「空了」而消失，而不是因为「被关闭」。
+   * 这两条路径在 Chrome 里是分开处理的——关闭会留下「已保存标签页群组」的存档，
+   * 而 Chrome 菜单里那个「删除群组」删的正是那份存档，扩展 API 碰不到它。
+   * 所以顺序反了（先 remove 再 ungroup，或只 remove）就等于没做这件事。
+   *
+   * **实测确认中**：这条路径能不能让存档也一起消失，要拿到真实 Chrome 里验；
+   * 如果不能，那说明存档只由 Chrome 自己的 UI 删，扩展这边只能到此。
+   *
    * 关闭之后**不等去抖就立刻重读窗口**：`onRemoved` 那条路要 120 ms（`WINDOW_REFRESH_DEBOUNCE_MS`），
    * 而这一段时间里那一行还留在屏幕上、且停在新出现的「确认关闭」状态上——
    * 看着就像「点了没反应」。直接 `refreshWindowOnly()` 一次只多一次 `tabs.query`。
    */
   async function closeTarget(target: {kind: 'tab'; tabId: number} | {kind: 'group'; index: number}): Promise<void> {
     if (busy) return
+    const isGroup = target.kind === 'group'
     let tabIds: number[] = []
     if (target.kind === 'tab') {
       tabIds = [target.tabId]
@@ -2321,16 +2331,33 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
     // （与 `moveArchiveNode` 同一个理由）。`busy` 只当防重入的闩。
     busy = true
     pendingClose = undefined
+    // 上面已经挡掉了空数组，而 `ungroup` 的签名要求「至少一个 id」（`[number, ...number[]]`），
+    // 所以这里可以安全地断言一次。
+    const ids = tabIds as [number, ...number[]]
+    // 走到哪一步了：解散成功而关闭失败时要说清楚，否则用户看到「关闭失败」
+    // 会以为什么都没发生，而分组其实已经被解散了。
+    let ungrouped = false
     try {
-      await chrome.tabs.remove(tabIds)
+      if (isGroup) {
+        await chrome.tabs.ungroup(ids)
+        ungrouped = true
+      }
+      await chrome.tabs.remove(ids)
       // 从选中集里剔掉：虽然 `refreshWindowOnly()` 也会剪（那一刻它们已经不在窗口里了），
       // 但这里先剔一次，这一行的话更直白。
       for (const tabId of tabIds) windowSelected.delete(tabId)
       // 报**真实枚数**：它可能比界面上看到的多（内部页面不在列表里），
       // 说「已关闭 5 枚」比说「已关闭 4 枚」诚实，也让用户明白分组为什么没了。
-      setStatus(status, tabIds.length === 1 ? '已关闭这一枚标签页。' : `已关闭 ${tabIds.length} 枚标签页。`, 'ok')
+      const what = tabIds.length === 1 ? '1 枚标签页' : `${tabIds.length} 枚标签页`
+      setStatus(status, isGroup ? `已解散分组，并关闭了 ${what}。` : `已关闭 ${what}。`, 'ok')
     } catch (error) {
-      setStatus(status, `关闭失败：${errorText(error)}`, 'error')
+      setStatus(
+        status,
+        ungrouped
+          ? `分组已解散，但关闭标签页失败：${errorText(error)}`
+          : `关闭失败：${errorText(error)}`,
+        'error'
+      )
     } finally {
       busy = false
       await refreshWindowOnly()
