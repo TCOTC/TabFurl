@@ -654,7 +654,7 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
               <span class="tree__actions">${closeSlotMarkup(
                 'group',
                 index,
-                `关闭这一组标签页（共 ${child.tabs.length} 枚，里面的内容不会存下来）`
+                `关闭这一组的全部标签页（共 ${child.tabs.length} 枚已列出；组里的浏览器内部页面也会一起关，分组会随之消失）`
               )}</span>
             </div>
             <ul class="kids">${child.tabs.map(tabRowMarkup).join('')}</ul>
@@ -2268,6 +2268,22 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
   }
 
   /**
+   * 一个分组里**全部**的标签 id。
+   *
+   * 不能直接用界面上那个分组桶里的 tabId：`snapshotCurrentWindow()` 会把
+   * **浏览器内部页面**（`chrome://` / 扩展页面 / `devtools://`…）跳过，因为它们存不成书签。
+   * 存的时候跳过是对的，**关的时候跳就不对了**——关掉一个装着 `chrome://newtab` 的分组之后，
+   * 那一枚活了下来，于是**分组也跟着活了下来**（一个分组只要还剩一枚标签就不会消失）。
+   * 用户看到的就是「关了，分组还在」。
+   *
+   * 所以这里改成按 groupId 问浏览器要全量名单（`tabs.query({groupId})`，Chrome 88+）。
+   */
+  async function allTabIdsInGroup(groupId: number): Promise<number[]> {
+    const tabs = await chrome.tabs.query({groupId})
+    return tabs.flatMap((tab) => (tab.id === undefined ? [] : [tab.id]))
+  }
+
+  /**
    * 关闭左栏里的一条标签或一整个分组（第二步确认之后才走到这里）。
    *
    * **不可逆**，所以只有两步确认这一道门：关闭本身调 `chrome.tabs.remove`，
@@ -2279,13 +2295,22 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
    */
   async function closeTarget(target: {kind: 'tab'; tabId: number} | {kind: 'group'; index: number}): Promise<void> {
     if (busy) return
-    const tabIds =
-      target.kind === 'tab'
-        ? [target.tabId]
-        : (() => {
-            const child = windowChildren[target.index]
-            return child?.kind === 'group' ? child.tabs.map((tab) => tab.tabId) : []
-          })()
+    let tabIds: number[] = []
+    if (target.kind === 'tab') {
+      tabIds = [target.tabId]
+    } else {
+      const child = windowChildren[target.index]
+      // 分组里那一枚的 groupId 取组内第一枚即可（整组同属一个分组）。
+      const groupId = child?.kind === 'group' ? child.tabs[0]?.groupId : undefined
+      try {
+        tabIds = groupId === undefined ? [] : await allTabIdsInGroup(groupId)
+      } catch (error) {
+        pendingClose = undefined
+        renderWindow()
+        setStatus(status, `关闭失败：${errorText(error)}`, 'error')
+        return
+      }
+    }
     if (tabIds.length === 0) {
       pendingClose = undefined
       renderWindow()
@@ -2301,6 +2326,8 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
       // 从选中集里剔掉：虽然 `refreshWindowOnly()` 也会剪（那一刻它们已经不在窗口里了），
       // 但这里先剔一次，这一行的话更直白。
       for (const tabId of tabIds) windowSelected.delete(tabId)
+      // 报**真实枚数**：它可能比界面上看到的多（内部页面不在列表里），
+      // 说「已关闭 5 枚」比说「已关闭 4 枚」诚实，也让用户明白分组为什么没了。
       setStatus(status, tabIds.length === 1 ? '已关闭这一枚标签页。' : `已关闭 ${tabIds.length} 枚标签页。`, 'ok')
     } catch (error) {
       setStatus(status, `关闭失败：${errorText(error)}`, 'error')
