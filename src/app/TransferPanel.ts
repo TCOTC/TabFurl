@@ -1,6 +1,7 @@
 import {
   createBookmark,
   createFolder,
+  getBookmarksBarId,
   getNodePath,
   getSubTree,
   isRealBookmark,
@@ -130,19 +131,19 @@ const PLUS_ICON = `
  */
 const VERT_LINE_ICON = `
   <svg class="marker__vert" viewBox="0 0 16 16" aria-hidden="true">
-    <path d="M8 2.5v11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+    <path d="M8 2.5v11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
   </svg>
 `
 
 /**
- * 默认展示文件夹选择器的挂载点 id。
+ * 收藏文件夹 chip 栏的挂载点 id。
  *
- * `App` 用它把选择器放进右栏表头，而 `TransferPanel` 只管留出这个位置——
+ * `App` 用它把 chip 栏放进右栏表头**下面那一行**，而 `TransferPanel` 只管留出这个位置——
  * 这样两个界面模块仍然互不 import（面板不知道挂进来的会是什么）。
  *
  * 位置必须在 `TEMPLATE` **之前**：模板字面量在求值时就会读它。
  */
-export const FOLDER_PICK_HOST_ID = 'folder-pick-host'
+export const FAVORITE_HOST_ID = 'favorite-host'
 
 const TEMPLATE = `
   <div class="split">
@@ -200,12 +201,14 @@ const TEMPLATE = `
     <section class="col">
       <header class="col__head">
         <h2 class="col__title">收藏夹 <span class="badge" id="archive-count">0</span></h2>
-        <!--
-          默认展示文件夹选择器由 App 挂进这个位置（见导出常量 FOLDER_PICK_HOST_ID）：
-          面板只提供位置，不知道该挂什么——它要是自己 import 选择器，两个界面模块就栓到一起了。
-        -->
-        <div class="col__head-slot" id="${FOLDER_PICK_HOST_ID}"></div>
       </header>
+      <!--
+        收藏文件夹的 chip 栏由 App 挂进这个位置（见导出常量 FAVORITE_HOST_ID）：
+        面板只提供位置，不知道该挂什么——它要是自己 import 那个模块，两个界面模块就栓到一起了。
+        它**自己占一行**而不是挤在表头里：「收藏这一层」+ 添加下拉框 + 若干 chip 一起放进表头，
+        窄窗口下会把标题挤没。
+      -->
+      <div class="row row--compact" id="${FAVORITE_HOST_ID}"></div>
       <div class="row row--compact" id="archive-all-host"></div>
       <div class="box" data-drop-pane="archive">
         <!--
@@ -252,7 +255,7 @@ const TEMPLATE = `
 `
 
 /**
- * 保存 / 打开两栏视图（替代原来的「保存」「存档」两个 Tab）。
+ * 保存 / 打开两栏视图。
  *
  * 两栏装的是**同一个东西的两侧**：左边是活会话（当前窗口，标签还住在浏览器里），
  * 右边是已落盘的（收藏夹里的文件夹与散装书签）。两者同形——都是有序的「分组 | 标签」序列——所以：
@@ -261,7 +264,13 @@ const TEMPLATE = `
  * - 拖拽是同一件事的**精确版**：拖一条标签就只存这一条，落在哪个文件夹行上就进哪个文件夹；
  * - 没有会话层：每次保存都是往当前展示的那一层里**追加**，不做去重，同名文件夹也不合并。
  */
-export function createTransferPanel(events: AppEvents): Panel {
+export interface TransferPanel extends Panel {
+  /** 跳到某一层。收藏文件夹 chip 用它——导航归面板，外部只发意图。 */
+  navigateTo(folderId: string): Promise<void>
+  /** 用户正站在哪一层（空串表示还没落到任何一层）。「收藏这一层」现问一次它。 */
+  currentFolderId(): string
+}
+export function createTransferPanel(events: AppEvents): TransferPanel {
   const element = createPanelElement('transfer')
   element.innerHTML = TEMPLATE
 
@@ -316,12 +325,12 @@ export function createTransferPanel(events: AppEvents): Panel {
   })
 
   /**
-   * 默认展示文件夹：从设置里读的**起点**，不是写入边界。
+   * 收藏的文件夹（书签树 id，按用户排的顺序）。
    *
-   * 右栏可以在书签树里任意导航（包括走进默认文件夹**之上**的层），写入跟的一直是当前展示的那一层。
-   * 所以它叫「默认展示文件夹」而不叫「存档位置 / 存档根」——那个名字会让人以为只能在它里面写。
+   * 它们只是**快捷方式**，不是边界：右栏可以在书签树里任意导航（包括走到收藏**上面**的层），
+   * 写入跟的一直是当前展示的那一层。顺序有意义——第一个可用的是打开界面时的落点。
    */
-  let defaultFolderId = ''
+  let favoriteFolderIds: string[] = []
   /**
    * 右栏当前展示的哪一层。
    *
@@ -332,6 +341,13 @@ export function createTransferPanel(events: AppEvents): Panel {
   let viewFolderId = ''
   /** 当前展示的文件夹从树根到自身的完整路径（含自身），用于面包屑与「上一层」。 */
   let viewPath: {id: string; title: string}[] = []
+  /**
+   * 面包屑上一次渲染用的签名。
+   *
+   * 初值是 `undefined` 而不是空串：`viewPath` 为空时签名也是空串，一撞就会把「第一次
+   * 该画那句『还没落到任何一层』」当成「内容没变」跳过。
+   */
+  let lastPathSignature: string | undefined
   let windowChildren: WindowChild[] = []
   let archiveChildren: BookmarkNode[] = []
   /**
@@ -655,18 +671,26 @@ export function createTransferPanel(events: AppEvents): Panel {
    * 原来那段文字会从「当前层」变成「可点的祖先」，盒子不同就会整排左右抽动一下。
    */
   function renderArchivePath(): void {
-    archivePath.innerHTML = viewPath.length === 0
-      ? '<span class="muted">尚未选择默认展示文件夹</span>'
-      : viewPath
-          .map((node, index) => {
-            const label = escapeHtml(node.title)
-            if (index === viewPath.length - 1) {
-              return `<span class="path__label" aria-current="location">${label}</span>`
-            }
-            return `<button type="button" class="path__link"
-                            data-goto-folder="${escapeHtml(node.id)}">${label}</button>`
-          })
-          .join('<span class="path__sep">/</span>')
+    // 面包屑也是**由外部数据驱动、又会被频繁重跑**的：`refresh()` 在一次动作里会跑好几遍，
+    // 而它每次都会重写这几个按钮。重建的代价不只是浪费——那一排按钮会被换成新元素，
+    // 悬停 / 焦点状态当场丢掉，用户看到的就是「字没变，但闪了一下」。
+    // 所以与「内容没变就别重建 DOM」同一条规矩：签名没变就只更新下面那行说明。
+    const signature = viewPath.map((node) => `${node.id}\u0000${node.title}`).join('\u0001')
+    if (signature !== lastPathSignature) {
+      lastPathSignature = signature
+      archivePath.innerHTML = viewPath.length === 0
+        ? '<span class="muted">还没落到任何一层</span>'
+        : viewPath
+            .map((node, index) => {
+              const label = escapeHtml(node.title)
+              if (index === viewPath.length - 1) {
+                return `<span class="path__label" aria-current="location">${label}</span>`
+              }
+              return `<button type="button" class="path__link"
+                              data-goto-folder="${escapeHtml(node.id)}">${label}</button>`
+            })
+            .join('<span class="path__sep">/</span>')
+    }
 
     // 书签树的根上写入入口都是灰的，说清楚原因与退路，
     // 否则那个界面看起来就是「到了这里啥也干不了」。
@@ -682,9 +706,8 @@ export function createTransferPanel(events: AppEvents): Panel {
     )
 
     if (!viewFolderId) {
-      archiveList.innerHTML = defaultFolderId
-        ? '<li class="empty">默认展示文件夹已不存在，请在右上角重新选一个。</li>'
-        : '<li class="empty">还没有选默认展示文件夹，请在右上角选一个书签栏里的文件夹。</li>'
+      archiveList.innerHTML =
+        '<li class="empty">读不到书签栏，右栏无法显示内容。</li>'
       updateButtons()
       return
     }
@@ -798,7 +821,7 @@ export function createTransferPanel(events: AppEvents): Panel {
   }
 
   async function refresh(): Promise<void> {
-    defaultFolderId = (await loadSettings()).defaultFolderId
+    favoriteFolderIds = (await loadSettings()).favoriteFolderIds
     windowChildren = planWindowChildren(await snapshotCurrentWindow())
 
     // 标签被关掉之后它的 tabId 不会再出现；留着只会让集合越涨越大。
@@ -806,17 +829,41 @@ export function createTransferPanel(events: AppEvents): Panel {
     for (const tabId of [...windowExcluded]) if (!aliveTabs.has(tabId)) windowExcluded.delete(tabId)
 
     // 视图落点：能留在原地就留在原地——用户在浏览收藏夹，不该因为一次刷新被弹回起点。
-    // 只有当前层真的没了（被删掉 / 被挪到别处）才回到默认展示文件夹。
+    // 只有当前层真的没了（被删掉 / 被挪到别处）才重新找一层。
     viewPath = viewFolderId ? await getNodePath(viewFolderId) : []
-    if (viewPath.length === 0) {
-      const fallback = defaultFolderId ? await getNodePath(defaultFolderId) : []
-      // 默认展示文件夹本身也没了时清空 id：否则下面会把它当成「有效但空的文件夹」去渲染。
-      viewFolderId = fallback.length > 0 ? defaultFolderId : ''
-      viewPath = fallback
-    }
+    if (viewPath.length === 0) await landOnStart()
 
     renderWindow()
     applyArchive(viewFolderId ? await getSubTree(viewFolderId) : undefined)
+  }
+
+  /**
+   * 重新决定右栏落在哪一层。
+   *
+   * 顺序是「第一个**可用**的收藏 → 书签栏自身 → 空」：
+   * 收藏里可能已经删掉了几个，所以不能只看第一个；一个收藏都没有时落到书签栏——
+   * 那是唯一一个“总是有意义”的层（它下面全是用户的文件夹，可以直接往下走）。
+   * 书签栏都读不出来（数据异常）才真的空着，此时 `viewFolderId` 清空，让右栏去渲染空态。
+   */
+  async function landOnStart(): Promise<void> {
+    for (const id of favoriteFolderIds) {
+      const path = await getNodePath(id)
+      if (path.length > 0) {
+        viewFolderId = id
+        viewPath = path
+        return
+      }
+    }
+
+    try {
+      const barId = await getBookmarksBarId()
+      viewFolderId = barId
+      viewPath = await getNodePath(barId)
+    } catch {
+      // 连书签栏都读不出来时清空 id：否则下面会把它当成「有效但空的文件夹」去渲染。
+      viewFolderId = ''
+      viewPath = []
+    }
   }
 
   /**
@@ -1069,6 +1116,23 @@ export function createTransferPanel(events: AppEvents): Panel {
   }
 
   /**
+   * 「落在末尾」的提示：线画在**最后一行**的下缘，而不是把整栏高亮。
+   *
+   * 整栏高亮看起来像「丢进这一栏里，具体到哪儿我不知道」，而实际上写入总是**追加到末尾**，
+   * 所以末尾那条线说的才是真话。只有列表真的是空的（没有任何行）才退化成整栏高亮。
+   *
+   * 行用 `querySelectorAll('[data-drop-row]')` 取全部（含分组内部的），文档顺序即视觉顺序；
+   * 不能用 `:last-of-type`：那是按元素类型（`li`）算的，左栏最后一行的父级是 `.kids` 里的 `ul`，
+   * 匹配不到就会掉到「整栏高亮」那条错路上去。
+   */
+  function markEndDrop(list: HTMLElement, pane: HTMLElement): void {
+    const rows = list.querySelectorAll<HTMLElement>('[data-drop-row]')
+    const last = rows[rows.length - 1]
+    if (last) last.classList.add('is-drop-after')
+    else pane.classList.add('is-drop-active')
+  }
+
+  /**
    * 一次拖动收不收，只看「拖的是什么」与「落在哪一栏」。
    *
    * 两栏其实**都收**内部拖动——栏内是挪、跨栏是存/开——所以这里只挡两件事：
@@ -1115,31 +1179,31 @@ export function createTransferPanel(events: AppEvents): Panel {
           return
         }
       }
-      pane.classList.add('is-drop-active')
+      // 落在行之间的空白处（或这一层是空的）：一律按「追加到末尾」提示。
+      markEndDrop(archiveList, pane)
       return
     }
 
     if (toArchive) {
-      // 存标签：落在文件夹行的中间就进那一层，否则进当前这一层。
+      // 存标签：落在文件夹行的中间就进那一层，否则进当前这一层（也就是追加到它的末尾）。
       const folderRow = (event.target as HTMLElement).closest<HTMLElement>('[data-drop-row="folder"]')
       const inner = folderRow?.querySelector<HTMLElement>('.group__head') ?? folderRow
       const into = folderRow && inner && spotIn(inner, event.clientY, true) === 'into'
-      ;(into ? folderRow : pane).classList.add('is-drop-active')
+      if (into && folderRow) folderRow.classList.add('is-drop-active')
+      else markEndDrop(archiveList, pane)
       return
     }
 
     // 落到左栏。
     const spot = windowDropSpot(event)
     if (spot.kind === 'end') {
-      // 空白处 = 追加到末尾，画在最后一行的下缘。
-      const last = windowList.querySelector<HTMLElement>('[data-drop-row="tab"]:last-of-type')
-      ;(last ?? pane).classList.add('is-drop-after')
+      markEndDrop(windowList, pane)
       return
     }
     const rows = [...windowList.querySelectorAll<HTMLElement>('[data-drop-row="tab"]')]
     const anchor = rows.find((row) => Number(row.dataset.tabIndex) === spot.anchorIndex)
     if (!anchor) {
-      pane.classList.add('is-drop-active')
+      markEndDrop(windowList, pane)
       return
     }
     const groupRow = anchor.closest<HTMLElement>('[data-drop-row="group"]')
@@ -1320,8 +1384,10 @@ export function createTransferPanel(events: AppEvents): Panel {
     if (busy || !canWrite()) return
     if (spot?.kind === 'into' && spot.folderId === payload.id) return
 
+    // **不置灰按钮**：`busy` 只是防重入（上面的守卫），而这一步几乎是瞬时的。
+    // 一旦在这里调 `updateButtons()`，中间那排按钮会先变灰再恢复——用户看到的就是「按钮闪一下」。
+    // 真会花时间的操作（保存一整窗、打开几十个标签）才该置灰，见 `writeInto` / `openSelection`。
     busy = true
-    updateButtons()
     try {
       if (spot?.kind === 'into') {
         // 不给 index：`bookmarks.move` 省略 index 就是追加到末尾。
@@ -1663,7 +1729,6 @@ export function createTransferPanel(events: AppEvents): Panel {
   async function commitRename(input: HTMLInputElement, id: string): Promise<void> {
     if (!renaming || renaming.id !== id || renaming.committed) return
     renaming.committed = true
-
     const node = archiveChildren.find((child) => child.id === id)
     if (!node) return
 
@@ -1683,9 +1748,10 @@ export function createTransferPanel(events: AppEvents): Panel {
 
   async function confirmDelete(id: string): Promise<void> {
     if (busy) return
+    // 只立 `busy`（防重入）而**不置灰按钮**：删一条几乎是瞬时的，而「置灰 → 恢复」
+    // 会让一整排按钮闪一下（与 moveArchiveNode 同一个理由）。
     busy = true
     pendingDeleteId = undefined
-    updateButtons()
     try {
       await removeSubTree(id)
       // 删的是当前层里的子项，所以视图本身不用动——删掉之后再刷新自然少一行。
@@ -1783,7 +1849,6 @@ export function createTransferPanel(events: AppEvents): Panel {
 
     busy = true
     pendingDeleteId = undefined
-    updateButtons()
     try {
       await updateNode(id, {url: separatorUrlOf(next)})
       setStatus(status, `已改成${SEPARATOR_LABELS[next]}。`, 'ok')
@@ -1834,5 +1899,5 @@ export function createTransferPanel(events: AppEvents): Panel {
     return {children: node?.children ?? []}
   }
 
-  return {element, refresh}
+  return {element, refresh, navigateTo, currentFolderId: () => viewFolderId}
 }

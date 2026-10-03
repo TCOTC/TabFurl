@@ -187,12 +187,12 @@ export async function listFolders(
 }
 
 /**
- * 可作「默认展示文件夹」的候选：书签栏自身 + 它下面所有层级的文件夹。
+ * 可收藏的文件夹候选：书签栏自身 + 它下面所有层级的文件夹。
  *
- * 只读——起点由用户在工具栏的选择器里指定，扩展不负责建文件夹。
+ * 只读——收藏哪几层由用户决定，扩展不负责建文件夹。
  * 返回项的 `path` 一律不含书签栏自己，界面拼显示路径时自行补上头部的 `barTitle`。
  */
-export async function listDefaultFolderCandidates(): Promise<{
+export async function listBookmarkBarFolders(): Promise<{
   barTitle: string
   folders: FolderOption[]
 }> {

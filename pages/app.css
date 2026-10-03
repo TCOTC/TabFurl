@@ -1,7 +1,7 @@
 /*
- * 主界面：「当前窗口 ⇄ 收藏夹」两栏，默认展示文件夹选择器在右栏表头里。
+ * 主界面：「当前窗口 ⇄ 收藏夹」两栏，收藏文件夹的 chip 栏在右栏表头下面一行。
  *
- * 居中的外壳、宽度、四周留白与字号/间距尺度都在 base.css 的 `.app` 里（两个页面共用），
+ * 居中的外壳、宽度、四周留白与字号/间距尺度都在 base.css 的 `.app` 里，
  * 这里只写这一页特有的部分。
  */
 
@@ -14,52 +14,107 @@
 }
 
 /*
- * 默认展示文件夹选择器（挂在右栏表头里）。
+ * 收藏文件夹的 chip 栏（一整行，在右栏表头下面）。
  *
- * 宽度**不由 CSS 定**，而是 `DefaultFolderPicker` 量出选中那条路径的文字宽度后写上去的——
- * 候选是完整路径，固定宽度要么截掉长路径、要么给短路径留一大片空白。
+ * 它取代了早期的「默认展示文件夹」下拉框：那一个值只能表达「我常去的一层」，
+ * 而用户真正会来回走动的就那么几层——要的是**一键跳过去的小清单**。
  *
- * 这里的 `overflow: hidden` 是兜底：极长路径 + 很窄的窗口下，下拉框可能比这一栏还宽
- * （它自己有 320px 的上限，但窗口可以更窄），裁掉而不是让整页多出一条横向滚动条。
+ * `flex-wrap: wrap` 而不是横向滚动：chip 数量由用户决定，一行装不下时让它换行，
+ * 而不是在标题下面再塞一条横向滚动条。
  */
-.folder-pick {
+.favs-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
-  overflow: hidden;
 }
 
-.folder-pick__field {
+.favs {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
   min-width: 0;
-  overflow: hidden;
 }
 
-.folder-pick__label {
+.favs__empty {
   color: var(--text-muted);
   font-size: var(--text-xs);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.folder-pick .status {
-  max-width: 320px;
 }
 
 /*
- * 量文字宽度的尺子。
+ * 一个收藏文件夹。
  *
- * 与下拉框同一字体、绝对定位到看不到的地方：不能用 `display: none`（那样量不到宽度）。
+ * 它是「标题」与「×」两个按钮包在一个可拖的盒子里，而不是一个按钮里再嵌一个按钮——
+ * 后者是非法 HTML，浏览器会把它拆开，然后两次点击都会变成「跳过去」。
  */
-.folder-pick__ruler {
-  position: absolute;
-  left: -9999px;
-  top: 0;
+.chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 220px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  cursor: grab;
+  overflow: hidden;
+}
+
+.chip:active {
+  cursor: grabbing;
+}
+
+.chip__go {
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
   font-size: var(--text-xs);
-  white-space: pre;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.chip__go:hover {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.chip__x {
+  flex: 0 0 auto;
+  padding: 0 var(--space-2) 0 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chip__x:hover {
+  color: var(--danger);
+}
+
+.chip__go:focus-visible,
+.chip__x:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/*
+ * 「从书签栏里挑一层」的下拉框。
+ *
+ * 选择器必须写到两级：`.input--sm` 里有一条 `max-width: 100%`，与上面这条同优先级、
+ * 而且在文件里排在后面，只写 `.favs__pick` 会被它盖掉——实测下拉框会撑满整行（597px），
+ * 于是这一栏多出一行，两个列表的起点差了 65px。
+ */
+.favs-bar .favs__pick {
+  width: auto;
+  max-width: 140px;
 }
 
 .input--sm {
@@ -137,28 +192,6 @@
 }
 
 /*
- * 右栏表头里给默认展示文件夹选择器留的位置，推到最右。
- *
- * 选择器属于这一栏（它决定右栏从哪里开始），所以紧跟在「收藏夹」标题右侧，
- * 而不是放在页面顶栏上——那样离它要影响的那一栏太远。
- * `:empty` 时不占位：`App` 没挂东西（或挂载失败）时表头不会被撑出一道空白。
- *
- * `overflow: hidden` 与 `min-width: 0` 一起用：长路径把选择器撑宽时裁掉而不是顶穿表头。
- */
-.col__head-slot {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  margin-left: auto;
-  overflow: hidden;
-}
-
-.col__head-slot:empty {
-  display: none;
-}
-
-/*
  * 列表框：两栏各有自己的滚动容器，页面本身不滚（`.app--shell`）。
  * 它是外层框（描边 + 滚动），里面的 `<ul class="list">` 才是逐行的列表——
  * 分成两层是因为右栏要把「当前位置 + 导航按钮」摆在**框里面的顶部**，
@@ -225,9 +258,16 @@
   margin-left: auto;
 }
 
-/* 框内顶部的一行说明（目前只在书签树根上出现）。 */
+/*
+ * 框内顶部的一行说明（目前只在书签树的根上出现）。
+ *
+ * 左边距多一个 `--space-1`：面包屑每一项自己带 `padding: 0 var(--space-1)`，
+ * 而这一行与 `.box__top` 共用 `--item-pad-x` 的内边距——不补这一格，它就会比面包屑的字
+ * 靠左 4px。两处都从变量算，面包屑的内边距改了这里也不会跑掉。
+ */
 .box__note {
   margin: 0;
+  padding-left: var(--space-1);
   color: var(--text-muted);
   font-size: var(--text-xs);
 }
@@ -262,7 +302,7 @@
 /*
  * 当前所在位置的路径。
  *
- * 除了当前层都能点（包括默认展示文件夹之上的层）：右栏是一个自由的浏览器，
+ * 除了当前层都能点（包括收藏文件夹之上的层）：右栏是一个自由的浏览器，
  * 不是「只能往下走」的向导。用按钮而不是 `<a>`——它不换页，只换右栏的内容。
  *
  * 盒子宽度必须与可点状态无关：`书签 / 书签栏 / 临时` 往下走一层之后，「临时」会从
@@ -380,6 +420,14 @@
   flex: 1;
   height: 1px;
   background: var(--border-strong);
+}
+
+/*
+ * 分隔线那一行没有横线把按钮顶到右边（间隔有两段 `flex: 1` 的线自动完成这件事），
+ * 所以它得自己把操作组推到行尾，否则按钮会紧跟在短标题后面一同居中。
+ */
+.marker--sep .tree__actions {
+  margin-left: auto;
 }
 
 /* 无标题时就只剩一条通线：右侧那条不画（否则两段线之间会顶着一个空格）。 */

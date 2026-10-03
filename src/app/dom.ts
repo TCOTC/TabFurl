@@ -14,10 +14,12 @@ export interface Panel {
 
 /** 面板之间互相通知用的回调集合，由 `App` 实现。 */
 export interface AppEvents {
-  /** 存档树变了：保存、撤销、删除、改名。 */
+  /** 收藏夹树变了：保存、撤销、删除、改名。 */
   archiveChanged(): Promise<void>
-  /** 存档位置变了：保存与存档两块的内容都换了根。 */
-  settingsChanged(): Promise<void>
+  /** 用户点了某个收藏文件夹：让右栏跳到那一层。导航归面板所有，外部只发意图。 */
+  folderChosen(folderId: string): Promise<void>
+  /** 收藏列表本身变了（增、删、排序），面板可能要重算落点。 */
+  favoritesChanged(): Promise<void>
 }
 
 export type StatusKind = 'ok' | 'error'
