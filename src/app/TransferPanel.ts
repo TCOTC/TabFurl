@@ -43,7 +43,7 @@ import {
   type Panel
 } from './dom'
 import {openBookmarkDialog} from './BookmarkDialog'
-import {FOLDER_ICON, PIN_ICON, REFRESH_ICON, VERT_LINE_ICON, plusIcon} from './icons'
+import {FOLDER_ICON, OPEN_MANAGER_ICON, PIN_ICON, REFRESH_ICON, VERT_LINE_ICON, plusIcon} from './icons'
 
 /** Chrome 本地 favicon 缓存端点：读缓存、不联网。 */
 const FAVICON_BASE = chrome.runtime.getURL('_favicon/')
@@ -156,14 +156,16 @@ const TEMPLATE = `
     <section class="col">
       <header class="col__head">
         <h2 class="col__title">收藏夹 <span class="badge" id="archive-count">0</span></h2>
+        <!--
+          收藏文件夹的 chip 栏由 App 挂进这个位置（见导出常量 FAVORITE_HOST_ID）：
+          面板只提供位置，不知道该挂什么——它要是自己 import 那个模块，两个界面模块就栓到一起了。
+
+          它跟在标题**右边**（不是另起一行）：标题只是两个字加一枚胸章，而右边那一大片
+          本来就空着。放同一行之后省下一行的高度，chip 多的时候也还有地方换行
+          （flex-wrap，见 app.css 的 .col__head）。
+        -->
+        <div class="favs-host" id="${FAVORITE_HOST_ID}"></div>
       </header>
-      <!--
-        收藏文件夹的 chip 栏由 App 挂进这个位置（见导出常量 FAVORITE_HOST_ID）：
-        面板只提供位置，不知道该挂什么——它要是自己 import 那个模块，两个界面模块就栓到一起了。
-        它**自己占一行**而不是挤在表头里：「收藏这一层」+ 添加下拉框 + 若干 chip 一起放进表头，
-        窄窗口下会把标题挤没。
-      -->
-      <div class="row row--compact" id="${FAVORITE_HOST_ID}"></div>
       <div class="row row--compact" id="archive-all-host"></div>
       <div class="box" data-drop-pane="archive">
         <!--
@@ -184,10 +186,10 @@ const TEMPLATE = `
                       title="在当前位置插一条分隔线（竖线，给横向排列的书签栏用）">＋ 分隔线</button>
               <button type="button" class="btn btn--ghost btn--sm" id="new-gap-btn"
                       title="在当前位置插一条间隔（横线，给竖向排列的列表用）">＋ 间隔</button>
-              <button type="button" class="btn btn--ghost btn--sm" id="open-root-btn" hidden>打开书签管理器</button>
-              <!-- 与左栏一样：标签变化会自动重读，这个按钮只是「界面看着不对」时的一手。 -->
-              <button type="button" class="btn btn--ghost btn--icon" id="archive-refresh-btn"
-                      title="重新读取书签树" aria-label="重新读取书签树">${REFRESH_ICON}</button>
+              <!-- 它现在挂在全选框那一行的右端（在刷新按钮左边），见 makeRefreshButton 附近。 -->
+              <button type="button" class="btn btn--ghost btn--icon" id="open-root-btn"
+                      title="在浏览器自带的书签管理器里打开这一层"
+                      aria-label="在浏览器自带的书签管理器里打开这一层">${OPEN_MANAGER_ICON}</button>
             </div>
           </div>
           <!-- 在书签树根上时写入入口会是灰的，用一句话说明为何以及怎么退出去。 -->
@@ -250,7 +252,6 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   const newSeparatorButton = q<HTMLButtonElement>(element, '#new-separator-btn')
   const newGapButton = q<HTMLButtonElement>(element, '#new-gap-btn')
   const openRootButton = q<HTMLButtonElement>(element, '#open-root-btn')
-  const archiveRefreshButton = q<HTMLButtonElement>(element, '#archive-refresh-btn')
   const status = q<HTMLSpanElement>(element, '#status')
 
   const windowSelectAll = createSelectAll(q<HTMLDivElement>(element, '#window-all-host'), {
@@ -268,27 +269,34 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   })
 
   /**
-   * 左栏的刷新按钮。
+   * 两面板的刷新按钮。
    *
-   * 它追着全选框那一行摆，但**不紧紧跟在文字后面**：那行文字会随着勾选从
+   * 它们都挂在**全选框那一行的右端**（左栏挂在 `#window-all-host`、右栏挂在 `#archive-all-host`），
+   * 两栏位置对称。不紧跟在全选框文字后面是有原因的：那行文字会随勾选从
    * 「已全选 3 个标签页」变成「已选 2 / 127 个标签页」，紧跟就会左右滑动。
-   * `margin-left: auto` 把它钉在这一行的右端，位置与文字长度无关。
    *
-   * 它**不置灰**（哪怕 `busy`）：这是用户的手动退路，正因为「界面看着不对」才点它。
+   * **必须在两个全选框都建好之后再 append**：`createSelectAll()` 也是往同一行里 append 的，
+   * 而按钮靠 `margin-left: auto` 贴右——一旦按钮先插进去，它会把后面的标签挤到行尾，
+   * 看着就像「刷新按钮跑到左边去了」（实测右栏就是这样：按钮 784、标签 1239–1384）。
+   *
+   * 两者都**不置灰**（哪怕 `busy`）：这是手动退路，正因为「界面看着不对」才点它。
+   * 两者走的是**同一条** `refresh()`：右栏不为「只重读书签树」另写一条路径，
+   * 多一条路径就多一处会分叉的地方。
    */
-  const windowRefreshButton = document.createElement('button')
-  windowRefreshButton.type = 'button'
-  windowRefreshButton.id = 'window-refresh-btn'
-  windowRefreshButton.className = 'btn btn--ghost btn--icon'
-  windowRefreshButton.title = '重新读取当前窗口的标签页'
-  windowRefreshButton.setAttribute('aria-label', '重新读取当前窗口的标签页')
-  windowRefreshButton.innerHTML = REFRESH_ICON
-  q<HTMLDivElement>(element, '#window-all-host').append(windowRefreshButton)
-
-  windowRefreshButton.addEventListener('click', async () => {
-    await refresh()
-    setStatus(status, '已刷新。', 'ok')
-  })
+  function makeRefreshButton(id: string, label: string): HTMLButtonElement {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.id = id
+    button.className = 'btn btn--ghost btn--icon'
+    button.title = label
+    button.setAttribute('aria-label', label)
+    button.innerHTML = REFRESH_ICON
+    button.addEventListener('click', async () => {
+      await refresh()
+      setStatus(status, '已刷新。', 'ok')
+    })
+    return button
+  }
 
   const archiveSelectAll = createSelectAll(q<HTMLDivElement>(element, '#archive-all-host'), {
     describe: (kept, total) => {
@@ -305,6 +313,24 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       syncArchiveStates()
     }
   })
+
+  // 两个全选框都建好之后才插刷新按钮：它们靠贴右把自己推到行尾，
+  // 先插进去会把后面的全选框挤走（见 `makeRefreshButton` 的注释）。
+  //
+  // 右栏那两个按钮包在**同一个组**里：两个 `margin-left: auto` 会把剩余空间**平分**，
+  // 两个按钮就各自被推到左边一截、中间留一大块空白（实测相距 216px）。
+  // 包成一组之后只有最外层那个 `auto` 生效，两个按钮就紧挨着靠在行尾。
+  // 顺序也是刻意的：管理器在左、刷新在右（刷新是「重新看一眼」，放最外面最顺手）。
+  q<HTMLDivElement>(element, '#window-all-host').append(
+    makeRefreshButton('window-refresh-btn', '重新读取当前窗口的标签页')
+  )
+  const archiveActions = document.createElement('div')
+  archiveActions.className = 'row row--compact row--push-end'
+  archiveActions.append(
+    openRootButton,
+    makeRefreshButton('archive-refresh-btn', '重新读取书签树')
+  )
+  q<HTMLDivElement>(element, '#archive-all-host').append(archiveActions)
 
   /**
    * 收藏的文件夹（书签树 id，按用户排的顺序）。
@@ -600,11 +626,17 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    * 勾选框仍然是「这一层里的书签全都要 / 全不要」的三态，与 `restoreFolder` 的口径一致
    * （它只处理一层：子文件夹建分组，散装书签不建分组）。所以**进不进去与勾不勾它是两件事**——
    * 勾上是「打开它里面的书签」，进去是「往它里面存东西 / 接着往下看」。
+   *
+   * **在书签树的根上时不给「改名 / 删除」**：那三个子级（书签栏 / 其他书签 / 移动设备书签）
+   * 是 Chrome 的固定文件夹，两个动作都会被浏览器拒绝——管理器的 `canEditNode()`
+   * 也是这么判的（根的子级一律不可编辑）。不给按钮，比给了之后报错好；
+   * 「进入」照旧，因为它们里面照样可以看。
    */
   function archiveFolderRow(folder: BookmarkNode): string {
     // 计数只算真书签：分隔线不是书签，算进去会与文件管理器的直觉不符。
     const bookmarks = realBookmarks(folder.children ?? [])
     const isRenaming = renaming?.id === folder.id
+    const editable = !atTreeRoot()
 
     const title = isRenaming
       ? `<input type="text" class="input input--rename" draggable="false"
@@ -612,18 +644,20 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
                 value="${escapeHtml(folder.title)}" aria-label="重命名文件夹" />`
       : `<span class="item__title">${escapeHtml(folder.title)}</span>`
 
+    // 「进入」永远有；「改名 / 删除」只在可编辑的层上给（见函数注释）。
+    const enterButton = `<button type="button" class="btn btn--ghost btn--sm" data-enter="${escapeHtml(folder.id)}">进入</button>`
+    const editButtons = editable
+      ? `<button type="button" class="btn btn--ghost btn--sm" data-rename="${escapeHtml(folder.id)}">改名</button>
+         ${
+           pendingDeleteId === folder.id
+             ? `<button type="button" class="btn btn--danger btn--sm" data-confirm-delete="${escapeHtml(folder.id)}">确认删除</button>
+                <button type="button" class="btn btn--ghost btn--sm" data-cancel-delete="">取消</button>`
+             : `<button type="button" class="btn btn--ghost btn--sm" data-delete="${escapeHtml(folder.id)}">删除</button>`
+         }`
+      : ''
     const actions = isRenaming
       ? ''
-      : `<span class="tree__actions">
-           <button type="button" class="btn btn--ghost btn--sm" data-enter="${escapeHtml(folder.id)}">进入</button>
-           <button type="button" class="btn btn--ghost btn--sm" data-rename="${escapeHtml(folder.id)}">改名</button>
-           ${
-             pendingDeleteId === folder.id
-               ? `<button type="button" class="btn btn--danger btn--sm" data-confirm-delete="${escapeHtml(folder.id)}">确认删除</button>
-                  <button type="button" class="btn btn--ghost btn--sm" data-cancel-delete="">取消</button>`
-               : `<button type="button" class="btn btn--ghost btn--sm" data-delete="${escapeHtml(folder.id)}">删除</button>`
-           }
-         </span>`
+      : `<span class="tree__actions">${enterButton}${editButtons}</span>`
 
     return `
       <li class="group" data-row data-drop-row="folder" data-drop-folder="${escapeHtml(folder.id)}"
@@ -643,15 +677,27 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   /**
+   * 当前展示的是不是书签树的**根**。
+   *
+   * 根是唯一一个没有父的节点，所以「路径只有一层」就是「是不是根」——
+   * 不需要把 id `0` 这个魔法值写进业务代码。
+   *
+   * 它是两个不同结论的**同一个依据**，所以只判一次、两处引用，不要各写一遍 `viewPath.length`：
+   * - 它只是三个内置目录的容器，Chrome 不接受在它下面直接建书签 / 文件夹 → `canWrite()`；
+   * - 它的三个子级是固定文件夹，改名与删除都会被浏览器拒绝 → 行内不给那两个按钮。
+   */
+  function atTreeRoot(): boolean {
+    return viewPath.length <= 1
+  }
+
+  /**
    * 能不能往当前这一层写。
    *
-   * 书签树的根（路径长度为 1 的那个节点）只是三个内置目录的容器，Chrome 不接受在它下面直接建书签/文件夹，
-   * 所以导航到那里时「存过去」、「新建文件夹」与「＋ 分隔线」都要禁用。
-   * 它也是唯一一个没有父的节点，于是「路径只有一层」就是「是不是根」——
-   * 不需要把 id `0` 这个魔法值写进业务代码。
+   * 书签树的根只是三个内置目录的容器，Chrome 不接受在它下面直接建书签/文件夹，
+   * 所以导航到那里时「存过去」、「新建文件夹」与「＋ 分隔线」「＋ 间隔」都要禁用。
    */
   function canWrite(): boolean {
-    return viewPath.length > 1
+    return !atTreeRoot()
   }
 
   /**
@@ -790,7 +836,11 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     newFolderButton.disabled = busy || !canWrite()
     newSeparatorButton.disabled = busy || !canWrite()
     newGapButton.disabled = busy || !canWrite()
-    openRootButton.hidden = !viewFolderId
+    // 与它并排的刷新按钮**不置灰**，而它要灰：它依赖「当前站在哪一层」，站得不对时按了没意义。
+    // 用 `disabled` 而不是 `hidden`：hidden 会让它凭空出现 / 消失，而右边那个刷新按钮
+    // 靠 `margin-left: auto` 贴右，位置不会因为它的出现而变——但同行里凭空多一个东西
+    // 看着就像整排跳了一下。
+    openRootButton.disabled = !viewFolderId
   }
 
   // ———————————————— 载入 ————————————————
@@ -1834,18 +1884,6 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       // 这里的错误文案是写给用户看的（含快捷键），不是 API 的原文，所以直接展示。
       setStatus(status, errorText(error), 'error')
     }
-  })
-
-  /**
-   * 右栏的刷新按钮。
-   *
-   * 走的是与别处**同一个** `refresh()`：它既重读书签树（用户在书签管理器里改了东西时用得上），
-   * 也重新算一次落点（当前层被删掉时会退回第一个可用收藏）。
-   * 与左栏那个一样**不置灰**：正因为「界面看着不对」才点它。
-   */
-  archiveRefreshButton.addEventListener('click', async () => {
-    await refresh()
-    setStatus(status, '已刷新。', 'ok')
   })
 
   newFolderButton.addEventListener('click', async () => {

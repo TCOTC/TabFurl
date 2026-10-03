@@ -50,6 +50,25 @@ export function plusIcon(className = 'icon'): string {
 `
 }
 
+/**
+ * 「打开书签管理器」：一本翻开的书的轮廓。
+ *
+ * 它取代了原来那句四字文案（「打开书签管理器」）——那个按钮与刷新按钮并排，一个六个字、
+ * 一个只有图标，排在一起看着像两套东西。
+ */
+export const OPEN_MANAGER_ICON = `
+  <svg class="icon" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M8 3.4C6.9 2.6 5.4 2.3 3.6 2.3c-.7 0-1.2.5-1.2 1.1v7.3c0 .6.5 1.1 1.2 1.1 1.7 0 3 .3 4.4 1.1"
+          fill="none" stroke="currentColor" stroke-width="1.3"
+          stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M8 3.4c1.1-.8 2.6-1.1 4.4-1.1.7 0 1.2.5 1.2 1.1v7.3c0 .6-.5 1.1-1.2 1.1-1.7 0-3 .3-4.4 1.1"
+          fill="none" stroke="currentColor" stroke-width="1.3"
+          stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M8 3.4v9.5" fill="none" stroke="currentColor"
+          stroke-width="1.3" stroke-linecap="round" />
+  </svg>
+`
+
 /** 实心五角星：收藏。实心而不是描边——「收藏」表达的是「它已经在这儿了」，要一眼看到。 */
 export const STAR_ICON = `
   <svg class="icon" viewBox="0 0 16 16" aria-hidden="true">

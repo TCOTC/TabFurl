@@ -200,12 +200,36 @@
 }
 
 /*
- * 左栏的刷新按钮钉在这一行的**右端**，而不是紧跟在全选框文字后面。
+ * 两栏的刷新按钮都钉在各自那一行的**右端**，而不是紧跟在全选框文字后面。
  *
  * 那行文字的长度会变（`已全选 3 个标签页` ↔ `已选 2 / 127 个标签页`），紧跟就会左右滑。
+ *
+ * **两个 id 都要列**：只写左栏那个，右栏的按钮就会紧跟在文字后面（实测右缘 784 而不是 1384）。
+ * 这里不按「共同祖先」选（`.col .row > .btn--icon` 之类）：那一行里将来再放别的图标按钮时，
+ * 它会被莫名其妙地推到右边。
  */
-#window-refresh-btn {
+#window-refresh-btn,
+#archive-refresh-btn {
   margin-left: auto;
+}
+
+/*
+ * 一行里推到**行尾**的一组东西。
+ *
+ * 为什么不是给每个按钮各写一个 `margin-left: auto`：flex 会把剩余空间在多个 `auto` 之间
+ * **平分**，于是两个按钮各自被推到左边一截、中间留一大块空白（实测相距 216px）。
+ * 靠一个壳子只留一个 `auto`，里面的东西才会紧挨着靠在行尾。
+ */
+.row--push-end {
+  margin-left: auto;
+}
+
+/*
+ * 「打开书签管理器」在它那一组里靠左，刷新按钮靠右（见 `makeRefreshButton`）。
+ * 它现在是纯图标按钮（原来那句「打开书签管理器」六个字与旁边的刷新按钮不是一类）。
+ */
+#open-root-btn {
+  flex: 0 0 auto;
 }
 
 /* 内联 SVG 图标：字形做图标时各平台画得不一样，所以自己画，尺寸也由自己定。 */
@@ -253,21 +277,41 @@
   min-width: 0;
 }
 
+/*
+ * 表头：标题在左，收藏文件夹的 chip 栏跟在它右边。
+ *
+ * `flex-wrap: wrap` + `align-items: center`（而不是 `baseline`）：chip 多到一个放不下时
+ * 让它整体换到第二行，而不是把标题压死或者把 chip 挤成一小截。
+ * 换成 `center` 之后，单行时标题与 chip 仍然居中对齐（它们高度差不多，看不出区别）。
+ */
 .col__head {
   display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
   min-width: 0;
 }
 
 .col__title {
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: var(--space-2);
   margin: 0;
   font-size: var(--text-md);
   font-weight: 600;
   white-space: nowrap;
+}
+
+/*
+ * 收藏文件夹 chip 栏在表头里的位置。
+ *
+ * 它**不抢宽度**（`flex: 0 1 auto` + `min-width: 0`）：chip 多的时候宁可让它们内部换行，
+ * 也不要把标题挤到看不见。
+ */
+.favs-host {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .col__head .muted {
