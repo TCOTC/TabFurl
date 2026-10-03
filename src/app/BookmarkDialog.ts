@@ -12,22 +12,13 @@ export interface BookmarkEdit {
 const DIALOG_ID = 'bookmark-dialog'
 
 /**
- * 一个「改标题 + 改网址」的模态对话框。
+ * 「改标题 + 改网址」的模态对话框。
  *
- * **为什么用 `<dialog>` 而不是自己搭一层浮层**：原生 `<dialog>` + `showModal()` 自带
- *   - Esc 关闭、关闭后焦点回到触发它的那个按钮（`close` 事件里的 `returnValue`）；
- *   - 惰性（背景不可点、不被读屏到）与 `::backdrop`；
- *   - 顶层居中（`position: absolute` 那套浮层要自己算居中、自己防滚动穿透）。
- * 一行 `showModal()` 换来的这些，自己写要几十行而且总会漏掉一条。
+ * **用 `<dialog>` + `showModal()`**：Esc 关闭、焦点回归、背景惰化与 `::backdrop` 都是白送的
+ *（自己搭浮层要几十行而且总会漏一条）。**单例复用**：`showModal()` 对已打开的 dialog 会抛
+ * `InvalidStateError`，复用时先 `close()` 再开，竞态就不存在了。
  *
- * **为什么做成一个单例对话框、每次复用**：`showModal()` 对**已打开**的 dialog 会抛
- * `InvalidStateError`，而用户可能连点两下「修改」。复用时先关掉再打开，这个竞态就不存在了。
- *
- * 标题允许留空（Chrome 会退回去显示网址）；网址必须非空，否则收藏就没了意义——所以留空时返回
- * 一句错误让人看到，而不是静默接受。
- *
- * @param initial 初始值（当前标题与网址）。
- * @param onSubmit 用户确认后调用；`url` 与 `title` 都是清洗过的。
+ * 标题可留空（Chrome 会退回去显示网址）；**网址必须非空**（留空时返回一句错误，不静默接受）。
  */
 export function openBookmarkDialog(
   host: HTMLElement,

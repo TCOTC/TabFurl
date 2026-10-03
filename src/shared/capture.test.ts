@@ -39,7 +39,7 @@ interface CreatedNode extends StubNode {
   parentId: string
 }
 
-const ARCHIVE_ROOT = 'root-1'
+const PARENT_FOLDER = 'parent-1'
 
 /**
  * 用内存书签树 + 固定标签列表替换 `chrome.*`。
@@ -246,12 +246,12 @@ test('空标题分组用颜色消歧，未知颜色退化为「无颜色」', as
 test('writeChildren 把分组写成子文件夹，散装标签留在那一层', async () => {
   const {created} = stubChrome([])
 
-  const result = await writeChildren(ARCHIVE_ROOT, [
+  const result = await writeChildren(PARENT_FOLDER, [
     {kind: 'group', name: '工作', tabs: [plainTab(1, 'https://a1.com'), plainTab(2, 'https://a2.com')]},
     {kind: 'tab', tab: plainTab(3, 'https://loose.com')}
   ])
 
-  assert.deepEqual(shape(childrenOf(created, ARCHIVE_ROOT)), ['文件夹:工作', '书签:https://loose.com'])
+  assert.deepEqual(shape(childrenOf(created, PARENT_FOLDER)), ['文件夹:工作', '书签:https://loose.com'])
   const work = foldersOf(created)[0]
   assert.deepEqual(shape(childrenOf(created, work.id)), [
     '书签:https://a1.com',
@@ -269,14 +269,14 @@ test('writeChildren 能写进任意一层——拖到某个分组文件夹上就
   assert.deepEqual(
     created.map((node) => `${node.parentId}:${node.title}`),
     ['some-existing-folder:https://a.com'],
-    '父级必须是调用方给的文件夹，而不是存档根'
+    '父级必须是调用方给的那一层，而不是某个固定的根'
   )
 })
 
 test('拖一条标签过来就是只写一个 tab 子级', async () => {
   const {created} = stubChrome([])
 
-  const result = await writeChildren(ARCHIVE_ROOT, [{kind: 'tab', tab: plainTab(7, 'https://one.com')}])
+  const result = await writeChildren(PARENT_FOLDER, [{kind: 'tab', tab: plainTab(7, 'https://one.com')}])
 
   assert.equal(result.saved, 1)
   assert.equal(result.groups, 0)
@@ -286,7 +286,7 @@ test('拖一条标签过来就是只写一个 tab 子级', async () => {
 test('同名分组允许共存：不合并、也不追加序号', async () => {
   const {created} = stubChrome([])
 
-  await writeChildren(ARCHIVE_ROOT, [
+  await writeChildren(PARENT_FOLDER, [
     {kind: 'group', name: '工作', tabs: [plainTab(1, 'https://a.com')]},
     {kind: 'group', name: '工作', tabs: [plainTab(2, 'https://b.com')]}
   ])
@@ -299,7 +299,7 @@ test('同名分组允许共存：不合并、也不追加序号', async () => {
 test('writeChildren 收集新建的 id，供撤销使用', async () => {
   const {created} = stubChrome([])
 
-  const result = await writeChildren(ARCHIVE_ROOT, [
+  const result = await writeChildren(PARENT_FOLDER, [
     {kind: 'group', name: '工作', tabs: [plainTab(1, 'https://a.com')]},
     {kind: 'tab', tab: plainTab(2, 'https://b.com')}
   ])
@@ -316,7 +316,7 @@ test('writeChildren 收集新建的 id，供撤销使用', async () => {
 test('什么都不拖时不写入任何东西', async () => {
   const {created} = stubChrome([])
 
-  const result = await writeChildren(ARCHIVE_ROOT, [])
+  const result = await writeChildren(PARENT_FOLDER, [])
 
   assert.deepEqual(result, {
     saved: 0,
@@ -392,9 +392,9 @@ test('只写入勾选的标签，整组勾掉就不建那个文件夹', async ()
 
   const snapshot = selectTabs(await snapshotCurrentWindow(), new Set([2, 4]))
   const {created} = stubChrome([])
-  const result = await writeChildren(ARCHIVE_ROOT, planWindowChildren(snapshot))
+  const result = await writeChildren(PARENT_FOLDER, planWindowChildren(snapshot))
 
-  assert.deepEqual(shape(childrenOf(created, ARCHIVE_ROOT)), ['文件夹:工作', '书签:https://loose.com'])
+  assert.deepEqual(shape(childrenOf(created, PARENT_FOLDER)), ['文件夹:工作', '书签:https://loose.com'])
   assert.equal(result.saved, 2)
   assert.equal(result.groups, 1, '被勾掉的「阅读」不该建文件夹')
 })
@@ -404,7 +404,7 @@ test('全部勾掉时不写入任何东西', async () => {
 
   const snapshot = selectTabs(await snapshotCurrentWindow(), new Set([1]))
   const {created} = stubChrome([])
-  const result = await writeChildren(ARCHIVE_ROOT, planWindowChildren(snapshot))
+  const result = await writeChildren(PARENT_FOLDER, planWindowChildren(snapshot))
 
   assert.equal(result.saved, 0)
   assert.equal(result.groups, 0)

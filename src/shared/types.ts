@@ -146,7 +146,7 @@ export interface RestoreResult {
 export interface FolderOption {
   id: string
   title: string
-  /** 从存档根算起的层级路径，不含自身。 */
+  /** 相对所属根的层级路径，不含自身（也不含根自己，调用方补头部）。 */
   path: string[]
   /** 直属书签数量。 */
   bookmarkCount: number

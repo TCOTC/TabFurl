@@ -1,17 +1,11 @@
 /*
- * 收藏夹面板的一个实例。
+ * 收藏夹面板的一个实例（右栏一个；左栏切成收藏夹时再一个）。
  *
- * 右栏原本就是这一套，F7 之后**左栏也能切成收藏夹**，于是它必须能被实例化两次。
- * 复制一份是行不通的：两份实现一定会分叉，而分叉的表现正是这个项目反复要避免的那类错觉
- * （列表看着全选、按钮说没选中）。所以整套搬进一个工厂，两栏各持一个实例。
- *
- * 面板只提供**位置**与几个回调（见 `ArchivePaneDeps`），不参与这里的状态：
+ * 复制一份实现行不通：两份一定会分叉。面板只提供**位置**与几个回调（见 `ArchivePaneDeps`），
  * 「我站在哪一层、展开了哪些、勾掉了哪些」都是本实例自己的。
  *
- * 三条历史结论随代码一起搬了过来，不要因为「看着像优化」而改掉：
- * 虚拟滚动（真实数据全部展开是 11004 行，必须只渲染视口那几十行）、
- * 行高从真实元素上量（CSS 变量一改，写死的行高会静默错位）、
- * 签名用 `JSON.stringify` 拼（手写分隔符隐含「内容里不会有这个字符」这个错前提）。
+ * 三条历史结论，不要因为「看着像优化」而改掉：虚拟滚动（全展开 11004 行，只能渲染视口那几十行）、
+ * 行高从真实元素量（CSS 变量一改，写死的会静默错位）、签名用 `JSON.stringify` 拼（手写分隔符有错前提）。
  */
 import {
   createBookmark,
@@ -211,26 +205,22 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   })
 
   /**
-   * 右栏当前展示的哪一层。
+   * 右栏当前展示的哪一层（也是**写入目标**）。
    *
-   * 右栏不是一棵可展开的树，而是一个**可导航的浏览器**：双击子文件夹行进去，`↑ 上一层` 退回来，
-   * 面包屑可以跳到路径上的任意一层。理由见 `docs/design.md`：层级一深，缩进链会把面板压成一条细缝，
-   * 而「上一层」是 O(1) 的退路，缩进不是。
+   * 「可导航的浏览器 + 就地展开」两层并存：双击子文件夹行进去、面包屑退回，
+   * 同时行首那枚方块可以就地推开子级。**没有「上一层」按钮**——退路就是面包屑。
+   * 理由见 `docs/design.md` 七。
    */
   let viewFolderId = ''
 
   /**
-   * 当前展示的文件夹从树根到自身的完整路径（含自身），用于面包屑与「上一层」。
-   *
-   * 与 `expandedIds` 是**两件事**：这里是「我站在哪一层」，那里是「一眼多看了几层」。
-   *  Finder 的列表视图也是两者并存（清单里可以推开子文件夹，同时自己在某一层）。
+   * 当前层的完整路径（含自身），面包屑用它。
+   * 与 `expandedIds` 是两件事：「我站在哪一层」 vs 「一眼多看了几层」（Finder 的列表视图也是两者并存）。
    */
   let viewPath: {id: string; title: string}[] = []
   /**
-   * 面包屑上一次渲染用的签名。
-   *
-   * 初值是 `undefined` 而不是空串：`viewPath` 为空时签名也是空串，一撞就会把「第一次
-   * 该画那句『还没落到任何一层』」当成「内容没变」跳过。
+   * 面包屑上次渲染用的签名。初值 `undefined` 而非空串：`viewPath` 为空时签名也是空串，
+   * 一撞就会把「第一次该画那句『还没落到任何一层』」当成「内容没变」跳过。
    */
   let lastPathSignature: string | undefined
 
@@ -239,32 +229,25 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   let archiveRows: ArchiveRow[] = []
 
   /**
-   * 已经在一行行里展开的文件夹 id（Finder 那样就地推开，与「进入」是两件事）。
-   *
-   * **不落盘**：它是一次浏览过程中的临时视图状态，不是偏好。换一层（`navigateTo`）会清空。
+   * 行内展开的文件夹 id（Finder 那样就地推开，与「进入」是两件事）。
+   * **不落盘**；换层（`navigateTo`）清空，刷新**不清**。
    */
   const expandedIds = new Set<string>()
 
   /**
-   * 下一次刷新时要展开的文件夹（刚存下的分组）。
-   *
-   * 为什么不在 `writeInto` 里当场展开：新节点的 `parentById` 要等 `applyArchive`
-   * 重新读完树、重建索引之后才知道，而祖先链得靠它。所以这里只记下 id，
-   * 到索引完备的那一趟再展开（见 `applyArchive`）。
+   * 下次刷新时要展开的文件夹（刚存下的分组）。
+   * 不在这里当场展开：新节点的 `parentById` 要等 `applyArchive` 重建索引后才知道，而祖先链得靠它。
    */
   let pendingExpandIds: string[] = []
   /** 下一次刷新后要滚进视野的那一行。新建的东西会落在末尾，不滚过去就看不见。 */
   let pendingScrollId: string | undefined
 
   /**
-   * 已载入节点的索引：当前层 + 它下面**所有后代**。
+   * 已载入节点索引：当前层 + 它下面**所有后代**。
    *
-   * 为什么可以先建一张全量索引：`getSubTree()` 本来就把整棵子树递归读进来了，
-   * 所以「展开某一层」不需要再去读一次——它要的那些节点已经在手上（展开是纯渲染状态，零 IPC）。
-   *
-   * 为什么必须有这张索引：展开之后行不再只属于当前层，而下面这些动作都只认识 id——
-   * 改名、删除、打开、转换记号、弹窗改书签、勾选框三态的回填。以前它们都在
-   * `archiveChildren` 里找，那种写法在有了后代之后就找不到了。
+   * 能建全量索引是因为 `getSubTree()` 本来就递归读了整棵子树 → 展开是纯渲染状态，零 IPC。
+   * 必须有的是因为展开后行不再只属于当前层，而这些动作只认 id：改名 / 删除 / 打开 / 转换记号 /
+   * 弹窗改书签 / 勾选框三态回填。以前它们在 `archiveChildren` 里找，有后代之后那种写法找不到。
    */
   let nodeIndex = new Map<string, BookmarkNode>()
   /** id → 父 id。删掉一个节点后把它的展开状态收掉、不让把文件夹拖进自己的子孙里，都靠它。 */
@@ -284,11 +267,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
 
   /**
    * 扁平化之后的一行。**虚拟滚动以行为单位，行与行之间没有嵌套**——层级靠 `depth` 算出的缩进表达。
-   *
-   * 为什么要扁平（这里是实测，不是估计）：真实数据下「全部展开」是 **11003 行**，
-   * 一次性拼进 `innerHTML` 会产出 **11.5 万个元素 / 12 MB 字符串**，
-   * 同步部分卡 **983 ms**、随后布局又花 **2402 ms**。
-   * 扁平之后可以只渲染视口里那几十行，把这两项都变成常数级。
+   * 必须扁平：真实数据全展开是 11003 行 / 11.5 万元素 / 12MB HTML（同步 983ms + 布局 2402ms）。
    */
   type ArchiveNodeRow = {
     kind: 'node'
@@ -303,10 +282,10 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   type ArchiveRow = ArchiveNodeRow | {kind: 'empty'; depth: number}
 
   /**
-   * 当前展开状态下的**可见行**，扁平成一个数组。
+   * 当前展开状态下的**可见行**，扁平成数组。
    *
-   * 只走一遍树、只产出数据，不碰 DOM：所以「全部展开」这一步本身是纯内存操作
-   * （实测真实数据 11003 行约 20 ms），贵的那部分留给了窗口渲染。
+   * 只走树、只产数据、不碰 DOM → 「全部展开」本身是纯内存操作（实测 11003 行约 20ms），
+   * 贵的那部分留给窗口渲染。
    */
   function flattenArchive(): ArchiveRow[] {
     const rows: ArchiveRow[] = []
@@ -329,8 +308,8 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   const ARCHIVE_OVERSCAN = 10
 
   /**
-   * 行高。**从真实元素上量**，不写死 38px——那个数由 `--row-inner` 与 `--item-pad-y` 算出来，
-   * CSS 变量一改，写死的虚拟滚动就会错位（而且它错位是静默的：滚动条长度不对、滚着滚着跳）。
+   * 行高。**从真实元素上量**，不写死 38px——那个数由 `--row-inner` 与 `--item-pad-y` 算出，
+   * CSS 变量一改，写死的虚拟滚动就错位，而且错得安静（滚动条长度不对、滚着滚着跳）。
    */
   let archiveRowHeight = 0
   function rowHeight(): number {
@@ -345,10 +324,9 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /**
-   * 只渲染视口里的那几十行，用上下两个**撑高的占位行**维持滚动条。
-   *
-   * 行高是定值（所有行都是 `--row-height`，扁平之后连「展开块」这种不等高的东西也没有了），
-   * 所以第 i 行的位置就是 `i * rowHeight`——不需要测量每一行。
+   * 只渲染视口那几十行，上下用两个**撑高的占位行**维持滚动条。
+   * 行高定值（都写 `--row-height`，扁平之后连「展开块」这种不等高的东西也没了）
+   * → 第 i 行的位置就是 `i * rowHeight`，不必逐行测量。
    */
   function renderArchiveWindow(): void {
     if (archiveRows.length === 0) return
@@ -365,16 +343,15 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     const parts: string[] = []
     if (first > 0) parts.push(`<li class="vpad" style="height:${first * height}px"></li>`)
     /*
-     * 高亮框**一段一段地拼**，而不是另外摆一个绝对定位的框。
+     * 高亮框**一段一段地拼**，不摆绝对定位的框。
      *
-     * 「在框里」这件事只看一个布尔量：这一行自己，或者它的某个祖先被选中了
-     *（`pickOwnerOf` 沿父链找）。两个后果正是我们要的：
-     * ① 选中一个展开的文件夹 → 它下面那些行全在框里 → **一个框包住整个文件夹**；
-     * ② 同一个文件夹里再单点一条 → 它本来就在框里 → 并**不会多出一个嵌套的框**。
-     * 而段的首尾靠**比邻居**判（邻居在视口外也算得出来，`archiveRows` 里有全部可见行），
-     * 于是相邻的两条选中会连成一段（一个框），而不是每条各画一个框。
+     * 「在框里」只看一个布尔量：自己或某祖先被选中（`pickOwnerOf` 沿父链找）。两个后果正是要的：
+     * ① 选中的文件夹展开 → 子行全在框里 → **一个框包住整个文件夹**；
+     * ② 同一个文件夹里再单点一条 → 它本就在框里 → **不会多出嵌套的框**。
+     * 段的首尾靠**比邻居**判（`archiveRows` 里有全部可见行，邻居在视口外也算得出）
+     * → 相邻两条选中连成一段而非各画一个框。
      *
-     * 虚拟滚动下这样做比“一个框”简单得多：不用关心视口裁剪，渲染哪几行就画哪几行的边。
+     * 虚拟滚动下比「一个框」简单：不管视口裁剪，渲染哪几行就画哪几行的边。
      */
     const top = new Set(topLevelPicked())
     const boxCache = new Map<number, boolean>()
@@ -400,14 +377,11 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /**
-   * 把某一行滚进视野（新建 / 改名的那一行可能落在视口外，`focusRenameInput()` 会抓不到输入框）。
+   * 把某一行滚进视野（新建 / 改名的那行可能在视口外，`focusRenameInput()` 就抓不到输入框）。
    *
-   * **两步：先按行高估一次，渲染出来再量真实位置修正。**
-   *
-   * 只靠估算不够：列表上面还压着一条**吸顶**的面包屑（`.box__top`），它占着滚动内容的一段高度、
-   * 滚动时又盖在内容上，再加上取整，估算会差几个像素甚至**一整行**——
-   * 而这一行的用户可见后果就是「新建的东西没滚到、还在屏幕外」。
-   * 量一次真实元素就没有这些假设了：它同时得到了吸顶栏遮挡区与真实边界。
+   * **两步：先按行高估一次，渲染出来再量真实位置修正。** 只靠估算不够——列表上面压着一条**吸顶**的
+   * 面包屑（`.box__top`），它占着滚动内容的一段高度、滚动时又盖在内容上，加上取整会差几个像素
+   * 甚至**一整行**（用户看到的就是「新建的东西没滚到」）。量一次真实元素就没有这些假设。
    */
   function scrollRowIntoView(id: string): void {
     const index = archiveRows.findIndex((row) => row.kind === 'node' && row.node.id === id)
@@ -443,11 +417,10 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /**
-   * 滚动时重画窗口。用 `requestAnimationFrame` 合并同一帧里的多次 scroll。
+   * 滚动时重画窗口，`requestAnimationFrame` 合并同一帧的多次 scroll。
    *
-   * **正在改名时不重画**：输入框会被换掉，而 `focusout` 处理器会把「元素被移除」当成
-   * 「用户点开了别处」从而提交改名——打字打到一半被提交是最糟的结果。
-   * 改名期间本来也不该滚动列表。
+   * **正在改名时不重画**：输入框会被换掉，`focusout` 会把「元素被移除」当成「用户点了别处」而提交改名
+   * ——打字打到一半被提交是最糟的结果。改名期间本来也不该滚动列表。
    */
   let archiveWindowQueued = false
   function scheduleArchiveWindow(): void {
@@ -463,16 +436,14 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   /**
    * 这一行该不该有勾选框。
    *
-   * **判据是「这一行在不在『打开』的范围内」**，与 `archiveBookmarkIds()` 严格同一口径：
-   * 那个集合只覆盖「当前层的书签 + 每个直属子文件夹里的书签」（depth ≤ 1），
-   * 因为 `restoreFolder` 只处理一层（子文件夹建分组、散装书签不建分组）。
-   * 文件夹行同理，只有**当前层的直属子文件夹**（depth 0）才有意义。
+   * **判据 = 这一行在不在「打开」的范围内**，与 `archiveBookmarkIds()` 严格同口径：
+   * 那个集合只覆盖「当前层书签 + 每个直属子文件夹里的书签」（depth ≤ 1），因为 `restoreFolder` 只处理一层。
+   * 文件夹行同理，只有**当前层直属子文件夹**（depth 0）才有意义。
    *
-   * 更深层的行是行内展开 / 全部展开才看得见的，它们**不会被打开**，所以不给勾选框：
-   * 给了就是一句假话（勾了却不开），而「列表看着全选、按钮说没选中」正是这个项目
-   * 反复要避免的那类错觉——全部展开会让它一次性放大到近万行。
+   * 更深的行是展开才看得见的，**不会被打开** → 不给勾选框（给了就是假话：勾了却不开），
+   * 而全部展开会让这个谎言一次性放大到近万行。
    *
-   * 另外整个开关在 `selectable` 上：两栏都是收藏夹时根本没有勾选这回事（见 `setSelectable`）。
+   * 整个开关在 `selectable` 上：两栏都是收藏夹时根本没有勾选这回事。
    */
   function selectableAt(depth: number, isFolder: boolean): boolean {
     if (!selectable) return false
@@ -489,11 +460,11 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   /**
    * 切换勾选框的显示，并当场重画。
    *
-   * **不重读书签树**：这一档只影响列两行的长相，数据早就手上（与展开文件夹同一个道理）。
-   * 全选框那一行也要跟着收起——只剩右端那几枚按钮（那一行本来就是它们的容身之处）。
+   * **不重读书签树**：这一档只影响列两行的长相，数据早就在手上。
+   * 全选框那一行也收起，只剩右端那几枚按钮。
    *
-   * 它同时也是**多选的开关**：没有勾选框的那一档（两栏都是收藏夹）用 Ctrl / Shift 点选，
-   * 而这两套不能共存（同一行上两个“选中”会让“选了几条”有两种说法）。
+   * 它同时也是**多选的开关**：没有勾选框的那一档用 Ctrl / Shift 点选。
+   * 两套不能共存（同一行上两个「选中」会让「选了几条」有两种说法）。
    */
   function setSelectable(enabled: boolean): void {
     if (selectable === enabled) return
@@ -507,16 +478,13 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   /**
    * 被点选过的条目（**多选**，只在没有勾选框的那一档用）。
    *
-   * 存的是「用户点过的 id」，而不是「画出来的那些」——一个被选中的文件夹的子项不必再记一份
-   * （它们靠父链归属过去）。所以这里是**原样的选择**，要用的时候先过 `topLevelPicked()`，
-   * 否则同一个文件夹会被搬两次。
+   * 存「用户点过的 id」，不存「画出来的那些」——选中文件夹的子项不必再记一份（靠父链归属）。
+   * 所以这是**原样的选择**，用之前先过 `topLevelPicked()`，否则同一个文件夹会被搬两次。
    */
   const pickedIds = new Set<string>()
   /**
-   * Shift 范围选择的起点（上一次「不带修饰键」点击的那一行）。
-   *
-   * Shift 点击**不更新它**：这样连按几次可以反复调范围，而不会每次都以本次结果为新起点
-   * （那是资源管理器一类界面的惯例）。
+   * Shift 范围选择的起点（上次不带修饰键点击的那一行）。
+   * Shift 点击**不更新它** → 连按几次可反复调范围，不会每次以新结果为新起点（资源管理器的惯例）。
    */
   let pickAnchor: string | undefined
 
@@ -531,9 +499,8 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /**
-   * 把选择**规约成顶层项**：被选中的文件夹的后代不再单列一份。
-   *
-   * 两个消费方都需要它：绘制（不然嵌套的框一个套一个）与拖拽（不然同一棵子树会被搬两次）。
+   * 把选择**规约成顶层项**：被选中文件夹的后代不再单列一份。
+   * 绘制（否则嵌套框一个套一个）与拖拽（否则同一棵子树搬两次）都要它。
    */
   function topLevelPicked(): string[] {
     const out: string[] = []
@@ -552,9 +519,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
 
   /**
    * 这一行归谁的高亮框（沿父链向上找第一个顶层选中项）。
-   *
-   * 返回 `undefined` 就是没被选中。用**规约过**的集合查，所以一个展开的文件夹被选中时，
-   * 它下面那些行全都归到它名下——于是它们连成**一段**、共用一个框（不再各自画一个）。
+   * 用**规约过**的集合查 → 展开的文件夹被选中时，子行全归它名下，于是连成**一段**、共用一个框。
    */
   function pickOwnerOf(row: ArchiveRow, top: ReadonlySet<string>): string | undefined {
     if (row.kind !== 'node' || top.size === 0) return undefined
@@ -571,10 +536,9 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /**
-   * Shift 点击：把从起点到这一行之间的**可见行**全选上。
-   *
-   * 按**可见顺序**而不是层级：用户看到的就是这一列行，而展开的文件夹的子级也在这列里——
-   * 于是「从上面那个文件夹拖到下面那条书签」会连中间隔着的都选上，与资源管理器一致。
+   * Shift 点击：把起点到这一行之间的**可见行**全选上。
+   * 按**可见顺序**而非层级：用户看到的就是这一列行，展开的子级也在这列里
+   * → 「从上面那个文件夹拖到下面那条书签」会连中间隔着的都选上，与资源管理器一致。
    */
   function extendPickTo(id: string): void {
     const from = archiveRows.findIndex((row) => row.kind === 'node' && row.node.id === pickAnchor)
@@ -592,17 +556,12 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /**
-   * 点一行：**Ctrl / Cmd 切换、Shift 扩范围**，而**普通点击不改选择**。
+   * 点一行：**Ctrl / Cmd 切换、Shift 扩范围**，**普通点击不改选择**。
    *
-   * 普通点击什么都不做是有意的：多选是 Ctrl / Shift 的手势，单击在这里没有「选中它」这层意思
-   *（这一档本来就没有勾选框可点），而让它「只选这一条」会**随手点一下就把刚选好的一批清掉**。
-   * 撤销选择靠 Ctrl 点回去或点空白处。
+   * 普通点击什么都不做是有意的：这一档没有勾选框，「只选这一条」会**随手点一下就把刚选好的一批清掉**。
+   * 但它**仍然挪 Shift 起点**（先随手点一下再 Shift 点另一头是很自然的用法）。
    *
-   * 但它**仍然会挪 Shift 的起点**：先随手点一下再 Shift 点另一头，是很自然的用法，
-   * 而起点本来也只是「最后一次碰过的那一行」。
-   *
-   * 返回 true 表示这次点击已经处理完了，不必再往下走。
-   * 落在行内按钮 / 输入框上时返回 false——那些各有自己的语义。
+   * 返回 true = 这次点击已处理完；落在行内按钮 / 输入框上时返回 false（各有自己的语义）。
    */
   function handlePickClick(event: MouseEvent): boolean {
     if (!picking()) return false
@@ -653,14 +612,10 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   const NO_BOX_SLOT = '<span class="marker__slot" aria-hidden="true"></span>'
 
   /**
-   * 行首那一格。
-   *
-   * 三种情况：
-   * - **给勾选框**：这一行在「打开」的范围内（见 `selectableAt`）。
-   *   分隔线永远不给（它不是书签，传 `undefined`）。
-   * - **给等宽占位**：同一份清单里别的行有勾选框，不给占位它们就会差一格（`NO_BOX_SLOT`）。
-   * - **什么都不给**：整栏都不要勾选框时（两栏都是收藏夹，见 `setSelectable`）。
-   *   那时没有任何一行有勾选框，再留一列空白就只是让每一行的文字白白右移 14px。
+   * 行首那一格。三种情况：
+   * - **给勾选框**：这一行在「打开」范围内（见 `selectableAt`）。分隔线永远不给（传 `undefined`）。
+   * - **给等宽占位**：同一清单里别的行有勾选框，不给占位就差一格（`NO_BOX_SLOT`）。
+   * - **什么都不给**：整栏都不要勾选框时（再留一列空白就只是让文字白白右移 14px）。
    */
   function boxSlot(id: string | undefined, depth: number, isFolder: boolean): string {
     if (id !== undefined && selectableAt(depth, isFolder)) {
@@ -678,16 +633,13 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /**
-   * 一条书签行。分隔线占位书签也画成一条横线，并且同样给「修改 / 删除」两个按钮。
+   * 一条书签行。分隔线占位书签也画成横线，同样给「修改 / 删除」。
    *
-   * 两种行**都可以拖**（拖动范围与文件夹一致：在右栏里挪位置 / 挪层级，拖到左栏就是打开）：
-   * 分隔线虽然只是个记号，但用户摆它的位置本来就有意义，所以它的拖拽逻辑与书签、文件夹完全一样。
+   * 两种行**都能拖**：分隔线虽然只是个记号，但用户摆它的位置本来就有意义。
+   * 分隔线没有勾选框（不是书签，见 `isRealBookmark`），书签有。
    *
-   * 分隔线没有勾选框（它不是书签，见 `isRealBookmark`），书签有——它是「要打开哪些」的一枚。
-   *
-   * 网址**完整显示**（不截成主机名）：收藏夹条目本来就靠网址区分同名页面，
-   * 而小一号的字与一行的限制能把绝大多数网址完整装下。真的过长时仍会省略，
-   * 那时 `title` 里还有完整的一份。
+   * 网址**完整显示**（不截成主机名）：条目本来就靠网址区分同名页面，小一号字 + 一行够装下绝大多数。
+   * 真过长时仍省略，那时 `title` 里还有完整的一份。
    */
   function archiveBookmarkRow(row: ArchiveNodeRow, pickCls = ''): string {
     const bookmark = row.node
@@ -776,28 +728,15 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /**
-   * 一个子文件夹行。它同时支持两种「往里看」的方式，两者是两码事：
-   *
-   * - **双击这一行（或点「进入」）= 进这一层**：把它变成当前展示的文件夹，`viewFolderId` 跟过去，
-   *   面包屑负责往回走。也就是说「我现在就在这一层干活」（往它里面存东西、接着往下看）。
-   * - **点左侧那枚方块 = 就地展开**（Finder 的列表视图那样）：子级直接推开在下面，换页不离开。
-   *   适合「我只想看一眼里面有什么、不想丢掉手上的上下文」（比如往父层存东西时先看看里面）。
-   *   方块平时是文件夹图标，悬停 / 聚焦时换成折叠三角（见 `icons.ts`）。
-   *
-   * 那两个计数仍是**直属**的，没有因为能展开就改成递归——口径与「打开（N）」、勾选框保持一致（见下）。
+   * 一个子文件夹行。两种「往里看」的方式，两码事：
+   * - **双击这一行（或点「进入」）= 进这一层**：它变成当前展示的文件夹（`viewFolderId` 跟过去），面包屑负责往回走。
+   * - **点左侧那枚方块 = 就地展开**：子级推开在下面、不换页（想看一眼里面又不想丢掉手上的上下文）。
    */
   function archiveFolderRow(row: ArchiveNodeRow, pickCls = ''): string {
     const folder = row.node
-    // 两个计数都保持**直属**，而且只算真书签（分隔线不是书签，算进去会与文件管理器的直觉不符）。
-    //
-    // 「直属」而不是递归到后代，是为了让这一行上的三个数字**同一口径**：
-    // 勾选框只勾这一层的书签，「打开（N）」也只算这一层（`restoreFolder` 的处理口径）。
-    // 三者一致，才能一眼看出「勾上它、点打开，会开几枚标签页」——
-    // 递归数字（例如 312）跟着的却是一个只能勾 18 条的勾选框，反而让人以为勾了会开 312 个。
-    // （递归计数不要钱：`getSubTree()` 本来就把整棵子树读进来了，纯内存遍历实测 0.4ms/万条。）
-    //
-    // 所以**展开也不改计数**：展开只是多看到几行，这一行的勾选框、副文案与「打开（N）」
-    // 说的还是「这一层」。
+    // 两个计数都保持**直属**，且只算真书签：这样这一行上的三个数字同一口径
+    //（勾选框只勾这层、「打开（N）」也只算这层），一眼能看出「勾上它、点打开，会开几枚标签页」。
+    // 递归数字（312）跟着只能勾 18 条的勾选框 → 让人以为勾上会开 312 个。**展开也不改计数**。
     const children = folder.children ?? []
     const bookmarks = realBookmarks(children)
     const folderCount = children.filter((child) => !child.url).length
@@ -849,43 +788,28 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   /**
    * 当前展示的是不是书签树的**根**。
    *
-   * 根是唯一一个没有父的节点，所以「路径只有一层」就是「是不是根」——
-   * 不需要把 id `0` 这个魔法值写进业务代码。
-   *
-   * 它是两个不同结论的**同一个依据**，所以只判一次、两处引用，不要各写一遍 `viewPath.length`：
-   * - 它只是三个内置目录的容器，Chrome 不接受在它下面直接建书签 / 文件夹 → `canWrite()`；
-   * - 它的三个子级是固定文件夹，改名与删除都会被浏览器拒绝 → 行内不给那两个按钮。
+   * 根是唯一没有父的节点 → 「路径只有一层」就是「是不是根」（不必把 id `0` 这个魔法值写进业务代码）。
+   * 它是两个结论的**同一依据**，只判一次：Chrome 不接受在根下面建东西（→ `canWrite()`）；
+   * 根的子级是固定文件夹，改名 / 删除会被拒（→ 行内不给那两个按钮）。
    */
   function atTreeRoot(): boolean {
     return viewPath.length <= 1
   }
 
-  /**
-   * 能不能往当前这一层写。
-   *
-   * 书签树的根只是三个内置目录的容器，Chrome 不接受在它下面直接建书签/文件夹，
-   * 所以导航到那里时「存过去」、「新建文件夹」与「＋ 分隔线」「＋ 间隔」都要禁用。
-   */
+  /** 能不能往当前这一层写（根只是三个内置目录的容器，Chrome 不接受在它下面建东西）。 */
   function canWrite(): boolean {
     return !atTreeRoot()
   }
 
   /**
-   * 面包屑。
-   *
-   * **除了当前层都能点**：当前层就是眼前这一页，做成链接只是噪声；其余每一层都能跳过去，
-   * 包括默认展示文件夹**之上**的那几层——右栏是一个自由的浏览器，不是「只能往下走」的向导。
-   * 用按钮而不是 `<a>`：它不换页，只换右栏的内容。
-   *
-   * 不可点的当前层也套一层 `.path__label`（与链接**同一个盒子**）：进了子文件夹后，
-   * 原来那段文字会从「当前层」变成「可点的祖先」，盒子不同就会整排左右抽动一下。
+   * 面包屑。**除当前层都能点**（当前层做成链接只是噪声）；可跳到收藏**之上**的层——右栏是自由的浏览器。
+   * 用按钮不用 `<a>`：它不换页，只换右栏内容。不可点的当前层也套 `.path__label`（与链接**同一个盒子**），
+   * 否则进子文件夹时整排会左右抽动一下。
    */
   function renderArchivePath(): void {
-    // 面包屑也是**由外部数据驱动、又会被频繁重跑**的：`refresh()` 在一次动作里会跑好几遍，
-    // 而它每次都会重写这几个按钮。重建的代价不只是浪费——那一排按钮会被换成新元素，
-    // 悬停 / 焦点状态当场丢掉，用户看到的就是「字没变，但闪了一下」。
-    // 所以与「内容没变就别重建 DOM」同一条规矩：签名没变就只更新下面那行说明。
-    const signature = viewPath.map((node) => `${node.id}\u0000${node.title}`).join('\u0001')
+    // 面包屑也是「外部数据驱动 + 频繁重跑」→ 签名没变就只更新下面那行说明，
+    // 否则那一排按钮每次被换成新元素，悬停 / 焦点当场丢掉，用户看到「字没变但闪一下」。
+    const signature = JSON.stringify(viewPath.map((node) => [node.id, node.title]))
     if (signature !== lastPathSignature) {
       lastPathSignature = signature
       archivePath.innerHTML = viewPath.length === 0
@@ -902,30 +826,24 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
             .join('<span class="path__sep">/</span>')
     }
 
-    // 书签树的根上写入入口都是灰的，说清楚原因与退路，
-    // 否则那个界面看起来就是「到了这里啥也干不了」。
+    // 根上写入入口都是灰的，说清原因与退路（否则看着像「到了这里啥也干不了」）。
     archiveNote.hidden = !viewFolderId || canWrite()
     archiveNote.textContent = '这里是书签树的根，Chrome 不允许直接在它下面放东西。双击下面任意一个文件夹进去即可。'
   }
 
   function renderArchive(): void {
     renderArchivePath()
-    // 「取消选中」只在真的选中了东西时露面。
-    //
-    // 放在**开头**而不是末尾：这个函数有好几条提前 return（空文件夹、书签树根），
-    // 每一条都得把它算一遍，否则从「选中了一批」的层走到空层时它还会留在那里。
+    // 「取消选中」只在真选中了东西时露面。放在**开头**：这个函数有好几条提前 return
+    //（空文件夹、书签树根），每一条都得把它算一遍，否则从「选中了一批」的层走到空层时它还会留着。
     clearPickButton.classList.toggle('is-slot-hidden', pickedIds.size === 0)
-    // 胸章数的是「这一层里能干活的东西」：子文件夹可以进去，书签可以打开。分隔线两样都不是。
-    //
-    // **这一栏可以没有胸章**（左栏那个实例就是）：它的两档共用一个胸章，而那一枚归面板管
-    // ——两个数分属两个模块，只有面板同时认得它们（见 `count()`）。
+    // 胸章数「这一层里能干活的东西」：子文件夹可以进去，书签可以打开。分隔线两样都不是。
+    // **这一栏可以没有胸章**（左栏那个实例）：它的两档共用一枚，而那枚归面板管（见 `count()`）。
     if (archiveCount) archiveCount.textContent = String(archiveCountValue())
 
     if (!viewFolderId) {
       archiveList.innerHTML =
         '<li class="empty">读不到书签栏，这一栏无法显示内容。</li>'
-      // 早退分支**必须**也调同步：全选框的文案与三态在它里面算，
-      // 漏掉就会停在上一次的层（实测从一层进到空文件夹时，右上角还写着「已选 0 / 234 个标签页」）。
+      // 早退分支**必须**也调同步：全选框的文案与三态在它里面算，漏掉就停在上一次的层。
       syncArchiveStates()
       return
     }
@@ -940,9 +858,8 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     }
 
     archiveRows = flattenArchive()
-    // 编辑中的那一行、或刚存下的那一个文件夹，都可能不在视口里
-    // （新建的文件夹落在末尾）。先把它滚进来再渲染窗口：否则 `focusRenameInput()`
-    // 抓不到输入框，用户也看不到自己刚建的东西。
+    // 编辑中的那一行、或刚存下的文件夹，都可能不在视口里（新建的落在末尾）→ 先滚进来再渲染窗口，
+    // 否则 `focusRenameInput()` 抓不到输入框，用户也看不到自己刚建的东西。
     if (renaming) scrollRowIntoView(renaming.id)
     if (pendingScrollId) {
       scrollRowIntoView(pendingScrollId)
@@ -964,9 +881,8 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   /**
    * 当前这一层里全部可打开的书签 id（含散装与分组内的）。
    *
-   * **必须与 `restoreFolder` 的口径一致**：它跳过分隔线，所以这份名单也不能含分隔线。
-   * 否则「打开（N）」会多算，而且全选框按这份名单算总数，一旦总数里混进了永远勾不上的项，
-   * 它就会永远停在「部分选择」——点了全选也回不到「全不选」。
+   * **必须与 `restoreFolder` 同口径**（它跳过分隔线）：否则「打开（N）」多算，
+   * 而且全选框按这份名单算总数，总数里混进永远勾不上的项 → 永远停在「部分选择」，点了全选也回不去。
    */
   function archiveBookmarkIds(): string[] {
     return archiveChildren.flatMap((child) => {
@@ -1003,33 +919,30 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
 
   const NAVIGATION_GUARD_MS = 350
 
-  /** 跳到某一层（双击子文件夹、点「进入」、点面包屑、点「上一层」都走这里）。 */
+  /** 跳到某一层（双击子文件夹、点「进入」、点面包屑都走这里）。 */
   async function navigateTo(folderId: string): Promise<void> {
     if (flags.busy || !folderId || folderId === viewFolderId) return
     const now = Date.now()
     if (now - lastNavigationAt < NAVIGATION_GUARD_MS) return
     lastNavigationAt = now
 
-    // 换层时把行内编辑状态、展开状态与多选都丢掉：那些行已经不在眼前了。
-    // 展开状态**不跟着走**是为了不让它越攒越多——一个层的展开与否只对那一层的浏览有意义。
+    // 换层时把行内编辑、展开状态与多选都丢掉：那些行已经不在眼前了。
+    // 展开状态不跟着走是为了不让它越攒越多（一个层的展开与否只对那一层的浏览有意义）。
     renaming = undefined
     pendingDeleteId = undefined
     expandedIds.clear()
-    // 多选同理：那是「这一层里的哪几条」，换了一层就不成立了。
     clearPick()
     viewFolderId = folderId
-    // 换层之后从头看：上一次停在中途的位置对新的一层没有意义。
+    // 从头看：上一次停在中途的位置对新的一层没有意义。
     archiveBox.scrollTop = 0
     await refresh()
   }
 
   /**
    * 重新决定右栏落在哪一层。
-   *
-   * 顺序是「第一个**可用**的收藏 → 书签栏自身 → 空」：
-   * 收藏里可能已经删掉了几个，所以不能只看第一个；一个收藏都没有时落到书签栏——
-   * 那是唯一一个“总是有意义”的层（它下面全是用户的文件夹，可以直接往下走）。
-   * 书签栏都读不出来（数据异常）才真的空着，此时 `viewFolderId` 清空，让右栏去渲染空态。
+   * 顺序：第一个**可用**的收藏 → 书签栏 → 空。收藏里可能已删掉几个，所以不能只看第一个；
+   * 一个收藏都没有时落到书签栏（那是唯一「总是有意义」的层）；连书签栏都读不出来才真的空着，
+   * 此时清空 `viewFolderId` 让右栏去渲染空态。
    */
   async function landOnStart(): Promise<void> {
     for (const id of deps.favoriteIds()) {
@@ -1163,15 +1076,14 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   ): Promise<void> {
     if (flags.busy || !canWrite()) return
     if (spot && !canDropAt(payload, dropTargetId(spot))) {
-      // 兜底：正常路径上 `dragover` 已经把 dropEffect 置成 none、drop 不会派发，
-      // 但万一走到了这里，绝不能报「已调整收藏夹顺序」——那是假话，实际什么都没做。
+      // 兜底：正常路径上 `dragover` 已把 dropEffect 置成 none、drop 不会派发，
+      // 但万一走到这里绝不能报「已调整收藏夹顺序」——那是假话，实际什么都没做。
       setStatus(status, '不能把文件夹挪进它自己里面。', 'error')
       return
     }
 
-    // **不置灰按钮**：`busy` 只是防重入（上面的守卫），而这一步几乎是瞬时的。
-    // 一旦在这里调 `updateButtons()`，中间那排按钮会先变灰再恢复——用户看到的就是「按钮闪一下」。
-    // 真会花时间的操作（保存一整窗、打开几十个标签）才该置灰，见 `writeInto` / `openSelection`。
+    // **不置灰按钮**：`busy` 只是防重入，而这一步几乎是瞬时的。一旦在这里调 `updateButtons()`，
+    // 中间那排按钮会先变灰再恢复 → 用户看到「按钮闪一下」。真花时间的操作才该置灰。
     flags.busy = true
     try {
       if (spot?.kind === 'into') {
@@ -1193,17 +1105,10 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /**
-   * 这个落点收不收这一份拖拽载荷。
-   *
-   * 两种情况不行，而它们以前都不可能发生（右栏一次只显示一层，落点的锚点永远是兄弟）：
-   *
-   * 1. **拖到自己身上**。
-   * 2. **拖进自己的子孙里**——行内展开之后这个动作点得到（展开 A，再把 A 拖到它里面那层）。
-   *    Chrome 会拒绝它（会形成环），但我们不能等到报错：那会在界面上留下
-   *    「拖了但没动」而没有任何解释的痕迹。所以先沿父链走一遍自己判断。
-   *
-   * 两个落点都要过这一关：`into` 时目标是那个文件夹，`here` 时目标是**它所在的那一层**
-   * （把 A 拖进 A 里面的某个位置，一样是环）。
+   * 这个落点收不收这份载荷。两种不行，而它们以前都不可能发生（右栏一次只显示一层，锚点永远是兄弟）：
+   * **拖到自己身上**；**拖进自己的子孙里**（展开 A 再把 A 拖进它里面那层）。
+   * Chrome 也会拒（会成环），但不能等到报错——那会在界面上留下「拖了但没动」而没有任何解释的痕迹。
+   * 两个落点都要过这一关：`into` 目标是那个文件夹，`here` 目标是**它所在的那一层**。
    */
   function canDropAt(payload: DragPayload, targetId: string): boolean {
     if (payload.kind !== 'folder') return true
@@ -1222,10 +1127,8 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   /**
    * 就地展开 / 收起一个文件夹（点左侧那枚方块）。
    *
-   * 不 `await` 任何东西、也不重新读书签树：`getSubTree()` 已经把整棵子树读进来了，
-   * 子级就在 `folder.children` 里。所以这一步只是把 id 记进 `expandedIds` 再重绘。
-   * 重绘不会丢掉展开状态（它在模块状态里，不在 DOM 里），也会走 `syncArchiveStates()` 把
-   * 新出现的勾选框回填成正确的样子。
+   * 不 `await`、也不重读书签树：`getSubTree()` 已把整棵子树读进来了，子级就在 `folder.children` 里。
+   * 重绘不会丢展开状态（它在模块状态里，不在 DOM 里），并会走 `syncArchiveStates()` 回填新出现的勾选框。
    */
   function toggleFolder(id: string): void {
     const node = nodeIndex.get(id)
@@ -1237,10 +1140,8 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /**
-   * 这一棵子树里**可以展开**（有子级）的文件夹数量。
-   *
-   * 空文件夹不算：展开它只会多出一行「这个文件夹是空的」，而那一行的副文案
-   * （「0 个书签 • 0 个文件夹」）已经把同一件事说完了。
+   * 这棵子树里**可以展开**（有子级）的文件夹数量。空文件夹不算：展开它只会多出一行「这个文件夹是空的」，
+   * 而那一行的副文案已经把同一件事说完了。
    */
   function expandableCount(): number {
     let count = 0
@@ -1251,20 +1152,14 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /**
-   * 全部展开 / 全部折叠（一个按钮两档，像行内那个「转成另一种」）。
+   * 全部展开 / 全部折叠（一个按钮两档）。不是「树视图」，是给已展开的那几层加一个「一次全看完」的
+   * 手势（全展开后可以用浏览器自己的页内查找 Ctrl+F）。
    *
-   * 它不是「树视图」，而是给已经展开的那几层加一个「一次全看完」的手势：
-   * 找东西时一排排点开二十几个文件夹很磨人，而全部展开之后可以用浏览器自己的
-   * 页内查找（Ctrl+F）在一屏里找——那是这一档真正解决的问题。
+   * **有展开的就全部收起，否则全部展开**（按钮上的字已说明下一档）。判据看 `expandedIds` 而不是
+   * 「当前层有没有可见的已展开项」：两者总是一致，但前者不用再走一遍 DOM。
    *
-   * **有展开的就全部收起，否则全部展开**：不需要第二个按钮，按钮上的字已经说明了下一档是什么。
-   * 判据看的是 `expandedIds` 而不是`当前层里有没有可见的己展开项`——
-   * 展开集在换层时会清空，所以两者实际总是一致，但前者不用再走一遍 DOM。
-   *
-   * 代价（实测量过，不是估计）：真实数据下书签栏子树全部纳入展开集是
-   * **11003 行 / 11.5 万个元素 / 12 MB 的 HTML**。所以这个手势必须配**虚拟滚动**
-   * （只渲染视口里那几十行，见 `renderArchiveWindow`）——否则一次 `innerHTML` 就是
-   * 983 ms 卡顿 + 2402 ms 布局。展开本身是纯内存操作（约 20 ms），贵的是渲染。
+   * 必须配**虚拟滚动**：全展开是 11003 行 / 12MB HTML，没虚拟化时一次 `innerHTML` 就是 983ms 卡顿
+   * + 2402ms 布局。展开本身是纯内存（约 20ms），贵的是渲染。
    */
   function toggleExpandAll(): void {
     if (expandedIds.size > 0) {
@@ -1292,9 +1187,8 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
       .map((url) => ({url}))
   }
 
+  /** 只按 id 取标题（调用方只会传文件夹 id：给新建分组起名）。 */
   function archiveFolderTitle(id: string): string | undefined {
-    // 不带 `!node.url` 的判断：调用方只会拿文件夹的 id（它要给新建的分组起名），
-    // 而索引里给出的就是那个节点。
     return nodeIndex.get(id)?.title
   }
 
@@ -1470,8 +1364,8 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     const node = nodeIndex.get(id)
     if (!node) return
 
-    // 只服务文件夹与分隔线（书签的改名走模态弹窗，见 editBookmark）。
-    // 文件夹名不能为空，所以清洗后退回原名字；分隔线允许留空（就成了一条通线）。
+    // 只服务文件夹与分隔线（书签的改名走模态弹窗）。文件夹名不能为空 → 清洗后退回原名；
+    // 分隔线允许留空（就成了一条通线）。
     const fallback = isSeparatorUrl(node.url) ? '' : node.title
     const next = sanitizeFolderName(input.value, fallback)
     try {
@@ -1486,8 +1380,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
 
   async function confirmDelete(id: string): Promise<void> {
     if (flags.busy) return
-    // 只立 `busy`（防重入）而**不置灰按钮**：删一条几乎是瞬时的，而「置灰 → 恢复」
-    // 会让一整排按钮闪一下（与 moveArchiveNode 同一个理由）。
+    // 只立 `busy`（防重入）而**不置灰按钮**：删一条几乎是瞬时的，置灰 → 恢复会让一排按钮闪一下。
     flags.busy = true
     pendingDeleteId = undefined
     try {
@@ -1502,8 +1395,8 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     }
   }
 
-  // 「打开书签管理器」开的就是当前展示的这一层：给管理器的 `?id=` 一个数字 id，
-  // 它就能直接落在那一层（Chrome 154.x 上这个入口有个已知回归，见 `bookmarkManagerUrl`）。
+  // 「打开书签管理器」开的就是当前展示的这一层：给 `?id=` 一个数字 id 就能直接落在那一层
+  //（为什么用数字 id、以及那个上游 bug 见 `AGENTS.md` 第 29 条）。
   openRootButton.addEventListener('click', async () => {
     if (!viewFolderId) return
     try {
@@ -1516,7 +1409,8 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   })
 
   newFolderButton.addEventListener('click', async () => {
-    if (!canWrite() || flags.busy) return    flags.busy = true
+    if (!canWrite() || flags.busy) return
+    flags.busy = true
     updateButtons()
     try {
       const name = await nextFolderName(viewFolderId)
@@ -1534,9 +1428,8 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     }
   })
 
-  // 两种记号各一个按钮，**不合并成一个再让用户去改**：它们外观完全不同，
-  // 建完再转一次是多余的一步（而且刚建的那一枚还分不清是哪种）。
-  // 建完直接进入改名状态：它的全部意义常常就在那个标题上。
+  // 两种记号各一个按钮，**不合并成一个再让用户去改**（外观完全不同，建完再转一次是多余的一步）。
+  // 建完直接进改名状态：它的全部意义常常就在那个标题上。
   async function createMarker(kind: SeparatorKind): Promise<void> {
     if (!canWrite() || flags.busy) return
     flags.busy = true

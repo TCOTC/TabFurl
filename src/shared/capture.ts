@@ -175,7 +175,7 @@ async function writeTabs(
  *
  * 它是保存侧唯一的写入入口，所以整窗保存与「拖一条标签过去」走的是同一条路径。
  *
- * @param parentId 目标文件夹（可以是存档根，也可以是它下面的某个分组文件夹）。
+ * @param parentId 目标文件夹：**当前展示的那一层**（右栏的落点），拖到某个分组文件夹上就进那一层。
  */
 export async function writeChildren(
   parentId: string,

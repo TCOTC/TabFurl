@@ -147,14 +147,8 @@ export function createSelectAll(
 }
 
 /**
- * 拖动来源。
- *
- * 用它而不是 `text/plain` 区分「本项目内部的拖动」与「从网页拖来的链接」：
- * 后者只带 `text/uri-list`，处理方式不同（按网址存成书签，而不是按键去找节点）。
- *
- * `selection` 是**一次拖好几条**（Ctrl / Shift 点出来的一批收藏夹条目）。它只可能出现在
- * 收藏夹栏里（那一档没有勾选框，所以「选了几条」这件事只由多选表达，见 `ArchivePane`）。
- * 载荷里的 id 是**规约过的顶层项**：被选中的文件夹的后代不会再单列一份，
+ * 拖动载荷来源。用自定义类型而非 `text/plain`，与「从网页拖来的链接」（只带 `text/uri-list`）分开。
+ * `selection` = 一次拖好几条（只在收藏夹栏出现，那一档没有勾选框）；id 是**规约过的顶层项**，
  * 否则同一个文件夹会被搬两次（子树已经跟着走了）。
  */
 export type DragPayload =
@@ -169,13 +163,9 @@ export type DragPayload =
 export type DropSpot = 'before' | 'into' | 'after'
 
 /**
- * 收藏夹那一栏的落点。
- *
- * `into` 是进某个子文件夹；`here` 是插到某一层的某个下标。
- *
- * **`here` 必须带上 `parentId`**：行内展开之后，同一份可见清单里混着好几层的行，
- * 而虚拟滚动之下视口外的行根本不存在——只给下标（哪怕去 DOM 里数兄弟）都会算出
- * 一个错的层内下标，于是静默插到别的地方去。
+ * 收藏夹那一栏的落点：`into` = 进某个子文件夹，`here` = 插到某一层的某个下标。
+ * **`here` 必须带 `parentId`**：行内展开后同一份可见清单混着好几层，而虚拟滚动下视口外的行不存在
+ * → 只给下标（哪怕去 DOM 数兄弟）都会算出错的层内下标，静默插到别的地方。
  */
 export type ArchiveDrop =
   | {kind: 'into'; folderId: string}
@@ -183,12 +173,8 @@ export type ArchiveDrop =
 
 /**
  * 行内落点三分法：上缘 = 插到它前面，下缘 = 插到它后面，中间 = **进入**它。
- *
- * 「进入」只对能装东西的行成立（文件夹行、标签分组行）。三分法让一行的三个位置正好对应
- * 三种意图，不需要另加「拖到这里就进去」的按钮或悬停展开。
- *
- * 两栏共用（左边是标签行、右边是收藏夹行）：这套手势必须一致，否则同一个动作在两栏里
- * 会因为「偏了 3 像素」而落到不同的意思上。
+ * 「进入」只对能装东西的行成立（文件夹行、标签分组行）。两栏共用：这套手势必须一致，
+ * 否则同一个动作会因为「偏了 3 像素」在两栏里落到不同的意思上。
  */
 export function spotIn(row: HTMLElement, clientY: number, canEnter: boolean): DropSpot {
   const rect = row.getBoundingClientRect()
@@ -200,14 +186,9 @@ export function spotIn(row: HTMLElement, clientY: number, canEnter: boolean): Dr
 }
 
 /**
- * 「落在末尾」的提示：线画在**最后一行**的下缘，而不是把整栏高亮。
- *
- * 整栏高亮看起来像「丢进这一栏里，具体到哪儿我不知道」，而实际上写入总是**追加到末尾**，
- * 所以末尾那条线说的才是真话。只有列表真的是空的（没有任何行）才退化成整栏高亮。
- *
- * 行用 `querySelectorAll('[data-drop-row]')` 取全部（含分组 / 文件夹内部的），文档顺序即视觉顺序；
- * 不能用 `:last-of-type`：那是按元素类型（`li`）算的，左栏最后一行的父级是 `.kids` 里的 `ul`，
- * 匹配不到就会掉到「整栏高亮」那条错路上去。
+ * 「落在末尾」的提示：线画在**最后一行**的下缘，不把整栏高亮（写入总是**追加到末尾**）。
+ * 只有列表真空才退化成整栏高亮。**不能用 `:last-of-type`**：它按元素类型（`li`）算，
+ * 而左栏最后一行的父级是 `.kids` 里的 `ul` → 匹配不到就掉回整栏高亮那条错路。
  */
 export function markEndDrop(list: HTMLElement, pane: HTMLElement): void {
   const rows = list.querySelectorAll<HTMLElement>('[data-drop-row]')
@@ -217,11 +198,8 @@ export function markEndDrop(list: HTMLElement, pane: HTMLElement): void {
 }
 
 /**
- * 点整行 = 点它的勾选框。
- *
- * 实现上是**替用户点那个复选框**，而不是另写一份勾选逻辑：三态（分组行与文件夹行）的
- * 「全选 ↔ 全不选」意图判定只在 `change` 处理器里写了一次，再写一份必然分叉。
- *
+ * 点整行 = 点它的勾选框：**替用户点那个复选框**，而不是另写勾选逻辑
+ *（三态意图判定只在 `change` 处理器里写一次，再写一份必然分叉）。
  * 勾选框、行内按钮、重命名输入框各有自己的语义，落在它们身上不算「点行」。
  */
 export function toggleRowFromClick(list: HTMLElement, event: MouseEvent): void {

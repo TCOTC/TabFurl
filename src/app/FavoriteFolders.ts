@@ -53,15 +53,11 @@ export interface FavoriteStore {
 }
 
 /**
- * 建那份唯一的收藏状态。
- *
- * 四条约定（它们是从「默认展示文件夹」那个下拉框换过来的理由，见 docs/design.md）：
- * - **顺序就是数组顺序，且第一个是打开界面时的落点**，所以顺序有意义，支持拖拽排序。
- * - **加收藏有两个入口**：☆（拿本栏当前层）与 ＋（打开可搜索的选择器，从书签栏里挑一层）。
- *   两条路都走同一个 `add()`，不会各写一份去重与落盘逻辑。
- * - **只能收藏书签栏里的层**：扩展不往「其他书签」里写东西，收藏也不该破这个例。
- * - **一个收藏都不可用时面板自己退回书签栏**（那是 `TransferPanel` 的事），
- *   这里只负责让「一条 chip 都没有」看起来不像坏了——栏里留一句说明。
+ * 建那份唯一的收藏状态。四条约定：
+ * **顺序即数组顺序、第一个就是打开界面时的落点**（所以支持拖拽排序）；
+ * **加收藏两个入口**（☆ 本栏当前层 / ＋ 选择器挑一层）都走同一个 `add()`，去重与落盘只有一份；
+ * **只能收藏书签栏里的层**（扩展不往「其他书签」写东西）；
+ * **一个收藏都不可用时由面板退回书签栏**（不是这里的事）——这里只保证空栏看着不像坏了。
  */
 export function createFavoriteStore(events: AppEvents): FavoriteStore {
   let entries: FavoriteEntry[] = []
@@ -74,11 +70,8 @@ export function createFavoriteStore(events: AppEvents): FavoriteStore {
   }
 
   /**
-   * 存储里的 id，顺手把已经失效的剔掉。
-   *
-   * 书签 id 是设备本地的：同步到另一台设备、或用户手动删掉文件夹之后，设置里那份就可能指向
-   * 不存在的东西。这里做一次自愈——读得出路径的留下，读不出的丢掉，并且**只在真的丢掉时**
-   * 才落盘（否则每次刷新都要写一次存储）。
+   * 存储里的 id，顺手把失效的剔掉。书签 id 是设备本地的：同步到另一台设备、或用户手删了文件夹之后，
+   * 设置里那份就可能指向不存在的东西。这里做一次自愈，且**只在真的丢掉时**才落盘。
    */
   async function liveIds(): Promise<string[]> {
     const stored = (await loadSettings()).favoriteFolderIds
@@ -141,17 +134,11 @@ export function createFavoriteStore(events: AppEvents): FavoriteStore {
 }
 
 /**
- * 一条 chip 栏。
+ * 一条 chip 栏：取代了早期的「默认展示文件夹」下拉框（那个只有一个值，还暗示「只能在这一个文件夹里写」，
+ * 而收藏只是**快捷方式**、不是边界）。
  *
- * 它是「常去的那几层」的快捷栏，取代了早期的「默认展示文件夹」下拉框——那个下拉框只有一个值，
- * 而用户真正会来回走动的其实就那么几层。它还有个副作用：暗示「只能在这一个文件夹里写」，
- * 而收藏只是**快捷方式**，不是边界。
- *
- * 两栏各有一条（F7），但它们渲染的是 `store` 里那**同一份数据**——在这一条上排序，
- * 另一条跟着变。各自不同的只有「我这一栏正站在哪」（`currentFolderId`），
- * 它用来决定 ☆ 收藏的是哪一层、以及点 chip 该跳哪一栏。
- *
- * 两条路（☆ 与 ＋）都走 `store.add()`，去重与落盘只有一份实现。
+ * 两栏各有一条（F7），但渲染的是 `store` 里**同一份数据**——在这一条上排序，另一条跟着变。
+ * 各自不同的只有「我这一栏正站在哪」（`currentFolderId`）。两条路（☆ 与 ＋）都走 `store.add()`。
  */
 export interface FavoriteBar {
   readonly element: HTMLElement
@@ -166,8 +153,8 @@ export function createFavoriteBar(
   const element = document.createElement('div')
   element.className = 'favs-bar'
 
-  // 两栏各有一条，而它们住在同一份 DOM 里：id 得分开，否则 `getElementById` 与
-  // 无障碍引用（`aria-*` 指向 id）都会指向先出现的那一条。
+  // 两栏各有一条、又住在同一份 DOM 里：id 必须分开，否则 `getElementById` 与 `aria-*` 引用
+  // 都会指向先出现的那一条。
   const id = (suffix: string): string => `${side === 'left' ? 'left-fav' : 'fav'}-${suffix}`
   element.innerHTML = `
     <div class="favs" id="${id('list')}" role="list" aria-label="收藏的文件夹"></div>
@@ -268,10 +255,14 @@ export function createFavoriteBar(
   }
 
   function renderChips(entries: readonly FavoriteEntry[]): void {
-    const signature = entries.map((entry) => `${entry.id}\u0000${entry.title}`).join('\u0001')
+    // 两处签名都用 `JSON.stringify` 拼，**不自己定分隔符**（见 `AGENTS.md` 第 27 条）：
+    // 手写分隔符隐含「内容里不会出现这个字符」，而文件夹名里什么字符都可能有。
+    const signature = JSON.stringify(entries.map((entry) => [entry.id, entry.title]))
     if (signature === lastChips) return
     lastChips = signature
-    lastOrder = entries.map((entry) => entry.id).join('\u0000')
+    // `lastOrder` 必须与 `persistOrder()` 里的比较**用同一种拼法**，否则那个守卫永远不成立
+    //（每次拖动结束都会白白写一次存储）。两边都从这一份 id 数组算出。
+    lastOrder = JSON.stringify(entries.map((entry) => entry.id))
 
     if (entries.length === 0) {
       // 提示要短：它与两个入口同行，而一栏在窄窗口下只有四百来像素，
@@ -301,19 +292,15 @@ export function createFavoriteBar(
   }
 
   /**
-   * 把 chip 栏当前顺序落盘。
-   *
-   * 依据是 **DOM 里现在的顺序**，而不是拖动过程中算出来的下标：拖动期间是把元素真的插进
-   * 新位置（见 `dragover`），所以 DOM 就是用户看到的东西，读它不会与视觉分叉。
-   *
-   * 与已渲染的顺序一样就不写存储（每次拖动结束都写一次，会让设置变更事件白跑一趟）。
-   * 落盘之后 `store` 会通知**两条**视图重画，所以另一边也会跟着换顺序。
+   * 把 chip 栏当前顺序落盘。依据是 **DOM 里现在的顺序**（拖动期间就把元素真的插到了新位置），
+   * 而不是另算一份下标——那份会与视觉分叉。与已渲染的顺序一样就不写存储。
+   * 落盘后 `store` 会通知**两条**视图重画，另一边跟着换顺序。
    */
   async function persistOrder(): Promise<void> {
     const ids = [...list.querySelectorAll<HTMLElement>('[data-chip]')].map(
       (chip) => chip.dataset.chip as string
     )
-    if (ids.length === 0 || ids.join('\u0000') === lastOrder) return
+    if (ids.length === 0 || JSON.stringify(ids) === lastOrder) return
     try {
       await store.reorder(ids)
     } catch (error) {

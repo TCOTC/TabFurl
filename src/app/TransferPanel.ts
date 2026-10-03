@@ -297,14 +297,22 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   const flags = {busy: false}
 
   /**
+   * 收藏的文件夹（书签树 id，按用户排的顺序）。
+   *
+   * 它们只是**快捷方式**，不是边界：右栏可以在书签树里任意导航（包括走到收藏**上面**的层），
+   * 写入跟的一直是当前展示的那一层。顺序有意义——第一个可用的是打开界面时的落点。
+   */
+  let favoriteFolderIds: string[] = []
+
+  /** 撤销目标：最近一次写入新建的 id。**只存在内存里**，关掉界面就失效。 */
+  let lastWrite: {folderIds: string[]; bookmarkIds: string[]} | undefined
+
+  /**
    * 两栏的收藏夹实例。
    *
    * 右栏一直有；左栏那个在「当前窗口」档下藏着（`display: none`），切过去才读数据。
    * 元素靠 **id 前缀**分开（`archive` / `left-archive`）——两个实例住在同一份 DOM 里，
    * id 重了就会各自找到对方的东西。
-   *
-   * `rememberWrite` / `favoriteIds` 读的是下面才声明的变量：回调都在用户操作之后才执行，
-   * 那时它们早已初始化（与 `App.ts` 里现问 `panel.currentFolderId()` 同一个道理）。
    */
   const paneDeps = {
     events,
@@ -407,16 +415,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     pane.actionsHost.append(actions)
   }
 
-  /**
-   * 收藏的文件夹（书签树 id，按用户排的顺序）。
-   *
-   * 它们只是**快捷方式**，不是边界：右栏可以在书签树里任意导航（包括走到收藏**上面**的层），
-   * 写入跟的一直是当前展示的那一层。顺序有意义——第一个可用的是打开界面时的落点。
-   */
-  let favoriteFolderIds: string[] = []
   let windowChildren: WindowChild[] = []
-
-
 
   /**
    * 左栏上一次渲染用的签名。
@@ -439,8 +438,6 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    * tabId / 分组下标，合成一个变量只会让两处的判断互相干扰。
    */
   let pendingClose: {kind: 'tab'; tabId: number} | {kind: 'group'; index: number} | undefined
-  /** 撤销目标：最近一次写入新建的 id。只存在内存里（见 docs/design.md）。 */
-  let lastWrite: {folderIds: string[]; bookmarkIds: string[]} | undefined
   /** 正在拖的是什么；`dragover` 靠它决定收不收。 */
   let dragging: DragPayload | undefined
   /**
@@ -570,16 +567,10 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   /**
-   * 一条标签行。
-   *
-   * 三个 data 属性各有用处：`data-row` 供「点整行切换勾选」找到勾选框；
-   * `data-tab-index` 与 `data-tab-group` 供拖拽算落点（插到哪儿、归哪个组）。
-   *
-   * 副文案是**完整网址**（与右栏收藏夹条目一致）：同一站点下的不同页面靠路径区分，
-   * 只显示主机名时两条看起来一模一样。太长的仍会省略，完整那份在 `title` 里。
-   *
-   * 行尾三个按钮从左到右是：**加载 / 释放·打开·关闭**。左边那个是「这一页的状态」
-   * （见 `statusSlotMarkup()`），中间是「跳过去」，右边是「关掉它」。
+   * 一条标签行。三个 data 属性各有用处：`data-row` 供「点整行切换勾选」找到勾选框；
+   * `data-tab-index` / `data-tab-group` 供拖拽算落点。
+   * 副文案是**完整网址**（与右栏一致）：同站不同页靠路径区分，只显主机名时两条看着一模一样。
+   * 行尾按钮从左到右：**状态（加载/加载中/释放）· 打开 · 关闭**。
    */
   function tabRowMarkup(tab: TabSnapshot): string {
     const url = tab.url
@@ -634,9 +625,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
   /**
    * 一行里影响「画出来什么」的字段，顺序即渲染顺序。
-   *
-   * 不只是文字：`active` 不显示在行里，但它决定行尾给不给「释放」，
-   * 所以它也算「画出来的一部分」——漏进签名就会出现「该重画的没重画」。
+   * `active` 不显示在行里，但它决定行尾给不给「释放」→ 也算「画出来的一部分」，漏进签名就会「该重画的没重画」。
    */
   function drawnFieldsOf(tab: TabSnapshot): (string | number)[] {
     return [tab.tabId, tab.title, tab.url, tab.pinned ? 1 : 0, tab.status, tab.active ? 1 : 0]
@@ -644,24 +633,11 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
   /**
    * 左栏现在的样子：结构 + 文本。
-   *
-   * **勾选不在签名里**：它由 `syncWindowStates()` 回填，把它算进签名反而会因为「勾一下」
-   * 重建整列（而重建又会把勾选框恢复成未勾选）。
-   *
-   * 反过来，**凡是行里画出来的东西都要进签名**：漏了 `status`，点了「加载」之后那一行不会变；
-   * 漏了分组内的 `pinned`，组内标签固定后那个图钉要等到别的变化才出现（两处都是实测踩到的）。
-   *
-   * 拼串交给 `JSON.stringify`，**不自己定分隔符**。手写的分隔符都要求「内容里不会出现这个字符」，
-   * 而标题与网址里什么字符都可能出现（实测：用空格拼时 `[a, b, a b]` 与 `[a b, a, b]` 拼出了同一个串，
-   * 该重画的就被「结构没变」跳过去了）。JSON 的转义是双射、数组结构自己就编码了「几条记录、谁是分组」，
-   * 于是连记录之间的分隔符都不需要。
-   *
-   * 天真的反例：以前用裸 NUL 当分隔符，既留下了那个「内容里不能有 NUL」的前提，
-   * 又让 ripgrep 把整个文件当二进制（**这个文件会从搜索结果里整个消失**），
-   * 还让编辑工具改不动这一段（`oldString` 表达不了裸控制字符）。这两件事都是实测踩到的。
-   *
-   * 代价是**字段要显式列出**——而这恰好是我们想要的：把整份快照直接塞进去会把 `lastAccessed`
-   * 也算上，而它每点一次标签就变，签名会永远在变，「结构没变就跳过重建」就彻底失效了。
+   * **勾选不在签名里**（由 `syncWindowStates()` 回填，算进去会「勾一下重绘整列」）；
+   * 但**行里画出来的东西一个都不能漏**（漏 `status` → 点「加载」后那行不变；漏 `pinned` → 图钉要等别的变化才出现）。
+   * 拼串用 `JSON.stringify`，**不自己定分隔符**——手写分隔符要求「内容里不会出现这个字符」，而标题与网址里什么都有
+   *（实测：空格拼时 `[a, b, a b]` 与 `[a b, a, b]` 撞成同一个串）；代价是字段要显式列出，而这恰好是想要的
+   *（整份快照会把每点一次就变的 `lastAccessed` 也算上）。细节见 `AGENTS.md` 第 27 条。
    */
   function windowSignatureOf(children: readonly WindowChild[]): string {
     return JSON.stringify(
@@ -674,11 +650,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   function renderWindow(): void {
-    // 结构没变就什么都不做。
-    //
-    // `refresh()` 会被频繁重跑（保存、删除、改名、拖一条收藏夹条目…），而它每次都要重建整个左栏：
-    // 用户的屏幕上就是一次无意义的整列重绘（实测：挪一根分隔线时「存过去 (N)」闪一下）。
-    // 凡是「由外部数据驱动、又会被频繁重跑」的渲染，都要先问一句：内容没变时能不能什么都不做。
+    // 结构没变就什么都不做：`refresh()` 会被频繁重跑（保存、删除、改名、拖一条收藏夹条目…），
+    // 每次重建整个左栏在屏幕上就是一次无意义的整列重绘（实测：挪一根分隔线时「存过去 (N)」闪一下）。
     const signature = windowSignatureOf(windowChildren) + '|' + (pendingCloseKey() ?? '')
     if (signature === windowSignature) {
       syncWindowStates()
@@ -688,9 +661,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
     if (windowChildren.length === 0) {
       windowList.innerHTML = '<li class="empty">当前窗口没有可保存的标签页。</li>'
-      // 早退时也要走同步：它里面会刷新全选框的文案与三态。
-      // 只调 `updateButtons()` 的话，全选框会停在上一次的数字上（实测换到没有标签的窗口时，
-      // 文案还写着上一个窗口的枚数）。
+      // 早退时也要走同步：全选框的文案与三态在它里面算。只调 `updateButtons()` 的话，
+      // 全选框会停在上一次的数字上（实测：换到没有标签的窗口时还写着上一个窗口的枚数）。
       syncWindowStates()
       return
     }
@@ -885,12 +857,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   })
 
   chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
-    // 只关心会改变这一行长相的字段。
-    //
-    // `status` 是必需的，不是顺手加的：卸载 / 正在加载 / 加载完三种状态各对应行尾的一种样子
-    // （「加载」/「加载中」/「释放」），而且它与 `discarded` **永远在同一个事件里
-    // 一起到达**（Chrome 那边同时插入两个 key）。少了它，点「加载」之后那行不会变，
-    // 看起来就是「点了没反应」。
+    // 只关心会改变这行长相的字段。`status` 是必需的：三档（「加载」/「加载中」/「释放」）各对应一种样子，
+    // 而它与 `discarded` 永远在同一个事件里到达；少了它，点「加载」后那行不变 → 看着像「点了没反应」。
     if (
       changeInfo.title !== undefined ||
       changeInfo.url !== undefined ||
@@ -913,8 +881,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     try {
       const result = await writeChildren(parentId, children)
       lastWrite = {folderIds: result.folderIds, bookmarkIds: result.bookmarkIds}
-      // 新存下的分组展开给自己看（存下去的是一整组，收起来那个文件夹看不出存了什么），
-      // 并把它滚进视野——写入总是追加到这一层的末尾，那一行往往在屏幕外。
+      // 新存下的分组展开给自己看，并滚进视野——写入总是追加到这一层末尾，那行往往在屏幕外。
       if (result.folderIds.length > 0) {
         archive.expandOnNextReload(result.folderIds, result.folderIds[0])
       }
@@ -932,9 +899,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   /**
-   * 撤销最近一次写入：先删新建的书签，再删新建的分组文件夹。
-   *
-   * 顺序不能反：删文件夹会连带删掉里面的书签，先删文件夹会让后面的书签 id 全部失效。
+   * 撤销最近一次写入。**顺序不能反**（见 `docs/design.md` 八）：删文件夹会连带删掉里面的书签，
+   * 先删文件夹会让后面的书签 id 全部失效。
    */
   async function undo(): Promise<void> {
     if (flags.busy || !lastWrite) return
@@ -962,12 +928,9 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   /**
    * 打开右栏当前勾选的内容。
    *
-   * 直接复用 `restoreFolder(当前层, …)`：当前层的直接子级就是还原计划要的那一层，
-   * 而排除集已经表达了「哪些不要」——所以这里不需要自己拼装标签与分组。
-   * 排除集是**跟随展示的层**的：换一层就自然换成那一层的选择，不会把别处的勾选悄悄带过来。
-   *
-   * 「建不建分组」不在这里决定，而是读上面那个「不建分组」复选框：
-   * 它与「开到哪里」是两个独立维度，所以不做成两个按钮。
+   * 直接复用 `restoreFolder(当前层, …)`：当前层的直接子级就是要还原的那一层，排除集已表达「哪些不要」。
+   * 排除集**跟随展示的层**：换一层就换成那一层的选择，不会把别处的勾选悄悄带过来。
+   * 「建不建分组」读复选框，不在这里定——它与「开到哪里」是两个独立维度。
    */
   async function openSelection(kind: RestoreKind): Promise<void> {
     const folderId = archive.currentFolderId()
@@ -1046,11 +1009,9 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   element.addEventListener('dragstart', (event) => {
     const dragged = draggedElement(event)
     if (!dragged || !event.dataTransfer) return
-    // 起点先在：两栏都有收藏夹条目，而载荷里只有 id——两栏停在同一层时
-    // 两边认得的是同一批 id，光看 id 真的分不出它来自哪一边。
+    // 起点先记：两栏都有收藏夹条目，而载荷里只有 id——两栏停在同一层时两边认得的是同一批 id。
     draggingPane = archivePaneAt(dragged)
-    // 多选时拖任意一条都是拖**整批**（Ctrl / Shift 选出来的那几条），
-    // 载荷里带的是规约过的顶层 id（被选中的文件夹的后代不再单列，否则会被搬两次）。
+    // 多选时拖任意一条都是拖**整批**，载荷里是规约过的顶层 id（否则同一棵子树会被搬两次）。
     const pickedIds = draggingPane?.dragIdsOf(dragged)
     const single = payloadOf(dragged)
     const payload: DragPayload | undefined = pickedIds
@@ -1059,13 +1020,12 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     if (!payload) return
 
     dragging = payload
-    // 栏内是「移动」、跨栏也是「移动」（F7 之后两栏之间搬东西就是 `bookmarks.move`）；
-    // 只有「拖到窗口里」是「开一份」，所以给 copyMove 让两边都收。
+    // 栏内是「移动」、跨栏也是「移动」；只有「拖到窗口里」是「开一份」，所以给 copyMove 让两边都收。
     event.dataTransfer.effectAllowed = 'copyMove'
     event.dataTransfer.setData(DRAG_TYPE, JSON.stringify(payload))
 
-    // 有网址时也写一份 `text/uri-list`，这样拖到浏览器别处（书签栏、地址栏）也有意义。
-    // 只有单条拖动才写：一批里可能有文件夹，而 `text/uri-list` 表达不了那种东西。
+    // 有网址时也写一份 `text/uri-list`，拖到浏览器别处（书签栏、地址栏）也有意义。
+    // 只有单条拖动才写：一批里可能有文件夹，而 `text/uri-list` 表达不了。
     const url = dragged.dataset.bookmarkUrl
     if (!pickedIds && url) event.dataTransfer.setData('text/uri-list', url)
     dragged.classList.add('is-dragging')
@@ -1079,16 +1039,14 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
   /**
    * 这个元素属于哪一个收藏夹栏。
-   *
-   * 两栏的 `.box` 都写着 `data-drop-pane="archive"`（它说的是「这一格收收藏夹条目」），
-   * 所以还得看它在哪个视图里。**不靠 id 前缀去猜**：那会把「模板怎么命名」变成隐式契约。
+   * 两栏的 `.box` 都写着 `data-drop-pane="archive"`（它说的是「这一格收收藏夹条目」）→ 还得看它在哪个视图里。
+   * **不靠 id 前缀去猜**（那会把「模板怎么命名」变成隐式契约）。
    */
   function archivePaneAt(target: HTMLElement): ArchivePane | undefined {
     const pane = target.closest<HTMLElement>('[data-drop-pane="archive"]')
     if (!pane) return undefined
     return pane.closest('#left-archive-view') ? leftArchive : archive
   }
-
 
   /** 左栏的落点：插到哪一格、归不归组。落在空白处则返回 `end`（追加到末尾）。 */
   function windowDropSpot(event: DragEvent): WindowDrop {
@@ -1130,20 +1088,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
 
   /**
-   * 一次拖动收不收，只看「拖的是什么」与「落在哪一栏」。
-   *
-   * 两栏其实**都收**内部拖动——栏内是挪、跨栏是存/开——所以这里只挡两件事：
-   * 既不是内部载荷、也没带网址（比如拖了一段文字），以及**写不进书签树根的右栏**。
-   * 剩下的区别只在「落下时做什么」与「提示画成什么样」，见 drop 处理器。
-   *
-   * 提示分三种，因为三种意图要看得出来不一样：
-   *   左栏：插入线（插到某一行前/后），或整组高亮（追加进这个分组）；
-   *   右栏：拖收藏夹条目过来时同上（那是「挪」）；拖标签过来时只有「进这一格 / 进这一层」（那是「存」）。
-   */
-  /**
-   * 这条载荷指向哪个节点（只有收藏夹那三类有）。
-   *
-   * 用来判「拖到自己那一行上了」——那种落点**什么都不该发生**（见 `overOwnRow`）。
+   * 这条载荷指向哪个节点（只有收藏夹那三类有）。用于判「拖到自己那一行上了」（见 `overOwnRow`）。
    */
   function payloadNodeId(payload: DragPayload | undefined): string | undefined {
     if (!payload) return undefined
@@ -1155,12 +1100,9 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   /**
    * 鼠标底下这一行就是被拖的那一行吗。
    *
-   * 是的话**不画任何提示，也不排序**：拖到自己身上本来就没有「换个位置」这回事
-   *（插到自己前面、插到自己后面，落点都是原位），而画一条插入线等于承诺了一件不会发生的事，
-   * 松手后还会报一句「已调整收藏夹顺序」——位置其实一动没动，那是双重假话。
-   *
-   * 窗口那一栏也一样：拖一枚标签到它自己那一行上也是原地不动。
-   * 只比「那一枚自己」，**不比整个分组**——分组的行有多枚，落在组内别的位置是正当的排序。
+   * 是的话**不画提示、也不排序**：拖到自己身上本来就没有「换个位置」这回事，画插入线等于承诺一件
+   * 不会发生的事，松手还会报「已调整收藏夹顺序」而位置没动（**双重假话**）。
+   * 窗口栏同理，但**只比那一枚自己不比整个分组**（组内别的位置是正当排序）。
    */
   function overOwnRow(event: DragEvent): boolean {
     if (!dragging) return false
@@ -1175,6 +1117,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   element.addEventListener('dragover', (event) => {
+    // 收不收只看「拖的是什么」与「落在哪一栏」。两栏**都收**内部拖动（栏内是挪、跨栏是存/开），
+    // 所以只挡两件事：既非内部载荷、也没带网址（比如拖了一段文字）；以及**写不进书签树根的右栏**。
     const pane = (event.target as HTMLElement).closest<HTMLElement>('[data-drop-pane]')
     if (!pane || !event.dataTransfer) return
 
@@ -1213,13 +1157,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       const spot = target.dropSpot(event)
       const samePane = draggingPane === target
       if (samePane && dragging && spot && !target.canDropAt(dragging, target.dropTargetId(spot))) {
-        /*
-         * 拖到自己或自己的子孙里：**整份拖拽直接拒收**。
-         *
-         * `dropEffect = 'none'` 不只是换个光标：按规范，拖拽的操作一旦是 none，
-         * 浏览器连 `drop` 事件都不会派发。所以这个落点真的收不了东西。
-         * 不这么做的话，用户会看到一条提示线、松手却什么都没发生。
-         */
+        // 拖到自己或自己的子孙里：拒收。`dropEffect = 'none'` 不只换光标：按规范，操作是 none 时
+        // 浏览器**连 `drop` 都不派发** → 这个落点真的收不了东西（否则用户会看到提示线、松手却什么都没发生）。
         event.dataTransfer.dropEffect = 'none'
         return
       }
@@ -1229,7 +1168,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
         return
       }
       if (spot?.kind === 'here') {
-        // 插入线画在**鼠标底下这一行**上：扁平渲染之后锚点就是它自己，不必再扫兄弟。
+        // 插入线画在**鼠标底下这一行**上：扁平渲染后锚点就是它自己，不必再扫兄弟。
         const anchor = (event.target as HTMLElement).closest<HTMLElement>(
           '[data-drop-row="bookmark"], [data-drop-row="folder"], [data-drop-row="separator"]'
         )
@@ -1288,11 +1227,11 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
     const toArchive = pane.dataset.dropPane === 'archive'
     const target = toArchive ? archivePaneAt(pane) : undefined
-    // 落点在清掉标记之前算完：drop 的 target 与坐标都只在这一次事件里有效。
+    // 落点在清掉标记之前算完：drop 的 target 与坐标只在这一次事件里有效。
     const archiveSpot = target ? target.dropSpot(event) : undefined
     const windowSpot = toArchive ? undefined : windowDropSpot(event)
-    // 兜底：正常路径上 `dragover` 已经把 dropEffect 置成 none、drop 不会派发，
-    // 但万一走到了这里也不能把「拖到自己身上」当成一次真的移动去报（位置根本没动）。
+    // 兜底：正常路径上 `dragover` 已把 dropEffect 置成 none、drop 不会派发，
+    // 但万一走到这里，也不能把「拖到自己身上」当真报成一次移动（位置根本没动）。
     const onOwnRow = overOwnRow(event)
 
     dragging = undefined
@@ -1331,13 +1270,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       await moveWindowTabs(payload, windowSpot ?? {kind: 'end'})
       return
     }
-    if (
-      payload?.kind === 'bookmark' ||
-      payload?.kind === 'folder' ||
-      payload?.kind === 'separator'
-    ) {
-      // 用**起点那一栏**的数据：能拖到窗口里的条目一定来自某个收藏夹实例，
-      // 而两栏各有一份自己的树（`nodeIndex`），拿错一份就找不到那个 id。
+    if (payload?.kind === 'bookmark' || payload?.kind === 'folder' || payload?.kind === 'separator') {
+      // 用**起点那一栏**的实例：两栏各有一份自己的 `nodeIndex`，拿错一份就找不到那个 id。
       await openArchiveInto(sourcePane ?? archive, payload, windowSpot ?? {kind: 'end'})
       return
     }
@@ -1387,12 +1321,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   /**
    * 把窗口里的标签挪到落点，并按落点所在的分组决定归组。
    *
-   * 落点只表达两件事（插到哪一格、归不归组），于是「拖出分组」「拖进分组」「在组内换位置」
-   * 都是同一条规则的不同结果，不需要各写一套。
-   *
-   * `tabs.move` 的 index 是**移动完成之后**的位置（`TabListInterface::MoveTab`：「Moves the tab to
-   * index」，而同一族的 `MoveGroupTo` 才特意注明「assumes the group has already been removed」）。
-   * 所以算插入位置时必须先把「原本排在锚点前面的、要拖的那几枚」减掉，否则向后拖会差一位。
+   * 落点只表达两件事（插到哪一格、归不归组）→「拖出分组」「拖进分组」「组内换位置」都是同一条规则的结果。
+   * `tabs.move` 的 index 是**移动之后**的位置 → 插入位置要先减掉「原本排在锚点前、要拖的那几枚」。
    */
   async function moveWindowTabs(payload: DragPayload, drop: WindowDrop): Promise<void> {
     if (flags.busy) return
@@ -1400,9 +1330,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     if (tabs.length === 0) return
     const tabIds = tabs.map((tab) => tab.tabId)
 
-    // 拖到自己身上 = 原地不动，而不是「与邻居交换」。
-    // `tabs.move` 的 index 是**移动之后**的位置，所以「拖到自己这一行的下缘」会算出
-    // 「自己 + 1」，真把标签往后挪一格；而用户看到的是自己根本没动过的位置（实测就是这一条）。
+    // 拖到自己身上 = 原地不动，而不是「与邻居交换」：index 是**移动之后**的位置，
+    // 所以「拖到自己这行的下缘」会算出「自己 + 1」，真把标签往后挪一格（实测踩到）。
     if (drop.kind === 'tab' && tabs.length === 1 && drop.anchorIndex === tabs[0].index) return
 
     const insertAt =
@@ -1414,7 +1343,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     updateButtons()
     try {
       await chrome.tabs.move(tabIdArg(tabIds), {index: Math.max(0, insertAt)})
-      // 归组跟着**落点所在的那一行**走：落点没有分组就拆组，有就归进去。
+      // 归组跟着**落点所在的那一行**走：没有分组就拆组，有就归进去。
       // 于是「拖进分组」「拖出分组」「在组内换位置」都是同一条规则的结果。
       if (drop.groupId === undefined) await chrome.tabs.ungroup(tabIdArg(tabIds))
       else await chrome.tabs.group({tabIds: tabIdArg(tabIds), groupId: drop.groupId})
@@ -1428,8 +1357,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   /**
-   * `chrome.tabs` 的类型把 `tabIds` 写成**非空**元组（`number | [number, ...number[]]`），
-   * 而这里每个调用点前面都已经确认过「至少有一枚标签」，直接转换即可。
+   * `chrome.tabs` 把 `tabIds` 写成**非空**元组，而每个调用点前面都已确认「至少有一枚标签」→ 直接转。
    */
   function tabIdArg(tabIds: readonly number[]): [number, ...number[]] {
     return tabIds as [number, ...number[]]
@@ -1437,9 +1365,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
   /**
    * 「插到第 anchor 枚标签前/后」对应的最终下标。
-   *
-   * `dragged` 是要挪的那几枚标签当前的下标：它们会先从数组里摘出去，
-   * 所以在锚点之前的那几枚都会让锚点前移一格。
+   * `dragged` 是那几枚当前的下标：它们会先从数组里摘出去 → 锚点之前的那几枚都会让它前移一格。
    */
   function anchorInsertIndex(anchor: number, after: boolean, dragged: readonly number[]): number {
     const removedBefore = dragged.filter((index) => index < anchor).length
@@ -1448,12 +1374,9 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   /**
-   * 落点解出「搬进哪一层」。
-   *
-   * 三种落点各有归属：`into` 是那个文件夹本身，`here` 是**它所在的那一层**（展开子级之后
-   * 这两者不是一回事），都不是就是目标栏当前这一层（追加到末尾）。
-   * 返回的 `index` 只对 `here` 有意义，而且直接就是 `bookmarks.move` 要的那个坐标系
-   * ——新旧父级不同，没有「同父下移要先减一」那回事。
+   * 落点解出「搬进哪一层」：`into` = 那个文件夹本身，`here` = **它所在的那一层**（展开子级后两者不是一回事），
+   * 都不是 = 目标栏当前这一层（追加末尾）。返回的 `index` 只对 `here` 有意义，
+   * 而且直接就是 `bookmarks.move` 要的坐标系（新旧父级不同，没有「同父下移先减一」那回事）。
    */
   function destOf(target: ArchivePane, spot: ArchiveDrop | undefined): {id: string; index?: number} {
     if (spot?.kind === 'into') return {id: spot.folderId}
@@ -1469,15 +1392,11 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   /**
    * 把一批选中的条目搬到目标那一层（多选拖动）。
    *
-   * **一律追加到目标层的末尾**，不认「插到第几格」：一批条目一起精确插入的语义很绕
-   *（相对顺序、同父下移时 index 要先减一…），而用户拖一批过来要说的是「搬到那一层」。
-   * 所以落点只用来解出**哪一层**（进那个文件夹 / 落在它所在的那一层 / 目标栏当前这一层）。
-   *
+   * **一律追加到目标层的末尾**，不认「插到第几格」：一批一起精确插入的语义很绕（相对顺序、
+   * 同父下移时 index 要先减一…），而用户拖一批过来要说的是「搬到那一层」→ 落点只用来解出**哪一层**。
    * 三种情况留在原地，而且都要说出来（不说的话用户看到的是「拖了但没动」）：
-   * - **已经在目标那一层的**：`bookmarks.move` 对同一个父级是**追加到末尾**，
-   *   而用户要的不是「把这几条排到最后」，所以跳过；
-   * - **要搬进它自己里面的文件夹**（会成环）；
-   * - 一条都搬不动时整件事直接说不做。
+   * 已在目标那一层的（`move` 对同父是**追加末尾**，而用户要的不是「排到最后」）、
+   * 要搬进它自己里面的（会成环）、一条都搬不动时整件事直接说不做。
    */
   async function movePickedTo(
     target: ArchivePane,
@@ -1530,12 +1449,11 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   /**
-   * 把一条收藏夹条目从一栏搬到另一栏——F7 的主要动作。
+   * 把一条收藏夹条目从一栏搬到另一栏（F7 的主要动作）。
    *
-   * 与栏内排序共用同一个 API（`chrome.bookmarks.move`），差别只在「目标层属于另一栏」。
-   * 所以这条路上没有 `canDropAt`：它查的是**本栏**那份父子索引，跨栏时里面根本没有源这一侧的节点。
-   * 于是自己沿目标那一层的父链走一遍（`getNodePath()` 就是那条链），命中就拒收——
-   * 让 Chrome 去抛错会在界面上留下「拖了但没动」而没有任何解释的痕迹。
+   * 与栏内排序共用 `bookmarks.move`，差别只在「目标层属于另一栏」→ 这条路上没有 `canDropAt`：
+   * 它查的是**本栏**那份父子索引，跨栏时里面没有源这一侧的节点。自己沿目标那一层的父链走一遍
+   * （`getNodePath()`）挡环——让 Chrome 抛错会在界面上留下「拖了但没动」而没有任何解释的痕迹。
    */
   async function moveAcrossPanes(
     target: ArchivePane,
@@ -1662,9 +1580,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
   /**
    * 切到某一枚标签（左栏行尾的「打开」）。
-   *
-   * 光 `tabs.update({active})` 只在**那一枚标签所在的窗口**里生效：主界面与它在不同的
-   * 浏览器窗口时，视口不会跟过去，看着就是「点了没反应」。所以还要把那扇窗口提到最前。
+   * 光 `tabs.update({active})` 只在**那一枚所在窗口**里生效：主界面与它不同窗口时视口不会跟过去，
+   * 看着就是「点了没反应」→ 还要把窗口提到最前。
    */
   async function switchToTab(tabId: number): Promise<void> {
     try {
@@ -1679,18 +1596,11 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   /**
    * 在后台把一枚已卸载的标签读出来（左栏行尾的「加载」）。
    *
-   * 对卸载掉的标签，`tabs.reload()` 就是「加载」：卸载时内容被丢掉、地址还记着，
-   * 重新加载它**不会切走**当前这一页（`active` 根本不动）——这正是这一栏要的动作。
-   * 「打开」也能让它加载，但那是**跳过去**：想先把几页读出来接着干别的就不行了。
+   * 对已卸载的标签，`tabs.reload()` 就是「加载」：内容丢了、地址还记着，重新加载**不会切走**当前页
+   *（`active` 根本不动）——这正是要的动作。「打开」也能加载，但那是**跳过去**。
    *
-   * 这条路是 Chrome 自己的 API 测试覆盖过的（`tabs/basics/discarded/discarded.js`：
-   * 「Tab is already discarded」→ `chrome.tabs.reload(id)` → 断言 `changeInfo.discarded` 为假）。
-   *
-   * 但要先说清楚**它能做到哪一步**：它只把「开始加载」这件事说出来。
-   * 网页标题是页面自己给的，什么时候给由网站决定——重 SPA（x.com 这类）在标签不可见时
-   * 往往走不到设置标题那一步，那些页面的标题要等用户切过去才更新。
-   * 这时行尾会停在「加载中」（而不是按钮无声消失），所以看上去是「还在加载」而不是「点了没反应」。
-   * 状态行也会说一句——不是报账，而是因为标题可能一直不来，得先说清楚请求已经发出去了。
+   * 它只能做到「开始加载」：标题是页面自己给的，重 SPA（x.com 这类）在标签不可见时往往走不到
+   * 设置标题那一步 → 行尾停在「加载中」（不是按钮无声消失），状态行也说一句。
    */
   async function loadTab(tabId: number): Promise<void> {
     try {
@@ -1702,23 +1612,13 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   /**
-   * 把一枚已加载的标签的内存交回去（左栏行尾的「释放」）。
+   * 把一枚已加载标签的内存交回去（左栏行尾的「释放」）。
    *
-   * 与「加载」是同一个 API 的逆方向：`chrome.tabs.discard()` 丢掉页面内容、保留地址与标题，
-   * 点开时才重新加载。这一栏是活着的标签的清单，几十枚页面同时驻留内存时，
-   * 「我还想看这几个，其余先放掉」是常有的需要。
-   *
-   * 两个不做的事：
-   *
-   * - **不给活动标签这个按钮**（见 `statusSlotMarkup()`）：它就在屏幕上，卸载马上会被读回来。
-   *   注意这不是 API 限制——`tabs.discard` 用的是 EXTERNAL 理由，连活动标签都是允许的
-   *   （`DiscardEligibilityPolicyTest.TestCannotDiscardActiveTab` 里只有 URGENT / PROACTIVE /
-   *   SUGGESTED 被算作受保护），所以这一条是**我们自己的选择**，不是防御。
-   * - **不写成功提示**：卸载 / 解除卸载由 Chrome 派发 `onUpdated{status, discarded}`，
-   *   那一行自己会变成「加载」，比文字更直接。
-   *
-   * 失败倒是要说话：它是有真实拒绝条件的（已是 unloaded、没有 WebContents、
-   * 有未提交的导航等待提交等），而且此时 Chrome 会抛 `Cannot discard tab with id: N`。
+   * 与「加载」是同一个 API 的逆方向：丢内容、保留地址与标题，点开才重新加载。
+   * 两个不做的事：**不给活动标签这个按钮**（它就在屏幕上；这不是 API 限制——`tabs.discard` 用
+   * EXTERNAL 理由，连活动标签都允许——是**我们自己的选择**）；**不写成功提示**（Chrome 会派发
+   * `onUpdated{status, discarded}`，那一行自己变成「加载」，比文字直接）。
+   * 失败要说：它有真实拒绝条件，那时 Chrome 抛 `Cannot discard tab with id: N`。
    */
   async function releaseTab(tabId: number): Promise<void> {
     try {
@@ -1731,13 +1631,9 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   /**
    * 一个分组里**全部**的标签 id。
    *
-   * 不能直接用界面上那个分组桶里的 tabId：`snapshotCurrentWindow()` 会把
-   * **浏览器内部页面**（`chrome://` / 扩展页面 / `devtools://`…）跳过，因为它们存不成书签。
+   * 不能用界面上那个分组桶：`snapshotCurrentWindow()` 会跳过**浏览器内部页面**（存不成书签）。
    * 存的时候跳过是对的，**关的时候跳就不对了**——关掉一个装着 `chrome://newtab` 的分组之后，
-   * 那一枚活了下来，于是**分组也跟着活了下来**（一个分组只要还剩一枚标签就不会消失）。
-   * 用户看到的就是「关了，分组还在」。
-   *
-   * 所以这里改成按 groupId 问浏览器要全量名单（`tabs.query({groupId})`，Chrome 88+）。
+   * 那一枚活了下来，**分组也跟着活了下来**（还剩一枚就不会消失）→ 用户看到「关了，分组还在」。
    */
   async function allTabIdsInGroup(groupId: number): Promise<number[]> {
     const tabs = await chrome.tabs.query({groupId})
@@ -1745,26 +1641,14 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   /**
-   * 关闭左栏里的一条标签或一整个分组（第二步确认之后才走到这里）。
+   * 关闭左栏里的一条标签或一整个分组（第二步确认之后才走到这里）。**不可逆**，没有「软关闭」。
    *
-   * **不可逆**，所以只有两步确认这一道门：关闭本身调 `chrome.tabs.remove`，
-   * 而它没有「软关闭」这回事。
+   * 分组**先解散再关闭**（`ungroup` → `remove`），顺序是有意的：解散让分组因为「空了」而消失，
+   * 连 Chrome 菜单里那份「已保存标签页群组」存档一起消掉；反过来先 `remove` 只会得到「关闭群组」
+   * 那个行为（存档保留）。2026-10-03 真实 Chrome 实测确认（机制与证据见 `/memories/chromium-upstream-bugs.md`）。
    *
-   * 分组**先解散（`tabs.ungroup`）再关闭（`tabs.remove`）**，顺序是有意的：
-   * 解散让这些标签先**离开**那个分组，于是分组是因为「空了」而消失，而不是因为「被关闭」。
-   * 这两条路径在 Chrome 里是分开处理的——关闭会留下「已保存标签页群组」的存档，
-   * 而 Chrome 菜单里那个「删除群组」删的正是那份存档。**扩展 API 里没有直接删存档的接口**
-   * （`chrome/common/extensions/` 里搜不到一处 `saved_tab_groups`，它存在 sync 层、不在书签树里），
-   * 但下面这条「先解散」的路径能**间接**达到同样的结果。
-   *
-   * **已实测确认（2026-10-03，真实 Chrome）**：这个顺序确实会让菜单里那份存档也消掉——
-   * 与浏览器菜单里的「删除群组」结果一致。机制没有查到确切的代码分支，但**顺序是关键**：
-   * 反过来先 `remove` 就只会得到那个「关闭」行为（存档保留）。所以这两行不能为了
-   * 「看着更顺」而交换，也不能图省事删掉 `ungroup`。
-   *
-   * 关闭之后**不等去抖就立刻重读窗口**：`onRemoved` 那条路要 120 ms（`WINDOW_REFRESH_DEBOUNCE_MS`），
-   * 而这一段时间里那一行还留在屏幕上、且停在新出现的「确认关闭」状态上——
-   * 看着就像「点了没反应」。直接 `refreshWindowOnly()` 一次只多一次 `tabs.query`。
+   * 关闭之后**不等去抖就立刻重读窗口**：`onRemoved` 那条路要 120ms，那段时间里那行还留在屏幕上、
+   * 且停在新出现的「确认关闭」状态上——看着就像「点了没反应」。
    */
   async function closeTarget(target: {kind: 'tab'; tabId: number} | {kind: 'group'; index: number}): Promise<void> {
     if (flags.busy) return
@@ -1791,15 +1675,12 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       return
     }
 
-    // 不置灰按钮：关闭几乎是瞬时的，而「置灰 → 恢复」会让一整排按钮闪一下
-    // （与 `moveArchiveNode` 同一个理由）。`busy` 只当防重入的闩。
+    // 不置灰按钮：关闭几乎是瞬时的，而「置灰 → 恢复」会让一整排按钮闪一下；`busy` 只当防重入的闩。
     flags.busy = true
     pendingClose = undefined
-    // 上面已经挡掉了空数组，而 `ungroup` 的签名要求「至少一个 id」（`[number, ...number[]]`），
-    // 所以这里可以安全地断言一次。
+    // 上面挡掉了空数组，而 `ungroup` 的签名要求「至少一个 id」→ 这里可以安全断言一次。
     const ids = tabIds as [number, ...number[]]
-    // 走到哪一步了：解散成功而关闭失败时要说清楚，否则用户看到「关闭失败」
-    // 会以为什么都没发生，而分组其实已经被解散了。
+    // 走到哪一步了：解散成功而关闭失败时要说清，否则用户看到「关闭失败」会以为什么都没发生。
     let ungrouped = false
     try {
       if (isGroup) {

@@ -70,11 +70,6 @@ export async function getChildren(id: string): Promise<BookmarkNode[]> {
   }
 }
 
-/** 同级已有文件夹名，交给 `dedupeName()` 去重。 */
-export async function getChildTitles(id: string): Promise<string[]> {
-  return (await getChildren(id)).map((child) => child.title)
-}
-
 export async function createFolder(parentId: string, title: string): Promise<BookmarkNode> {
   return toNode(await chrome.bookmarks.create({parentId, title}))
 }
