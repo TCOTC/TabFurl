@@ -21,22 +21,17 @@ export type TabGroupColor =
   | 'orange'
 
 /**
- * 标签的加载状态，取自 `chrome.tabs.Tab.status`。
- *
- * `unloaded` 就是「被 Chrome 卸载了」：内容被丢掉、地址还留着，点开才重新加载。
- * 用 `status` 而不是 `Tab.discarded`：两者在这个状态下等价（Chrome 自己的 API 测试断言
- * 卸载时 `status === 'unloaded'`），但 `status` 能把「正在加载」也表达出来，
- * 而界面恰好需要那一档（点过「加载」之后到页面给出标题之前）。
+ * 加载状态，取自 `chrome.tabs.Tab.status`。`unloaded` = 被 Chrome 卸载（内容丢掉、地址留着）。
+ * 用 `status` 不用 `Tab.discarded`：两者在「卸载」这档等价，但 `status` 能表达「正在加载」，
+ * 而界面恰好需要那档（点过「加载」之后到页面给出标题之前）。
  */
 export type TabStatus = 'unloaded' | 'loading' | 'complete'
 
 /** 采集到的一个标签页。 */
 export interface TabSnapshot {
   /**
-   * `chrome.tabs.Tab.id`。
-   *
-   * 界面里「保留哪几枚标签」用它做标识：标签 id 在标签存活期间不变，
-   * 而 `index` 会因为别的标签关闭而整体前移，不能拿它记住用户的勾选。
+   * `chrome.tabs.Tab.id`。界面里「保留哪几枚」用它做标识：id 在标签存活期间不变，
+   * 而 `index` 会因为别的标签关闭而整体前移，不能拿它记住勾选。
    */
   tabId: number
   title: string
@@ -46,31 +41,23 @@ export interface TabSnapshot {
   groupTitle?: string
   groupColor?: TabGroupColor
   /**
-   * 所属标签分组的 id；未分组时为 undefined。
-   *
-   * 与 `groupTitle` 是两件事：标题是给写入书签用的（分组名 → 文件夹名），
-   * 而这个 id 是给 `chrome.tabs.group()` 用的——把标签拖进某个分组必须给出 groupId，
-   * 拿标题去反查是不行的（同名分组合法存在）。
+   * 所属分组的 id；未分组时为 undefined。与 `groupTitle` 是两件事：标题是给写入书签用的
+   *（分组名 → 文件夹名），这个 id 是给 `tabs.group()` 用的——把标签拖进某个分组必须给 groupId，
+   * 拿标题反查不行（同名分组合法存在）。
    */
   groupId?: number
   /** 标签在窗口内的顺序，仅用于写入顺序与浏览器一致。 */
   index: number
   lastAccessed?: number
   /**
-   * 网页的加载状态（`Tab.status`）。
-   *
-   * 只给界面用：左栏的行尾据此决定给不给「加载」/「释放」（`unloaded` 时可点「加载」、
-   * `loading` 时显示「加载中」、`complete` 时显示「释放」）。
+   * 加载状态（`Tab.status`）。只给界面用：左栏行尾据此决定给不给「加载」/「释放」。
    * 不参与写入与还原——书签只认标题与网址。
    */
   status: TabStatus
   /**
-   * 这一枚是否是所在窗口的**活动**标签（`Tab.active`）。
-   *
-   * 只给界面用，而且只决定一件事：**活动标签不给「释放」**。
-   * 理由不是 API 拒绝（`tabs.discard` 用的 EXTERNAL 理由连活动标签都允许），
-   * 而是它就在屏幕上：卸载一个看得见的页面没意义（浏览器马上就会把它读回来）。
-   * Chromium 自己的 discards 页用的是同一条判据（`visibility !== VISIBLE`）。
+   * 是否是所在窗口的**活动**标签（`Tab.active`）。只给界面用，且只决定一件事：
+   * **活动标签不给「释放」**。理由不是 API 拒绝（`tabs.discard` 用的 EXTERNAL 理由连活动标签都允许），
+   * 而是它就在屏幕上（卸载看得见的页面没意义），判据与 Chromium 自己的 discards 页同源。
    */
   active: boolean
 }
@@ -83,10 +70,8 @@ export interface TabGroupBucket {
 }
 
 /**
- * 一次窗口采集的结果。
- *
- * `groups` 与 `ungrouped` 分开只是为了调用方好取用：两者都带着窗口内的位置
- * （`TabSnapshot.index`），按 `index` 归并就能还原标签在窗口里的真实先后。
+ * 一次窗口采集的结果。`groups` 与 `ungrouped` 分开只是为了调用方好取用：两者都带窗口内的位置
+ *（`TabSnapshot.index`），按 `index` 归并就能还原真实先后。
  */
 export interface WindowSnapshot {
   windowId: number
@@ -100,10 +85,8 @@ export interface WindowSnapshot {
 }
 
 /**
- * 一次写入的结果。
- *
- * 两个 id 数组是「撤销上一次保存」的全部依据：没有会话层之后，
- * 撤销就只能是「把这一次新建的东西删掉」，所以写入时必须把 id 收集起来。
+ * 一次写入的结果。两个 id 数组是「撤销上一次保存」的**全部依据**：没有会话层之后，
+ * 撤销只能是「把这次新建的东西删掉」，所以写入时必须把 id 收集起来。
  */
 export interface SaveResult {
   saved: number
@@ -158,13 +141,11 @@ export interface FolderOption {
 
 export interface Settings {
   /**
-   * 收藏的文件夹（书签树里的 id，按用户排的顺序）。数组里的第一个是右栏的**起点**。
-   *
-   * 它们只是**书签**，不是边界：右栏可以在书签树里自由导航（包括走到收藏**上面**的层），
-   * 写入跟的始终是当前展示的那一层。收藏在这里的意义就是「常用的那几层，一键跳过去」。
-   *
-   * 必须是用户明确收藏过的文件夹（只列书签栏及其后代），扩展不建根文件夹、也不往「其他书签」里写。
-   * id 是设备本地的，所以这一组随时可能失效，读出来之后要能容错（见 `refresh()` 的回退）。
+   * 收藏的文件夹（书签树 id，按用户排的顺序）；数组第一个是右栏的**起点**。
+   * 它们只是**书签**、不是边界：右栏可以在树里自由导航（包括走到收藏**上面**的层），
+   * 写入跟的一直是当前展示的那一层。
+   * 只能是书签栏及其后代（扩展不建根文件夹、也不往「其他书签」写）。
+   * id 是设备本地的 → 随时可能失效，读出来之后要能容错（见 `refresh()` 的回退）。
    */
   favoriteFolderIds: string[]
 }

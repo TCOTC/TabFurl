@@ -8,19 +8,16 @@ export interface PlannedBookmark {
   title: string
   url: string
   /**
-   * 这是一枚记号（分隔线或间隔，`isSeparatorUrl` 认出的那个占位书签）。
-   *
-   * 计划里**留着**它，是为了让其他按同一份计划遍历的地方不会漏掉一条（顺序即书签树顺序）；
+   * 这是一枚记号（分隔线或间隔，`isSeparatorUrl` 认出的占位书签）。
+   * 计划里**留着**它，是为了让按同一份计划遍历的地方不漏掉一条（顺序即书签树顺序）；
    * 但它不是要打开的页面：还原时跳过，计数时不算作标签。
    */
   separator: boolean
 }
 
 /**
- * 会话文件夹的一个直接子级。
- *
- * `title` 非空是标签分组（对应一个子文件夹）；空串是「这些标签不建分组」的散装书签
- * （窗口里本来就没分组）。数组顺序即书签树里的顺序，也就是原来窗口里的顺序。
+ * 一个直接子级。`title` 非空 = 标签分组（对应子文件夹）；空串 = 「这些标签不建分组」的散装书签。
+ * 数组顺序即书签树顺序，也就是原来窗口里的顺序。
  */
 export interface PlannedItem {
   /** 分组对应的子文件夹 id；散装书签项没有它。 */
@@ -46,14 +43,10 @@ export function restorableBookmarks(bookmarks: readonly PlannedBookmark[]): Plan
 }
 
 /**
- * 只处理一层子文件夹，与「按子文件夹（一层）创建分组」的需求一致。
- * 更深的嵌套会被跳过并计入 skipped，不会静默丢书签。
- *
- * 散装书签保留在它们原来的位置上（相邻的合并成一项），所以还原出来的窗口
- * 与保存时的标签顺序一致：未分组的标签不会被集中挪到末尾。
- *
- * 界面也用这份计划渲染勾选清单，所以「看到的」与「还原的」是同一口径。
- * 分隔线（见 `PlannedBookmark.separator`）照常留在原位供渲染，只是不会被打开。
+ * 只处理**一层**子文件夹（对应「按子文件夹创建分组」）。更深的嵌套计入 `skipped`，不静默丢书签。
+ * 散装书签保留在原位（相邻的合成一项）→ 还原出来的标签顺序与保存时一致。
+ * 界面也用这份计划渲染勾选清单 → 「看到的」与「还原的」同一口径。
+ * 分隔线（`PlannedBookmark.separator`）留在原位供渲染，只是不会被打开。
  */
 export function planRestore(folder: BookmarkNode): RestorePlan {
   const children = folder.children ?? []
@@ -94,11 +87,7 @@ export function planRestore(folder: BookmarkNode): RestorePlan {
   return {items, skipped}
 }
 
-/**
- * 剔除不还原的书签，并丢掉因此变空的分组。
- *
- * 界面算「将还原 N 个标签」与还原本身都走同一条路，两处口径不可能不一致。
- */
+/** 剔除不还原的书签，并丢掉因此变空的分组。界面算枚数与还原本身走同一条路 → 口径不可能不一致。 */
 export function applyExclusions(
   plan: RestorePlan,
   excludeBookmarkIds: ReadonlySet<string> | undefined
@@ -116,11 +105,7 @@ export function applyExclusions(
   }
 }
 
-/**
- * 按计划打开标签。
- *
- * 返回每一项拿到的 tabId，以及「保持加载的那一枚」——它是第一个标签，也就是活动标签。
- */
+/** 按计划打开标签，返回每项拿到的 tabId 与「保持加载的那一枚」（第一个标签 = 活动标签）。 */
 async function openTabs(
   planned: readonly PlannedItem[],
   target: RestoreOptions['target']
@@ -131,8 +116,7 @@ async function openTabs(
 }> {
   const created: {item: PlannedItem; tabIds: number[]}[] = []
 
-  // 「当前窗口」先取到 windowId，后续标签全部落在这里；
-  // 「新窗口」则留空，由第一个标签顺手把窗口建出来，避免先开空窗口再补标签的闪烁。
+  // 「新窗口」留空 windowId，由第一个标签顺手把窗口建出来，避免先开空窗口再补标签的闪烁。
   let windowId: number | undefined
   if (target === 'currentWindow') {
     windowId = (await chrome.windows.getCurrent()).id
@@ -145,7 +129,7 @@ async function openTabs(
     const tabIds: number[] = []
 
     for (const {url, separator} of item.bookmarks) {
-      // 分隔线是个占位书签，打开它只会多一个无用标签。渲染照旧，打开时跳过。
+      // 分隔线是占位书签，打开它只会多一个无用标签 → 渲染照旧，打开时跳过。
       if (separator) continue
 
       // 第一个标签无论哪种模式都会成为活动标签；它不能（也不该）被舍弃。
@@ -190,11 +174,8 @@ export interface DiscardTiming {
 }
 
 /**
- * 默认节奏：每 50ms 问一次，最多等 2 秒。
- *
- * 超时是**为了让状态栏不至于卡太久**：整个 `restoreFolder` 是同步等的，
- * 只要有一枚标签迟迟不提交（比如对方服务器没响应），用户就会一直看着「正在打开…」。
- * 2 秒足够覆盖正常站点的提交，超时的那些就干脆留着加载。
+ * 默认节奏：每 50ms 问一次，最多等 2 秒。超时是为了**状态栏不至于卡太久**：`restoreFolder` 是同步等的，
+ * 只要有一枚迟迟不提交（对方服务器没响应），用户就一直看着「正在打开…」。超时的就干脆留着加载。
  */
 const DEFAULT_DISCARD_TIMING: DiscardTiming = {pollMs: 50, timeoutMs: 2000}
 
@@ -203,10 +184,9 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
- * 标签的导航是否**已提交**（因而可以安全舍弃）。
- *
- * `Tab.url` 是「主框架的**上次已提交**网址」；尚未提交时它是空串，目标地址只出现在 `pendingUrl` 里。
- * 三个条件都要满足，取最保守的一支：宁可少舍弃几枚，也不能丢掉地址。
+ * 导航是否**已提交**（因而可以安全舍弃）。
+ * `Tab.url` 是「主框架**上次已提交**的网址」，未提交时是空串、目标只在 `pendingUrl` 里。
+ * 三个条件取最保守的一支：宁可少舍弃几枚，也不能丢掉地址。
  */
 function isCommitted(tab: chrome.tabs.Tab): boolean {
   return Boolean(tab.url) && tab.url !== 'about:blank' && tab.pendingUrl === undefined
@@ -215,14 +195,12 @@ function isCommitted(tab: chrome.tabs.Tab): boolean {
 /**
  * 把**已提交导航**的标签舍弃掉——它们仍留在标签栏里，点开时才真正加载。
  *
- * **为什么需要这一步**：`chrome.tabs.create()` 没有「先不加载」的选项，传了 `url` 就立即开始加载，
- * 所以一次还原几十个标签会造成瞬时并发加载而卡顿。`chrome.tabs.discard()` 正是这个语义。
+ * `tabs.create()` 没有「先不加载」选项（传了 `url` 就立即加载），一次还原几十个标签会并发加载卡顿
+ * → `tabs.discard()` 正是这个语义。**但必须先等导航提交**：`discard` 是靠**已提交的地址**
+ * 在激活时重载，标签还没有已提交地址时 Chrome 没有可恢复的地址 → 标签变成 `about:blank`
+ *（2026-10-03 实测到的 bug，不是推测）→ 所以轮询到 `url` 有值才动手，超时就不碰它。
  *
- * **为什么必须先等导航提交**：`discard` 的语义是「卸载已加载的内容，激活时按记录的地址重新加载」。
- * 若标签还在加载、没有任何**已提交**的地址，Chrome 就没有可恢复的地址，标签会变成 `about:blank`。
- * （2026-10-03 实测到的 bug，不是推测。）所以这里轮询到 `url` 有值才动手，超时就干脆不碰它。
- *
- * **活动标签无法被舍弃**（API 限制），所以每个窗口会留下一枚已加载的——这正好让人看得见窗口确实开出来了。
+ * **活动标签无法被舍弃**（API 限制），每个窗口会留一枚已加载的。
  */
 export async function discardCommittedTabs(
   tabIds: readonly number[],
@@ -268,16 +246,13 @@ export async function discardCommittedTabs(
 }
 
 /**
- * @types/chrome 把 tabs.group 的 tabIds 声明为非空元组，这里收窄成实际语义：
- * 调用方已保证入参非空，直接断言比在每个调用点展开元组更干净。
+ * `@types/chrome` 把 `tabs.group` 的 tabIds 声明为非空元组；调用方已保证非空 → 直接断言比每个调用点展开元组干净。
  */
 function asNonEmptyTabIds(tabIds: readonly number[]): [number, ...number[]] {
   return tabIds as unknown as [number, ...number[]]
 }
 
-/**
- * 建标签分组。`title` 为空的项是散装标签，本来就不该有分组。
- */
+/** 建标签分组。`title` 为空的项是散装标签，本来就不该有分组。 */
 async function applyGroups(
   created: readonly {item: PlannedItem; tabIds: number[]}[],
   windowId: number | undefined
@@ -304,9 +279,8 @@ async function applyGroups(
 }
 
 /**
- * 把一个存档文件夹还原成窗口，或只开标签页（`groupTabs: false`）。
- *
- * 传 `excludeBookmarkIds` 时，被勾掉的书签不会打开；因此变空的分组也不会创建。
+ * 把一个文件夹还原成窗口，或只开标签页（`groupTabs: false`）。
+ * 传 `excludeBookmarkIds` 时，被勾掉的书签不打开，因此变空的分组也不创建。
  */
 export async function restoreFolder(
   folderId: string,
@@ -350,17 +324,12 @@ async function currentWindowId(
 /**
  * 在浏览器自带书签管理器里打开这个文件夹。
  *
- * 它取代了早期的「阅读页」（扩展自己渲染一整页卡片）：那等于长期维护第二个界面，
- * 而它想解决的问题（看一层文件夹的全貌、批量整理）浏览器本来就做得更好——
- * 集成已经存在的能力，比自己再实现一遍更合适（见 docs/design.md 二）。
+ * 它取代了早期的「阅读页」（扩展自己渲染一整页卡片）：那等于长期维护第二个界面，而它想解决的问题
+ *（看一层文件夹的全貌、批量整理）浏览器做得更好。详细论证见 `docs/design.md` 七。
+ * 传的是数字 id（`?id=` 认它；154.x 上「落在默认层」是上游回归，见 `bookmarkManagerUrl`）。
  *
- * 传的是 `chrome.bookmarks` 给的动作 id，管理器的 `?id=` 认它（见 `bookmarkManagerUrl`）。
- * 注意 Chrome 154.x 上这个入口有个已知回归（issue 565829425），**155.0.8059.26 已修**——
- * 在旧版上会看到「落在默认层」，不是我们的 bug。
- *
- * `chrome://` 不能无脑跳：扩展的访问被限制在一份白名单里。所以这里只试新开一页，
- * 被挡下来时抛一句**可操作**的错（告知快捷键），而不是静默失败——
- * 弹一句 API 的原始错误对用户没有任何用。
+ * `chrome://` 不能无脑跳（扩展的访问被限制在白名单里）→ 被挡下来时抛一句**可操作**的错（告知快捷键），
+ * 而不是把 API 的原始错误丢给用户。
  */
 export async function openInBookmarkManager(folderId: string): Promise<void> {
   try {
