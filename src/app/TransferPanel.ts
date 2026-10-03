@@ -1126,6 +1126,40 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    *   左栏：插入线（插到某一行前/后），或整组高亮（追加进这个分组）；
    *   右栏：拖收藏夹条目过来时同上（那是「挪」）；拖标签过来时只有「进这一格 / 进这一层」（那是「存」）。
    */
+  /**
+   * 这条载荷指向哪个节点（只有收藏夹那三类有）。
+   *
+   * 用来判「拖到自己那一行上了」——那种落点**什么都不该发生**（见 `overOwnRow`）。
+   */
+  function payloadNodeId(payload: DragPayload | undefined): string | undefined {
+    if (!payload) return undefined
+    return payload.kind === 'bookmark' || payload.kind === 'folder' || payload.kind === 'separator'
+      ? payload.id
+      : undefined
+  }
+
+  /**
+   * 鼠标底下这一行就是被拖的那一行吗。
+   *
+   * 是的话**不画任何提示，也不排序**：拖到自己身上本来就没有「换个位置」这回事
+   *（插到自己前面、插到自己后面，落点都是原位），而画一条插入线等于承诺了一件不会发生的事，
+   * 松手后还会报一句「已调整收藏夹顺序」——位置其实一动没动，那是双重假话。
+   *
+   * 窗口那一栏也一样：拖一枚标签到它自己那一行上也是原地不动。
+   * 只比「那一枚自己」，**不比整个分组**——分组的行有多枚，落在组内别的位置是正当的排序。
+   */
+  function overOwnRow(event: DragEvent): boolean {
+    if (!dragging) return false
+    const target = event.target as HTMLElement
+    if (dragging.kind === 'tab') {
+      const row = target.closest<HTMLElement>('[data-drop-row="tab"]')
+      return row?.dataset.dragTab === String(dragging.tabId)
+    }
+    const id = payloadNodeId(dragging)
+    if (id === undefined) return false
+    return target.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId === id
+  }
+
   element.addEventListener('dragover', (event) => {
     const pane = (event.target as HTMLElement).closest<HTMLElement>('[data-drop-pane]')
     if (!pane || !event.dataTransfer) return
@@ -1143,6 +1177,15 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       dragging?.kind === 'bookmark' ||
       dragging?.kind === 'folder' ||
       dragging?.kind === 'separator'
+
+    // 拖到自己那一行上：拒收。`dropEffect = 'none'` 按规范会让浏览器**连 drop 都不派发**，
+    // 所以上面那一句就不只是提示了，而是真的什么都没发生。
+    if ((toArchive && fromArchive) || (!toArchive && dragging?.kind === 'tab')) {
+      if (overOwnRow(event)) {
+        event.dataTransfer.dropEffect = 'none'
+        return
+      }
+    }
 
     event.preventDefault()
     // 从窗口拖过去是「存一份」（复制），收藏夹之间是「搬」（移动）。
@@ -1232,6 +1275,9 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     // 落点在清掉标记之前算完：drop 的 target 与坐标都只在这一次事件里有效。
     const archiveSpot = target ? target.dropSpot(event) : undefined
     const windowSpot = toArchive ? undefined : windowDropSpot(event)
+    // 兜底：正常路径上 `dragover` 已经把 dropEffect 置成 none、drop 不会派发，
+    // 但万一走到了这里也不能把「拖到自己身上」当成一次真的移动去报（位置根本没动）。
+    const onOwnRow = overOwnRow(event)
 
     dragging = undefined
     draggingPane = undefined
@@ -1240,6 +1286,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     if (target) {
       if (!target.isWritable()) return
       if (payload?.kind === 'bookmark' || payload?.kind === 'folder' || payload?.kind === 'separator') {
+        // 拖到自己身上：位置本来就没变，什么都不做（也就不会报「已调整收藏夹顺序」）。
+        if (onOwnRow) return
         // 收藏夹条目落到收藏夹上：
         //   同栏 = **挪**（同一个东西在它自己那一层里换位置）；
         //   跨栏 = 搬到对面那一层。两件事用的是同一个 API，只是目标层不同。
@@ -1255,8 +1303,10 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       return
     }
 
-    // 落到左栏。
+    // 落到窗口那一栏。
     if (payload?.kind === 'tab' || payload?.kind === 'group') {
+      // 拖到标签自己那一行上：也是原地不动（`moveWindowTabs` 里本来就有这条早退，这里只是不再画线）。
+      if (onOwnRow) return
       await moveWindowTabs(payload, windowSpot ?? {kind: 'end'})
       return
     }
