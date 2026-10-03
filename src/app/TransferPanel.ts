@@ -185,6 +185,9 @@ const TEMPLATE = `
               <button type="button" class="btn btn--ghost btn--sm" id="new-gap-btn"
                       title="在当前位置插一条间隔（横线，给竖向排列的列表用）">＋ 间隔</button>
               <button type="button" class="btn btn--ghost btn--sm" id="open-root-btn" hidden>打开书签管理器</button>
+              <!-- 与左栏一样：标签变化会自动重读，这个按钮只是「界面看着不对」时的一手。 -->
+              <button type="button" class="btn btn--ghost btn--icon" id="archive-refresh-btn"
+                      title="重新读取书签树" aria-label="重新读取书签树">${REFRESH_ICON}</button>
             </div>
           </div>
           <!-- 在书签树根上时写入入口会是灰的，用一句话说明为何以及怎么退出去。 -->
@@ -247,6 +250,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   const newSeparatorButton = q<HTMLButtonElement>(element, '#new-separator-btn')
   const newGapButton = q<HTMLButtonElement>(element, '#new-gap-btn')
   const openRootButton = q<HTMLButtonElement>(element, '#open-root-btn')
+  const archiveRefreshButton = q<HTMLButtonElement>(element, '#archive-refresh-btn')
   const status = q<HTMLSpanElement>(element, '#status')
 
   const windowSelectAll = createSelectAll(q<HTMLDivElement>(element, '#window-all-host'), {
@@ -442,7 +446,10 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
     if (windowChildren.length === 0) {
       windowList.innerHTML = '<li class="empty">当前窗口没有可保存的标签页。</li>'
-      updateButtons()
+      // 早退时也要走同步：它里面会刷新全选框的文案与三态。
+      // 只调 `updateButtons()` 的话，全选框会停在上一次的数字上（实测换到没有标签的窗口时，
+      // 文案还写着上一个窗口的枚数）。
+      syncWindowStates()
       return
     }
 
@@ -695,7 +702,9 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     if (!viewFolderId) {
       archiveList.innerHTML =
         '<li class="empty">读不到书签栏，右栏无法显示内容。</li>'
-      updateButtons()
+      // 早退分支**必须**也调同步：全选框的文案与三态在它里面算，
+      // 漏掉就会停在上一次的层（实测从一层进到空文件夹时，右上角还写着「已选 0 / 234 个标签页」）。
+      syncArchiveStates()
       return
     }
 
@@ -703,7 +712,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       archiveList.innerHTML = canWrite()
         ? '<li class="empty">这个文件夹还是空的。把左侧的标签拖过来即可存下。</li>'
         : '<li class="empty">这里是书签树的根，只能往下走。点下面的「书签栏」进去吧。</li>'
-      updateButtons()
+      syncArchiveStates()
       return
     }
 
@@ -1825,6 +1834,18 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       // 这里的错误文案是写给用户看的（含快捷键），不是 API 的原文，所以直接展示。
       setStatus(status, errorText(error), 'error')
     }
+  })
+
+  /**
+   * 右栏的刷新按钮。
+   *
+   * 走的是与别处**同一个** `refresh()`：它既重读书签树（用户在书签管理器里改了东西时用得上），
+   * 也重新算一次落点（当前层被删掉时会退回第一个可用收藏）。
+   * 与左栏那个一样**不置灰**：正因为「界面看着不对」才点它。
+   */
+  archiveRefreshButton.addEventListener('click', async () => {
+    await refresh()
+    setStatus(status, '已刷新。', 'ok')
   })
 
   newFolderButton.addEventListener('click', async () => {
