@@ -10,6 +10,18 @@ import {
 } from './bookmarks'
 import {SEPARATOR_URL} from './urls'
 
+/**
+ * 取第 `index` 项，并断言它存在。
+ *
+ * `noUncheckedIndexedAccess` 下 `items[index]` 是 `T | undefined`——那是**对的**（越界真的可能），
+ * 所以这里写一条明确的断言，而不是用 `!` 把它压掉。
+ */
+function at<T>(items: readonly T[], index: number): T {
+  const value = items[index]
+  assert.ok(value !== undefined, `第 ${index} 项不存在`)
+  return value
+}
+
 interface StubNode {
   id: string
   title: string
@@ -126,8 +138,8 @@ test('getNodePath 的根节点用「书签」兜底，不留空白格', async ()
 
   const path = await getNodePath('1')
   // 真实书签树里根的 title 是空串。
-  assert.equal(path[0].title, '书签')
-  assert.equal(path[0].id, '0')
+  assert.equal(at(path, 0).title, '书签')
+  assert.equal(at(path, 0).id, '0')
 })
 
 test('getNodePath 取的是 id 而不只是标题，面包屑才能做成链接', async () => {
@@ -174,7 +186,8 @@ test('listBookmarkBarFolders 的 path 不含书签栏，层级用 path 表达', 
 test('listBookmarkBarFolders 的计数只算直属书签，总数递归到后代', async () => {
   stubChrome(TREE)
   const {folders} = await listBookmarkBarFolders()
-  const [bar, archive] = folders
+  const bar = at(folders, 0)
+  const archive = at(folders, 1)
 
   assert.equal(bar.bookmarkCount, 1, '书签栏直属只有「书签A」')
   assert.equal(bar.folderCount, 2, '存档、空的')
@@ -188,7 +201,8 @@ test('listBookmarkBarFolders 的计数只算直属书签，总数递归到后代
 test('分隔线不算书签：计数里看不到它，但它照旧留在书签树里', async () => {
   stubChrome(TREE)
   const {folders} = await listBookmarkBarFolders()
-  const [bar, archive] = folders
+  const bar = at(folders, 0)
+  const archive = at(folders, 1)
 
   // 两个文件夹里各插了一枚分隔线（id 15 / 16），上面的数字与没插时一模一样——
   // 这正是回归点：若哪天又用「有没有 url」当「是不是书签」，这四个数字就会各多 1。

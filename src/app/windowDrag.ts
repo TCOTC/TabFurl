@@ -102,7 +102,10 @@ export function moveIndexFor(
   totalTabs: number
 ): number | undefined {
   if (dragged.length === 0) return undefined
-  if (drop.kind === 'tab' && dragged.length === 1 && drop.anchorIndex === dragged[0].index) {
+  // 只有**一枚**时才可能「拖到自己身上」：分组拖到组内某一枚的位置上是正当的排序。
+  // （`dragged[0]` 在 `noUncheckedIndexedAccess` 下是 `T | undefined`，所以先解构再判。）
+  const [only] = dragged
+  if (drop.kind === 'tab' && dragged.length === 1 && only && drop.anchorIndex === only.index) {
     return undefined
   }
   if (drop.kind === 'end') return totalTabs - dragged.length

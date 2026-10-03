@@ -59,7 +59,7 @@ export function rangeBetween(
   const ids: string[] = []
   for (let index = start; index <= end; index++) {
     const row = rows[index]
-    if (row.kind === 'node') ids.push(row.node.id)
+    if (row?.kind === 'node') ids.push(row.node.id)
   }
   return ids
 }

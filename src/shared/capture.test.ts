@@ -8,6 +8,18 @@ import {
   writeChildren
 } from './capture'
 
+/**
+ * 取第 `index` 项，并断言它存在。
+ *
+ * `noUncheckedIndexedAccess` 下 `items[index]` 是 `T | undefined`——那是**对的**（越界真的可能），
+ * 所以这里写一条明确的断言，而不是用 `!` 把它压掉。
+ */
+function at<T>(items: readonly T[], index: number): T {
+  const value = items[index]
+  assert.ok(value !== undefined, `第 ${index} 项不存在`)
+  return value
+}
+
 interface StubTab {
   /**
    * 它同时被当作 `TabSnapshot` 用（分组里的标签直接来自快照），
@@ -129,8 +141,8 @@ test('snapshotCurrentWindow 按 groupId 分桶，不按标题合并', async () =
 
   assert.equal(snapshot.windowId, 7)
   assert.equal(snapshot.groups.length, 2, '同名不同 groupId 必须是两个桶')
-  assert.equal(snapshot.groups[0].color, 'blue')
-  assert.equal(snapshot.groups[1].color, 'red')
+  assert.equal(at(snapshot.groups, 0).color, 'blue')
+  assert.equal(at(snapshot.groups, 1).color, 'red')
   assert.equal(snapshot.ungrouped.length, 1)
   assert.equal(snapshot.skipped, 1)
 })
@@ -148,11 +160,11 @@ test('加载状态与活动标记被带进快照；status 缺失时算作已加�
   const snapshot = await snapshotCurrentWindow()
 
   // 缺字段时不能误判成「已卸载」，否则每一行都会冒出一个「加载」按钮。
-  assert.equal(snapshot.ungrouped[0].status, 'complete')
-  assert.equal(snapshot.ungrouped[1].status, 'unloaded')
+  assert.equal(at(snapshot.ungrouped, 0).status, 'complete')
+  assert.equal(at(snapshot.ungrouped, 1).status, 'unloaded')
   // 活动标记决定给不给「释放」，与 status 是两件事。
-  assert.equal(snapshot.ungrouped[0].active, false)
-  assert.equal(snapshot.ungrouped[2].active, true)
+  assert.equal(at(snapshot.ungrouped, 0).active, false)
+  assert.equal(at(snapshot.ungrouped, 2).active, true)
 })
 
 test('分组元数据取不到时退化为空标题，不抛错', async () => {
@@ -160,8 +172,8 @@ test('分组元数据取不到时退化为空标题，不抛错', async () => {
 
   const snapshot = await snapshotCurrentWindow()
 
-  assert.equal(snapshot.groups[0].title, '')
-  assert.equal(snapshot.groups[0].color, undefined)
+  assert.equal(at(snapshot.groups, 0).title, '')
+  assert.equal(at(snapshot.groups, 0).color, undefined)
 })
 
 test('内部页面在快照阶段就被过滤，写不进去', async () => {
@@ -252,7 +264,7 @@ test('writeChildren 把分组写成子文件夹，散装标签留在那一层', 
   ])
 
   assert.deepEqual(shape(childrenOf(created, PARENT_FOLDER)), ['文件夹:工作', '书签:https://loose.com'])
-  const work = foldersOf(created)[0]
+  const work = at(foldersOf(created), 0)
   assert.deepEqual(shape(childrenOf(created, work.id)), [
     '书签:https://a1.com',
     '书签:https://a2.com'
@@ -304,7 +316,7 @@ test('writeChildren 收集新建的 id，供撤销使用', async () => {
     {kind: 'tab', tab: plainTab(2, 'https://b.com')}
   ])
 
-  const work = foldersOf(created)[0]
+  const work = at(foldersOf(created), 0)
   assert.deepEqual(result.folderIds, [work.id])
   assert.deepEqual(
     result.bookmarkIds,
@@ -363,8 +375,8 @@ test('selectTabs 剔除被勾掉的标签，并丢掉因此变空的分组', asy
   const kept = selectTabs(snapshot, new Set([2, 4, 3]))
 
   assert.equal(kept.groups.length, 1, '「阅读」整组被勾掉后应消失')
-  assert.equal(kept.groups[0].title, '工作')
-  assert.deepEqual(kept.groups[0].tabs.map((tab) => tab.url), ['https://a1.com'])
+  assert.equal(at(kept.groups, 0).title, '工作')
+  assert.deepEqual(at(kept.groups, 0).tabs.map((tab) => tab.url), ['https://a1.com'])
   assert.deepEqual(kept.ungrouped, [], '散装标签也被勾掉了')
 
   assert.equal(snapshot.groups.length, 2, 'selectTabs 不改动传入的快照')

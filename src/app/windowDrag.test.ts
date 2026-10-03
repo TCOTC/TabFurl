@@ -2,7 +2,18 @@ import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import type {WindowChild} from '../shared/capture'
 import type {TabSnapshot} from '../shared/types'
-import type {DragPayload} from './dom'
+
+/**
+ * 取第 `index` 项，并断言它存在。
+ *
+ * `noUncheckedIndexedAccess` 下 `items[index]` 是 `T | undefined`——那是**对的**（越界真的可能），
+ * 所以这里写一条明确的断言，而不是用 `!` 把它压掉。
+ */
+function at<T>(items: readonly T[], index: number): T {
+  const value = items[index]
+  assert.ok(value !== undefined, `第 ${index} 项不存在`)
+  return value
+}
 
 // `icons.ts` 里没有模块级 chrome 调用，但 `windowMarkup` 会拉 `tile.ts`——
 // 它只用 `urls.ts` 的纯函数，所以这里不需要桩。留个空桩以防将来变化。
@@ -65,14 +76,16 @@ test('payloadNodeId：只有收藏夹那三类有节点 id', () => {
 test('childrenFor：拖整个分组就是整个分组', () => {
   const children = childrenFor({kind: 'group', index: 1}, sampleChildren())
   assert.equal(children.length, 1)
-  assert.equal(children[0].kind === 'group' ? children[0].name : '', '工作')
+  const first = at(children, 0)
+  assert.equal(first.kind === 'group' ? first.name : '', '工作')
 })
 
 test('childrenFor：从分组里拖**单枚**标签出来，只写这一枚（不把整组建一遍）', () => {
   const children = childrenFor({kind: 'tab', tabId: 3}, sampleChildren())
   assert.equal(children.length, 1)
-  assert.equal(children[0].kind, 'tab')
-  assert.equal(children[0].kind === 'tab' ? children[0].tab.tabId : 0, 3)
+  const first = at(children, 0)
+  assert.equal(first.kind, 'tab')
+  assert.equal(first.kind === 'tab' ? first.tab.tabId : 0, 3)
 })
 
 test('childrenFor：找不到那一条时返回空（调用方据此不改任何东西）', () => {

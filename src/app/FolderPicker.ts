@@ -118,9 +118,11 @@ export function createFolderPicker(options: {
   function highlight(next: number): void {
     if (rows.length === 0) return
     const bounded = (next + rows.length) % rows.length
+    // `bounded` 一定落在范围内（上面已挡掉空表），这个守卫只是把那个前提写给类型看。
+    const row = rows[bounded]
+    if (!row) return
     rows[active]?.classList.remove('is-active')
     active = bounded
-    const row = rows[active]
     row.classList.add('is-active')
     row.scrollIntoView({block: 'nearest'})
   }

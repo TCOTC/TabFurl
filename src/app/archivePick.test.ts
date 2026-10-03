@@ -4,6 +4,18 @@ import {pickOwnerOf, rangeBetween, topLevelPicked} from './archivePick'
 import {flattenArchive} from './archiveRows'
 import type {BookmarkNode} from '../shared/types'
 
+/**
+ * 取第 `index` 项，并断言它存在。
+ *
+ * `noUncheckedIndexedAccess` 下 `items[index]` 是 `T | undefined`——那是**对的**（越界真的可能），
+ * 所以这里写一条明确的断言，而不是用 `!` 把它压掉。
+ */
+function at<T>(items: readonly T[], index: number): T {
+  const value = items[index]
+  assert.ok(value !== undefined, `第 ${index} 项不存在`)
+  return value
+}
+
 const folder = (id: string, children: BookmarkNode[] = []): BookmarkNode => ({id, title: id, children})
 const bookmark = (id: string): BookmarkNode => ({id, title: id, url: `https://${id}.test/`})
 
@@ -48,7 +60,7 @@ test('pickOwnerOf：文件夹被选中时，它的后代行归到它名下（共
 
 test('pickOwnerOf：空选择集时谁都不归', () => {
   const rows = flattenArchive(sampleTree(), 'root', new Set())
-  assert.equal(pickOwnerOf(rows[0], new Set(), parentIndex(sampleTree())), undefined)
+  assert.equal(pickOwnerOf(at(rows, 0), new Set(), parentIndex(sampleTree())), undefined)
 })
 
 test('rangeBetween：按**可见顺序**取范围，展开出来的子级也在范围内', () => {

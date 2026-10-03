@@ -330,15 +330,18 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
       if (index < 0 || index >= archiveRows.length) return false
       const hit = boxCache.get(index)
       if (hit !== undefined) return hit
-      const value = pickOwnerOf(archiveRows[index], top, parentById) !== undefined
+      const row = archiveRows[index]
+      const value = row !== undefined && pickOwnerOf(row, top, parentById) !== undefined
       boxCache.set(index, value)
       return value
     }
     for (let index = first; index < last; index++) {
+      const row = archiveRows[index]
+      if (!row) break
       const pickCls = inBoxAt(index)
         ? ` is-picked${inBoxAt(index - 1) ? '' : ' is-picked-start'}${inBoxAt(index + 1) ? '' : ' is-picked-end'}`
         : ''
-      parts.push(archiveRowMarkup(archiveRows[index], markupContext(), pickCls))
+      parts.push(archiveRowMarkup(row, markupContext(), pickCls))
     }
     const rest = total - last * height
     if (rest > 0) parts.push(`<li class="vpad" style="height:${rest}px"></li>`)

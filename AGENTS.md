@@ -15,7 +15,7 @@ AI 协作者的工程约定。**动手前先读 `docs/design.md`**（需求范�
 | 构建工具 | `extension` **4.1.30**（精确版本，勿升级） |
 | Node | >= 22.12（extension 4.x 要求）；`pnpm test` 需要 >= 23.6（原生 TypeScript 执行 + `module.registerHooks`） |
 | 包管理器 | pnpm |
-| 语言 | TypeScript，无 UI 框架，纯 DOM |
+| 语言 | TypeScript，无 UI 框架，纯 DOM。`strict` + `noUnusedLocals` + `noUncheckedIndexedAccess`（见约定 10 最后一条） |
 | API 风格 | 直接用 `chrome.*`，MV3 原生返回 Promise；**不引入 polyfill** |
 | 清单来源 | `src/manifest.json`（不要放到 `public/`，构建会直接失败） |
 | 构建产物 | `dist/chrome/`（由 `extension.config.js` 锁定） |
@@ -76,6 +76,10 @@ pnpm icons          # 重新生成占位图标
    两栏表头**必须等高**（`.col__head` 的 `min-height: var(--head-min)`）：差值会一直传下去，两栏的行从此不在同一水平线。
    盒子套盒子：外圆角 = `calc(内圆角 + 内边距)`。
 10. **测试只用 `node:test`**：不引 vitest / jest / tsx。测试与实现同目录（`naming.test.ts`）；`chrome.*` 靠给 `globalThis.chrome` 赋值打桩，不给产品代码加注入。
+    **取值用 `at()` 而不是 `!`**：`noUncheckedIndexedAccess` 下 `items[i]` 是 `T | undefined`——那是对的
+       （越界真的可能），所以测试里用各文件自带的 `at(items, i)` 把「我认为这里有值」写成一条断言；
+       `!` 会把错的假设吞掉。同一表达式里要两次取值时先存局部变量，否则判别式收窄不成立。
+    **新代码别把 `let` 写成 `const` 或反之**：`let` 只给真会重新赋值的东西（全仓约 1:8）。
 11. **保存 = 往「当前展示的那一层」追加，无会话层**：标签分组 → 子文件夹；未分组标签 → 就地在原位成散装书签，
     **不要**把它们收进「未分组」文件夹。
     写入唯一入口 `writeChildren(parentId, children)`（整窗保存与「拖一条标签过去」都走它）。

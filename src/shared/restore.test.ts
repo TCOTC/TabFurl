@@ -10,6 +10,18 @@ import {
 } from './restore'
 import type {BookmarkNode} from './types'
 
+/**
+ * 取第 `index` 项，并断言它存在。
+ *
+ * `noUncheckedIndexedAccess` 下 `items[index]` 是 `T | undefined`——那是**对的**（越界真的可能），
+ * 所以这里写一条明确的断言，而不是用 `!` 把它压掉。
+ */
+function at<T>(items: readonly T[], index: number): T {
+  const value = items[index]
+  assert.ok(value !== undefined, `第 ${index} 项不存在`)
+  return value
+}
+
 const folder = (id: string, title: string, children: BookmarkNode[] = []): BookmarkNode => ({
   id,
   title,
@@ -55,7 +67,7 @@ test('每条书签都带 id，界面才能把勾选映射回具体标签', () =>
   const {items} = planRestore(session())
 
   assert.deepEqual(
-    items[0].bookmarks.map((bookmark) => bookmark.id),
+    at(items, 0).bookmarks.map((bookmark) => bookmark.id),
     ['b1'],
     '内部页面被跳过，剩下的书签 id 应原样带出'
   )
@@ -150,7 +162,7 @@ test('分隔线照常留在计划里（界面要按原位画出来），不计�
   ])
   assert.equal(plan.skipped, 0, '分隔线不是「丢了东西」，不该计入 skipped')
   assert.deepEqual(
-    plan.items[0].bookmarks.map((bookmark) => bookmark.separator),
+    at(plan.items, 0).bookmarks.map((bookmark) => bookmark.separator),
     [false, true, false],
     '只有分隔线那一条带 separator 标记'
   )

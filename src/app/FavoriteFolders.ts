@@ -172,7 +172,6 @@ export function createFavoriteBar(
   `
 
   const list = q<HTMLDivElement>(element, `#${id('list')}`)
-  const starButton = q<HTMLButtonElement>(element, `#${id('add-current')}`)
   const plusButton = q<HTMLButtonElement>(element, `#${id('add-pick')}`)
   const status = q<HTMLParagraphElement>(element, `#${id('status')}`)
 

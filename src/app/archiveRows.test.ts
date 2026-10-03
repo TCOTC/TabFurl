@@ -3,6 +3,18 @@ import assert from 'node:assert/strict'
 import {flattenArchive} from './archiveRows'
 import type {BookmarkNode} from '../shared/types'
 
+/**
+ * 取第 `index` 项，并断言它存在。
+ *
+ * `noUncheckedIndexedAccess` 下 `items[index]` 是 `T | undefined`——那是**对的**（越界真的可能），
+ * 所以这里写一条明确的断言，而不是用 `!` 把它压掉。
+ */
+function at<T>(items: readonly T[], index: number): T {
+  const value = items[index]
+  assert.ok(value !== undefined, `第 ${index} 项不存在`)
+  return value
+}
+
 const folder = (id: string, children: BookmarkNode[] = []): BookmarkNode => ({id, title: id, children})
 const url = (id: string): BookmarkNode => ({id, title: id, url: `https://${id}.test/`})
 
@@ -27,8 +39,8 @@ test('flattenArchive：展开的文件夹子级就地插在它后面，不是排
 test('flattenArchive：展开的空文件夹补一行 empty（否则点开像「点了没反应」）', () => {
   const rows = flattenArchive([folder('a')], 'root', new Set(['a']))
   assert.equal(rows.length, 2)
-  assert.equal(rows[1].kind, 'empty')
-  assert.equal(rows[1].depth, 1)
+  assert.equal(at(rows, 1).kind, 'empty')
+  assert.equal(at(rows, 1).depth, 1)
 })
 
 test('flattenArchive：书签永远不展开（它没有子级可推）', () => {
@@ -52,7 +64,8 @@ test('flattenArchive：depth 是层级，siblingIndex 是**同一层内**的下�
 
 test('flattenArchive：顶层行的 parentId 是调用方给的那一层（不是空串）', () => {
   const rows = flattenArchive([url('c')], 'some-folder', new Set())
-  assert.equal(rows[0].kind === 'node' ? rows[0].parentId : '', 'some-folder')
+  const first = at(rows, 0)
+  assert.equal(first.kind === 'node' ? first.parentId : '', 'some-folder')
 })
 
 test('flattenArchive：展开状态里含已不在的 id 不会出错（自愈由调用方做）', () => {
