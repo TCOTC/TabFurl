@@ -23,6 +23,7 @@ import {
   type AppEvents,
   type ArchiveDrop,
   type DragPayload,
+  type MoveItem,
   type Panel
 } from './dom'
 import {createArchivePane, type ArchivePane} from './ArchivePane'
@@ -800,15 +801,26 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     undoButton.classList.toggle('is-slot-hidden', !lastWrite)
     undoButton.disabled = flags.busy || !lastWrite
 
-    // 「移动过去」搬的是**左栏**勾选的那些书签，落到右栏当前这一层；
+    // 「移动过去」搬的是**左栏**勾选的那些东西，落到右栏当前这一层；
     // 「移动过来」反过来。所以一个按钮的计数来自一边、落点来自另一边——别弄反。
-    const leftKept = leftArchive.keptCount()
-    moveRightLabel.textContent = countLabel('移动过去', leftKept)
-    moveLeftLabel.textContent = countLabel('移动过来', keptBookmarks)
-    moveRightButton.title = `把左栏勾选的 ${leftKept} 枚书签移到「${archive.currentFolderTitle()}」`
-    moveLeftButton.title = `把右栏勾选的 ${keptBookmarks} 枚书签移到「${leftArchive.currentFolderTitle()}」`
-    moveRightButton.disabled = flags.busy || leftKept === 0 || !archive.isWritable()
-    moveLeftButton.disabled = flags.busy || keptBookmarks === 0 || !leftArchive.isWritable()
+    //
+    // 计数是**要搬走的条目数**：一个整选的文件夹算一条（搬的是它本身），
+    // 与旁边「打开 (N)」按书签数是两个口径——打开出来的是一枚枚标签，
+    // 搬走的是一个文件夹，这两件事的单位本来就不是一回事。具体搬什么写在悬停提示里。
+    const leftItems = leftArchive.keptItems()
+    const rightItems = archive.keptItems()
+    moveRightLabel.textContent = countLabel('移动过去', leftItems.length)
+    moveLeftLabel.textContent = countLabel('移动过来', rightItems.length)
+    moveRightButton.title =
+      leftItems.length === 0
+        ? '左栏还没有勾选任何东西'
+        : `把左栏勾选的 ${describeItems(leftItems)}移到「${archive.currentFolderTitle()}」`
+    moveLeftButton.title =
+      rightItems.length === 0
+        ? '右栏还没有勾选任何东西'
+        : `把右栏勾选的 ${describeItems(rightItems)}移到「${leftArchive.currentFolderTitle()}」`
+    moveRightButton.disabled = flags.busy || leftItems.length === 0 || !archive.isWritable()
+    moveLeftButton.disabled = flags.busy || rightItems.length === 0 || !leftArchive.isWritable()
 
     archive.updateButtons()
     leftArchive.updateButtons()
@@ -1446,29 +1458,73 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     }
   }
 
+  /** 把一份搬走清单说成人话（按钮的悬停提示与状态行都用它）。 */
+  function describeItems(items: readonly MoveItem[]): string {
+    const folders = items.filter((item) => item.kind === 'folder').length
+    const bookmarks = items.length - folders
+    // 两种混在一起时写「A 个文件夹与 B 枚书签」：数字与前面的单位之间本来就留一个空格，
+    // 连起来写会变成「1 个文件夹与1 枚书签」，读起来像是漏字。
+    if (folders === 0) return `${bookmarks} 枚书签`
+    if (bookmarks === 0) return `${folders} 个文件夹`
+    return `${folders} 个文件夹与 ${bookmarks} 枚书签`
+  }
+
   /**
-   * 把某一栏**勾选的那些书签**搬到另一栏当前这一层（中间那排「移动过去 / 移动过来」）。
+   * 把某一栏**勾选的东西**搬到另一栏当前这一层（中间那排「移动过去 / 移动过来」）。
    *
-   * 搬的是勾选集（`keptIds()`，与「打开 (N)」严格同一个集合），**不是整行整行地搬**：
-   * 勾选框说的始终是「这一行里的书签」，文件夹要整个搬靠拖拽（拖文件夹行搬的是它自己）。
-   * 这条口径让两档下的勾选框是同一个意思，不用为了 F7 再教用户一套新读法。
+   * 搬什么由 `keptItems()` 决定，而那份清单与行上的勾选框严格同一口径：
+   * **文件夹整选 = 搬文件夹本身**（连子树），**里面有没勾的 = 只搬勾上的那几枚书签**。
+   * 所以「取消勾选其中几枚」这件事本身就改变了搬的单位，不需要再多给一个选项——
+   * 而用户能从行上那个三态勾选框直接看到自己在哪一种情况里。
    *
-   * 一枚一枚地调（省略 `index` 就是追加到末尾），所以搬过去的顺序与勾选时的顺序一致。
-   * 书签是叶子节点，不存在「搬进自己的子孙」，所以这里不需要环检测。
+   * 三种情况会留在原地，而且都要说出来（不说的话用户看到的是「点了没反应」）：
+   * - **本来就在这一层的**：两栏停在同一层是很常见的状态（都是打开界面时的起点），
+   *   而「搬到同一个父级」在 `bookmarks.move` 里是**追加到末尾**——
+   *   用户要的不是「把这几个排到最后」，所以跳过。
+   *   （**拖拽那条路不跳**：拖动指的是具体位置，同层重排本来就是它的正当用法。）
+   * - **要被搬进它自己里面的文件夹**：另一栏完全可以导航进那个文件夹，那时 `move` 会成环。
+   * - 一条都搬不动时整件事直接说不做，而不是报「已移动 0 条」。
+   *
+   * 一条一条地调（省略 `index` 就是追加到末尾），所以搬过去的顺序与勾选时的顺序一致。
    */
   async function moveSelection(source: ArchivePane, target: ArchivePane): Promise<void> {
     if (flags.busy) return
-    const ids = source.keptIds()
     const destId = target.currentFolderId()
-    if (ids.length === 0 || !destId || !target.isWritable()) return
+    if (!destId || !target.isWritable()) return
+    const items = source.keptItems()
+    if (items.length === 0) return
+
+    // 目的地的祖先链：文件夹落在它里面就会成环（`move` 会失败）。
+    const destPath = new Set((await getNodePath(destId)).map((node) => node.id))
+    const movable: MoveItem[] = []
+    let here = 0
+    let cyclic = 0
+    for (const item of items) {
+      if (item.kind === 'folder' && destPath.has(item.id)) cyclic++
+      else if (source.parentOf(item.id) === destId) here++
+      else movable.push(item)
+    }
+
+    const destName = target.currentFolderTitle()
+    if (movable.length === 0) {
+      setStatus(
+        status,
+        cyclic > 0 ? '不能把文件夹搬进它自己里面。' : `这些已经在「${destName}」里了。`,
+        cyclic > 0 ? 'error' : 'ok'
+      )
+      return
+    }
 
     flags.busy = true
     updateButtons()
     try {
-      for (const id of ids) await chrome.bookmarks.move(id, {parentId: destId})
+      for (const item of movable) await chrome.bookmarks.move(item.id, {parentId: destId})
+      const notes: string[] = []
+      if (here > 0) notes.push(`${here} 条本来就在这一层`)
+      if (cyclic > 0) notes.push('文件夹不能搬进它自己里面')
       setStatus(
         status,
-        `已把 ${ids.length} 枚书签移到「${target.currentFolderTitle()}」。`,
+        `已把 ${describeItems(movable)}移到「${destName}」。${notes.length > 0 ? `（${notes.join('；')}）` : ''}`,
         'ok'
       )
     } catch (error) {

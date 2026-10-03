@@ -50,7 +50,8 @@ import {
   triState,
   type AppEvents,
   type ArchiveDrop,
-  type DragPayload
+  type DragPayload,
+  type MoveItem
 } from './dom'
 import {openBookmarkDialog} from './BookmarkDialog'
 import {CHEVRON_ICON, FAVICON_BASE, FOLDER_ICON, VERT_LINE_ICON} from './icons'
@@ -112,12 +113,15 @@ export interface ArchivePane {
   /** 这一层里「还会被打开」的书签枚数。 */
   keptCount(): number
   /**
-   * 这一层里被勾选的那些书签 id（与 `keptCount()` 与「打开 (N)」同一集合）。
+   * 勾选之后**会被搬走的东西**（见 `keptItems`）。文件夹整选时它是文件夹本身，
+   * 里面有没勾的时它是勾上的那几枚书签。
    *
-   * 两栏互相搬东西时用它：搬的就是这几个 id。**不含文件夹**——
-   * 勾选框说的始终是「这一行里的书签」，文件夹要整个搬靠拖拽（拖文件夹行搬的是它自己）。
+   * 它刻意**不等于**上面那个计数：「打开（N）」数的是一枚枚书签（打开出来的就是标签），
+   * 而搬走的可能是一个文件夹——两个计数的单位本来就不是一回事。
    */
-  keptIds(): string[]
+  keptItems(): MoveItem[]
+  /** 这一条现在挂在哪一层（判「本来就在目的地那一层」用）。 */
+  parentOf(nodeId: string): string | undefined
   /** 被勾掉的书签 id（打开侧默认全不勾）。 */
   excluded(): ReadonlySet<string>
   /** 重新读自己这一层并重绘。 */
@@ -728,6 +732,58 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     return archiveBookmarkIds().filter((id) => !archiveExcluded.has(id)).length
   }
 
+  /**
+   * 这一栏勾选之后**真正会被搬走的东西**。
+   *
+   * 与「打开 (N)」那份名单（`archiveBookmarkIds()` 减掉排除集）有一条关键差别：
+   * **一个文件夹只要它的书签全留着，搬的就是文件夹本身**（连它的子文件夹与里面的东西一起），
+   * 而不是「先搬 7 枚书签、把空壳文件夹留在原地」——后者是没人想要的结果。
+   * 反过来，**只要里面还有一枚没勾，就只搬勾上的那几枚**：那时用户明确表达的是
+   * 「这几条我要、那几条不要」，文件夹不能整个跟着走。
+   *
+   * 判据就是行上那个勾选框已经显示出来的三态（`triState(kept, total)`）：
+   * 全选 = 这一枚代表文件夹，部分 / 全不选 = 代表里面的书签。所以界面上的勾选框与
+   * 搬走的东西**永远说同一句话**，用户不需要再学一套读法。
+   *
+   * 第二趟遍历补的是「所属文件夹没有整个搬走、但自己被单独勾上」的那些
+   *（子文件夹里的书签只有展开之后才看得见，所以它们不在上一趟里）。
+   * 已经被文件夹整搬带走的要跳过：否则会对同一枚 id 再发一次 `move`。
+   */
+  function keptItems(): MoveItem[] {
+    const items: MoveItem[] = []
+    const taken = new Set<string>()
+    for (const child of archiveChildren) {
+      if (child.url) {
+        if (isRealBookmark(child) && !archiveExcluded.has(child.id)) {
+          items.push({kind: 'bookmark', id: child.id})
+          taken.add(child.id)
+        }
+        continue
+      }
+      // 空文件夹的全选框永远勾不上（`total <= 0` 一律算 none），所以这里也要求「有东西且全留着」。
+      const ids = folderBookmarkIds(child)
+      if (ids.length > 0 && ids.every((id) => !archiveExcluded.has(id))) {
+        items.push({kind: 'folder', id: child.id})
+        for (const id of ids) taken.add(id)
+      }
+    }
+    for (const id of archiveBookmarkIds()) {
+      if (taken.has(id) || archiveExcluded.has(id)) continue
+      items.push({kind: 'bookmark', id})
+    }
+    return items
+  }
+
+  /**
+   * 这一条现在挂在哪一层。
+   *
+   * 搬东西时用来判「它本来就在目的地那一层」——那种情况不该再 `move` 一次：
+   * 同一个父级下省略 index 是**追加到末尾**，而用户要的显然不是「把这几个排到最后」。
+   */
+  function parentOf(nodeId: string): string | undefined {
+    return parentById.get(nodeId)
+  }
+
   function syncArchiveStates(): void {
     for (const input of archiveList.querySelectorAll<HTMLInputElement>('[data-archive-item]')) {
       const id = input.dataset.archiveItem
@@ -820,6 +876,9 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
       }
     }
     indexTree(archiveChildren)
+    // 顶层这几条的父就是当前这一层，而 `indexTree` 只记了「节点 → 它的子级」，
+    // 所以补一次：不补的话 `parentOf()` 对它们返回 undefined（搬东西时判「本来就在这一层」要用）。
+    for (const child of archiveChildren) parentById.set(child.id, viewFolderId)
 
     // 展开集只保留还看得见的那些：删掉一个文件夹之后再刷新，它的 id 留在集合里没害处，
     // 但集合没理由越攒越大。
@@ -1418,7 +1477,8 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     currentFolderId: () => viewFolderId,
     currentFolderTitle: () => viewPath.at(-1)?.title ?? '',
     keptCount: archiveKeptCount,
-    keptIds: () => archiveBookmarkIds().filter((id) => !archiveExcluded.has(id)),
+    keptItems,
+    parentOf,
     excluded: () => archiveExcluded,
     reload: refresh,
     navigateTo,
