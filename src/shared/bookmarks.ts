@@ -93,13 +93,19 @@ export async function removeSubTree(id: string): Promise<void> {
 }
 
 /**
- * 重命名文件夹或书签。
+ * 改一个节点的标题与 / 或网址。
  *
- * 只按原样写入用户给的标题（`sanitizeFolderName` 最多削掉控制字符与首尾空白，
+ * 只按原样写入用户给的值（`sanitizeFolderName` 最多削掉控制字符与首尾空白，
  * 不动可打印字符）；重名按浏览器自己的语义放行——Chrome 允许同级重名，界面以位置区分。
+ *
+ * 网址只对书签有意义（文件夹没有 url），调用方自己保证不往文件夹上传它。
+ * 因此这里**不读旧值**：传什么写什么，没传的字段就不动（`chrome.bookmarks.update` 的语义）。
  */
-export async function renameNode(id: string, title: string): Promise<BookmarkNode> {
-  return toNode(await chrome.bookmarks.update(id, {title}))
+export async function updateNode(
+  id: string,
+  changes: {title?: string; url?: string}
+): Promise<BookmarkNode> {
+  return toNode(await chrome.bookmarks.update(id, changes))
 }
 
 /**

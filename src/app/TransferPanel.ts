@@ -6,7 +6,7 @@ import {
   isRealBookmark,
   realBookmarks,
   removeSubTree,
-  renameNode
+  updateNode
 } from '../shared/bookmarks'
 import {
   planWindowChildren,
@@ -31,6 +31,7 @@ import {
   type AppEvents,
   type Panel
 } from './dom'
+import {openBookmarkDialog} from './BookmarkDialog'
 
 /** Chrome 本地 favicon 缓存端点：读缓存、不联网。 */
 const FAVICON_BASE = chrome.runtime.getURL('_favicon/')
@@ -43,12 +44,13 @@ const FAVICON_BASE = chrome.runtime.getURL('_favicon/')
  */
 const DRAG_TYPE = 'application/x-tabfurl'
 
-/** 拖动来源：左栏的标签/分组，或右栏的一条书签/文件夹。 */
+/** 拖动来源：左栏的标签/分组，或右栏的一条书签/文件夹/分隔线。 */
 type DragPayload =
   | {kind: 'tab'; tabId: number}
   | {kind: 'group'; index: number}
   | {kind: 'bookmark'; id: string}
   | {kind: 'folder'; id: string}
+  | {kind: 'separator'; id: string}
 
 type RestoreKind = 'newWindow' | 'currentWindow'
 
@@ -68,12 +70,12 @@ type ArchiveDrop = {kind: 'into'; folderId: string} | {kind: 'here'; index: numb
 /**
  * 中间按钮上的计数。
  *
- * 两件事一起做：括号用**半角并留一个空格**（全角括号在中文字体里占满一格，与数字之间看着空得发虚），
- * 数字单独包一层 `.num` —— 它有 `min-width: 3ch` 与等宽数字，所以「打开 (3)」与「打开 (12)」
- * 一样宽。不预留的话，勾选一变按钮就会横向抽动，而这两个按钮本来就出现在勾选的瞬间。
+ * 括号用**半角并留一个空格**：全角括号在中文字体里占满一格，与数字之间看着空得发虚。
+ * 位数变化带来的宽度差由按钮自己的 `min-width` 吃掉（见 base.css 的 `--move-btn-min`），
+ * 不在这里预留。
  */
 function countLabel(text: string, count: number): string {
-  return `${text} (<span class="num">${count}</span>)`
+  return `${text} (${count})`
 }
 
 /**
@@ -148,13 +150,14 @@ const TEMPLATE = `
         <span id="open-window-label">新窗口</span>
       </button>
       <!--
-        「不建分组」作用于上面两个打开按钮（只开标签页、不建标签分组）。
+        「打开不建分组」作用于上面两个打开按钮（不建标签分组）。
         它是一个**修饰**而不是一个入口：分成两个按钮就会出现「哪两个是同一件事」的疑问，
         而它本来就可以用在当前窗口与新窗口两种情况上。
+        文案带上「打开」是因为它与上面那个「存过去」无关——只写「不建分组」会被读成也管保存。
       -->
       <label class="check" id="no-group-host">
         <input type="checkbox" id="no-group-check" />
-        <span>不建分组</span>
+        <span>打开不建分组</span>
       </label>
       <!--
         撤销按钮**始终占位**（没有可撤销的东西时用 visibility 藏起来，而不是 display: none）：
@@ -259,12 +262,10 @@ export function createTransferPanel(events: AppEvents): Panel {
 
   const archiveSelectAll = createSelectAll(q<HTMLDivElement>(element, '#archive-all-host'), {
     describe: (kept, total) => {
-      // 说的是**这一层**而不是「收藏夹里」：勾选跟着展示的层走（换层就换成那一层的选择），
-      // 而「打开（N）」也只算这一层——写成「收藏夹里共 N 枚」会与按钮上的数字对不上。
+      // 与左栏同一套嗍词（「已选 K / N 个标签页」）。
+      // 不说「收藏夹里共 N 枚」：勾选跟着展示的层走，「打开 (N)」也只算这一层，写成整个收藏夹会与按钮对不上。
       if (total === 0) return '这一层没有可打开的标签页'
-      return kept === 0
-        ? `尚未勾选（这一层共 ${total} 枚标签页），勾选后才能打开`
-        : `已选 ${kept} / ${total} 枚标签页`
+      return kept === total ? `已全选 ${total} 个标签页` : `已选 ${kept} / ${total} 个标签页`
     },
     onChange: (wantAll) => {
       for (const id of archiveBookmarkIds()) {
@@ -410,6 +411,9 @@ export function createTransferPanel(events: AppEvents): Panel {
   /**
    * 一条书签行。分隔线占位书签也画成一条横线，并且同样给「修改 / 删除」两个按钮。
    *
+   * 两种行**都可以拖**（拖动范围与文件夹一致：在右栏里挪位置 / 挪层级，拖到左栏就是打开）：
+   * 分隔线虽然只是个记号，但用户摆它的位置本来就有意义，所以它的拖拽逻辑与书签、文件夹完全一样。
+   *
    * 分隔线没有勾选框（它不是书签，见 `isRealBookmark`），书签有——它是「要打开哪些」的一枚。
    *
    * 网址**完整显示**（不截成主机名）：收藏夹条目本来就靠网址区分同名页面，
@@ -422,11 +426,13 @@ export function createTransferPanel(events: AppEvents): Panel {
       // 两条横线用**真实元素**而不是伪元素：`::after` 永远排在所有子元素之后（这是规范定的），
       // 而按钮必须在这条线**右边**——用伪元素就只能得到「线在按钮右边」那种坏排布。
       return `
-        <li class="divider" data-drop-row="separator">
+        <li class="divider" draggable="true" data-drop-row="separator"
+            data-drag-separator="${escapeHtml(bookmark.id)}">
           <span class="divider__rule" aria-hidden="true"></span>
           ${
             isRenaming
-              ? `<input type="text" class="input input--rename" data-rename-input="${escapeHtml(bookmark.id)}"
+              ? `<input type="text" class="input input--rename" draggable="false"
+                        data-rename-input="${escapeHtml(bookmark.id)}"
                         value="${escapeHtml(separatorTitle(bookmark.title))}"
                         placeholder="分隔线标题（可留空）" aria-label="分隔线标题" />`
               : `<span class="divider__title">${escapeHtml(separatorTitle(bookmark.title))}</span>`
@@ -434,7 +440,7 @@ export function createTransferPanel(events: AppEvents): Panel {
           <span class="divider__rule" aria-hidden="true"></span>
           ${
             isRenaming
-              ? '<span class="item__meta">回车保存，Esc 取消</span>'
+              ? ''
               : `<span class="tree__actions">
                    <button type="button" class="btn btn--ghost btn--sm" data-rename="${escapeHtml(bookmark.id)}">修改</button>
                    ${
@@ -451,25 +457,6 @@ export function createTransferPanel(events: AppEvents): Panel {
 
     const url = bookmark.url ?? ''
     const host = hostnameOf(url) ?? url
-    const isRenaming = renaming?.id === bookmark.id
-
-    const title = isRenaming
-      ? `<input type="text" class="input input--rename" data-rename-input="${escapeHtml(bookmark.id)}"
-                value="${escapeHtml(bookmark.title)}" aria-label="重命名书签" />`
-      : `<span class="item__title">${escapeHtml(bookmark.title.trim() || host)}</span>`
-
-    const actions = isRenaming
-      ? '<span class="item__meta">回车保存，Esc 取消</span>'
-      : `<span class="tree__actions">
-           <button type="button" class="btn btn--ghost btn--sm" data-open="${escapeHtml(bookmark.id)}">打开</button>
-           <button type="button" class="btn btn--ghost btn--sm" data-rename="${escapeHtml(bookmark.id)}">修改</button>
-           ${
-             pendingDeleteId === bookmark.id
-               ? `<button type="button" class="btn btn--danger btn--sm" data-confirm-delete="${escapeHtml(bookmark.id)}">确认删除</button>
-                  <button type="button" class="btn btn--ghost btn--sm" data-cancel-delete="">取消</button>`
-               : `<button type="button" class="btn btn--ghost btn--sm" data-delete="${escapeHtml(bookmark.id)}">删除</button>`
-           }
-         </span>`
 
     return `
       <li class="item leaf" data-row data-drop-row="bookmark" draggable="true"
@@ -478,10 +465,19 @@ export function createTransferPanel(events: AppEvents): Panel {
         <input type="checkbox" data-archive-item="${escapeHtml(bookmark.id)}" />
         ${faviconMarkup(url, FAVICON_BASE)}
         <span class="item__main">
-          ${title}
+          <span class="item__title">${escapeHtml(bookmark.title.trim() || host)}</span>
           <span class="item__meta item__meta--url" title="${escapeHtml(url)}">${escapeHtml(url)}</span>
         </span>
-        ${actions}
+        <span class="tree__actions">
+          <button type="button" class="btn btn--ghost btn--sm" data-open="${escapeHtml(bookmark.id)}">打开</button>
+          <button type="button" class="btn btn--ghost btn--sm" data-rename="${escapeHtml(bookmark.id)}">修改</button>
+          ${
+            pendingDeleteId === bookmark.id
+              ? `<button type="button" class="btn btn--danger btn--sm" data-confirm-delete="${escapeHtml(bookmark.id)}">确认删除</button>
+                 <button type="button" class="btn btn--ghost btn--sm" data-cancel-delete="">取消</button>`
+              : `<button type="button" class="btn btn--ghost btn--sm" data-delete="${escapeHtml(bookmark.id)}">删除</button>`
+          }
+        </span>
       </li>
     `
   }
@@ -502,12 +498,13 @@ export function createTransferPanel(events: AppEvents): Panel {
     const isRenaming = renaming?.id === folder.id
 
     const title = isRenaming
-      ? `<input type="text" class="input input--rename" data-rename-input="${escapeHtml(folder.id)}"
+      ? `<input type="text" class="input input--rename" draggable="false"
+                data-rename-input="${escapeHtml(folder.id)}"
                 value="${escapeHtml(folder.title)}" aria-label="重命名文件夹" />`
       : `<span class="item__title">${escapeHtml(folder.title)}</span>`
 
     const actions = isRenaming
-      ? '<span class="item__meta">回车保存，Esc 取消</span>'
+      ? ''
       : `<span class="tree__actions">
            <button type="button" class="btn btn--ghost btn--sm" data-enter="${escapeHtml(folder.id)}">进入</button>
            <button type="button" class="btn btn--ghost btn--sm" data-rename="${escapeHtml(folder.id)}">改名</button>
@@ -657,9 +654,9 @@ export function createTransferPanel(events: AppEvents): Panel {
     const keptTabs = allWindowTabs().filter((tab) => !windowExcluded.has(tab.tabId)).length
     const keptBookmarks = archiveKeptCount()
 
-    saveLabel.innerHTML = countLabel('存过去', keptTabs)
-    openLabel.innerHTML = countLabel('打开', keptBookmarks)
-    openWindowLabel.innerHTML = countLabel('新窗口', keptBookmarks)
+    saveLabel.textContent = countLabel('存过去', keptTabs)
+    openLabel.textContent = countLabel('打开', keptBookmarks)
+    openWindowLabel.textContent = countLabel('新窗口', keptBookmarks)
     // 落点写在按钮自己的提示里：写入目标是「当前展示的这一层」，而那一层远在右栏里侧的路径行里，
     // 中间的按钮与它隔了一整栏。悬停能确认「到底存进哪个文件夹」，不必来回对路径。
     saveButton.title = canWrite()
@@ -850,12 +847,14 @@ export function createTransferPanel(events: AppEvents): Panel {
     if (bookmark !== undefined) return {kind: 'bookmark', id: bookmark}
     const folder = dragged.dataset.dragFolder
     if (folder !== undefined) return {kind: 'folder', id: folder}
+    const separator = dragged.dataset.dragSeparator
+    if (separator !== undefined) return {kind: 'separator', id: separator}
     return undefined
   }
 
   function draggedElement(event: DragEvent): HTMLElement | undefined {
     return (event.target as HTMLElement).closest<HTMLElement>(
-      '[data-drag-tab], [data-drag-group], [data-drag-bookmark], [data-drag-folder]'
+      '[data-drag-tab], [data-drag-group], [data-drag-bookmark], [data-drag-folder], [data-drag-separator]'
     ) ?? undefined
   }
 
@@ -941,10 +940,17 @@ export function createTransferPanel(events: AppEvents): Panel {
     return value === undefined ? undefined : Number(value)
   }
 
-  /** 右栏的落点：进某个文件夹，或插到当前这一层的某个位置。 */
+  /**
+   * 右栏的落点：进某个文件夹，或插到当前这一层的某个位置。
+   *
+   * 三类行（文件夹 / 书签 / 分隔线）都是可锚定的——分隔线虽然只是个记号，
+   * 但用户可以把它拖到任意两条之间，所以它不是特殊行。
+   */
   function archiveDropSpot(event: DragEvent): ArchiveDrop | undefined {
     const target = event.target as HTMLElement
-    const row = target.closest<HTMLElement>('[data-drop-row="bookmark"], [data-drop-row="folder"]')
+    const row = target.closest<HTMLElement>(
+      '[data-drop-row="bookmark"], [data-drop-row="folder"], [data-drop-row="separator"]'
+    )
     if (!row) return undefined
 
     const index = [...archiveList.children].indexOf(row)
@@ -975,7 +981,10 @@ export function createTransferPanel(events: AppEvents): Panel {
     if (toArchive && !canWrite()) return
 
     const fromWindow = dragging?.kind === 'tab' || dragging?.kind === 'group'
-    const fromArchive = dragging?.kind === 'bookmark' || dragging?.kind === 'folder'
+    const fromArchive =
+      dragging?.kind === 'bookmark' ||
+      dragging?.kind === 'folder' ||
+      dragging?.kind === 'separator'
 
     event.preventDefault()
     event.dataTransfer.dropEffect = toArchive && fromWindow ? 'copy' : 'move'
@@ -1055,7 +1064,7 @@ export function createTransferPanel(events: AppEvents): Panel {
 
     if (toArchive) {
       if (!canWrite()) return
-      if (payload?.kind === 'bookmark' || payload?.kind === 'folder') {
+      if (payload?.kind === 'bookmark' || payload?.kind === 'folder' || payload?.kind === 'separator') {
         // 收藏夹里的条目拖回收藏夹 = **挪**（同一个东西换位置），不是再存一份。
         await moveArchiveNode(payload, archiveSpot)
         return
@@ -1073,7 +1082,11 @@ export function createTransferPanel(events: AppEvents): Panel {
       await moveWindowTabs(payload, windowSpot ?? {kind: 'end'})
       return
     }
-    if (payload?.kind === 'bookmark' || payload?.kind === 'folder') {
+    if (
+      payload?.kind === 'bookmark' ||
+      payload?.kind === 'folder' ||
+      payload?.kind === 'separator'
+    ) {
       await openArchiveInto(payload, windowSpot ?? {kind: 'end'})
       return
     }
@@ -1188,7 +1201,7 @@ export function createTransferPanel(events: AppEvents): Panel {
    * 右栏一次只显示一层，所以落点的锚点永远是兄弟——不存在「把文件夹拖进它自己的子孙」这种事。
    */
   async function moveArchiveNode(
-    payload: {kind: 'bookmark' | 'folder'; id: string},
+    payload: {kind: 'bookmark' | 'folder' | 'separator'; id: string},
     spot: ArchiveDrop | undefined
   ): Promise<void> {
     if (busy || !canWrite()) return
@@ -1380,10 +1393,16 @@ export function createTransferPanel(events: AppEvents): Panel {
     }
     const renameButton = target.closest<HTMLButtonElement>('[data-rename]')
     if (renameButton?.dataset.rename) {
-      renaming = {id: renameButton.dataset.rename, committed: false}
+      const id = renameButton.dataset.rename
       pendingDeleteId = undefined
-      renderArchive()
-      focusRenameInput()
+      // 书签有标题**与网址**两个字段可改，行内一个输入框放不下两个，所以走模态弹窗；
+      // 文件夹与分隔线只有标题，行内改名更快（建完就能直接打字）。
+      if (realBookmarkId(id)) editBookmark(id)
+      else {
+        renaming = {id, committed: false}
+        renderArchive()
+        focusRenameInput()
+      }
       return
     }
 
@@ -1402,6 +1421,31 @@ export function createTransferPanel(events: AppEvents): Panel {
     // 剩下的情况就是「点在行上」：切换这一行的勾选。按钮与输入框在上面已经拦住了。
     toggleRowFromClick(archiveList, event)
   })
+
+  /**
+   * 这一条是不是真书签（不是文件夹也不是分隔线）——只有它才需要弹窗改网址。
+   *
+   * 不能只看「有没有 url」：分隔线也带 url，而它的网址是那个占位记号，
+   * 给用户一个能改它的输入框只会把记号改坏。
+   */
+  function realBookmarkId(id: string): boolean {
+    return archiveChildren.some((child) => child.id === id && isRealBookmark(child))
+  }
+
+  /** 弹窗改一条书签的标题与网址。取消时什么都不做。 */
+  function editBookmark(id: string): void {
+    const node = archiveChildren.find((child) => child.id === id)
+    if (!node) return
+    openBookmarkDialog(
+      element,
+      {title: node.title, url: node.url ?? ''},
+      async ({title, url}) => {
+        // 标题允许留空（Chrome 会退回去显示网址），与新建分隔线时一样。
+        await updateNode(id, {title: sanitizeFolderName(title, ''), url})
+        await events.archiveChanged()
+      }
+    )
+  }
 
   /**
    * 点「打开」把这一条开成一枚活动标签。
@@ -1479,12 +1523,12 @@ export function createTransferPanel(events: AppEvents): Panel {
     const node = archiveChildren.find((child) => child.id === id)
     if (!node) return
 
-    // 书签的标题允许被清空（Chrome 会退回去显示网址），所以 fallback 给空串；
-    // 文件夹名不能为空，就退回原名字。
-    const fallback = node.url ? '' : node.title
+    // 只服务文件夹与分隔线（书签的改名走模态弹窗，见 editBookmark）。
+    // 文件夹名不能为空，所以清洗后退回原名字；分隔线允许留空（就成了一条通线）。
+    const fallback = isSeparatorUrl(node.url) ? '' : node.title
     const next = sanitizeFolderName(input.value, fallback)
     try {
-      if (next !== node.title) await renameNode(id, next)
+      if (next !== node.title) await updateNode(id, {title: next})
     } catch (error) {
       setStatus(status, `改名失败：${errorText(error)}`, 'error')
     } finally {

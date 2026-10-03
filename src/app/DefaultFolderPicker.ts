@@ -66,6 +66,10 @@ export function createDefaultFolderPicker(events: AppEvents): DefaultFolderPicke
   const status = q<HTMLParagraphElement>(element, '#folder-status')
 
   let barTitle = ''
+  /** 上一次建出来的候选签名。内容没变就不重建 DOM——重建会让选中项闪一下。 */
+  let lastSignature = ''
+  /** 上一次写上去的宽度。相同就不写 `style`（写一次就产生一次重排）。 */
+  let lastWidth = 0
 
   /** 选中项写完整路径：下拉框合上时只看得到一项，同级重名的文件夹分不出来。 */
   function optionLabel(folder: FolderOption, index: number): string {
@@ -77,18 +81,28 @@ export function createDefaultFolderPicker(events: AppEvents): DefaultFolderPicke
    * 把下拉框的宽度调成刚好装下选中项那一行字（但不超过 `MAX_SELECT_PX`）。
    *
    * 顺便把完整路径写进 `title`：超过上限时下拉框会把它裁掉，而这一行里没有折行的空间。
+   * 只在宽度真的变了时才写 `style`：写一次就会让浏览器重排一次，而这件事发生在
+   * 下拉框获得焦点的瞬间——用户正盯着它，一点多余的重排都看得见。
    */
   function sizeToSelection(): void {
     const option = select.selectedOptions[0]
     if (!option) return
     const label = option.textContent ?? ''
     ruler.textContent = label
-    select.style.width = `${Math.min(Math.ceil(ruler.offsetWidth + SELECT_CHROME_PX), MAX_SELECT_PX)}px`
+    const width = Math.min(Math.ceil(ruler.offsetWidth + SELECT_CHROME_PX), MAX_SELECT_PX)
+    if (width !== lastWidth) {
+      select.style.width = `${width}px`
+      lastWidth = width
+    }
     select.title = label
   }
 
   /**
    * 重建选项。
+   *
+   * **候选没变就不重建**：这个方法在每次获得焦点时都会被调一遍（为了捡到刚新建的文件夹），
+   * 而 `replaceChildren` 会把选中项先拿掉再放回去——`<select>` 的这条路径会让已经显示好的
+   * 那一行字闪一下（实测就是「下拉框打开时原本选好的路径抖一下」）。
    *
    * `defaultFolderId` 不在候选里时（文件夹被删掉、或被挪进「其他书签」）下拉框会退回占位项，
    * 看起来就是「还没选」——需要用户做的也正是重新选一次，所以不额外提示。
@@ -98,18 +112,32 @@ export function createDefaultFolderPicker(events: AppEvents): DefaultFolderPicke
     try {
       const {barTitle: title, folders} = await listDefaultFolderCandidates()
       barTitle = title
+      const signature = folders.map((folder, index) => `${folder.id}\u0000${optionLabel(folder, index)}`).join('\u0001')
+      const selected = (await loadSettings()).defaultFolderId
 
+      if (signature === lastSignature) {
+        // 列表没变，只需保证选中项是对的（用户可能刚在别处改过设置）。
+        if (select.value !== selected) select.value = selected
+        sizeToSelection()
+        return
+      }
+
+      lastSignature = signature
+      // 重建时先放开宽度，否则新列表的宽度会被上一条的宽度卡住（见 sizeToSelection）。
+      lastWidth = 0
       select.disabled = false
       select.replaceChildren(new Option('选择书签栏里的文件夹…', ''))
       for (const [index, folder] of folders.entries()) {
         select.append(new Option(optionLabel(folder, index), folder.id))
       }
-      select.value = (await loadSettings()).defaultFolderId
+      select.value = selected
       sizeToSelection()
     } catch (error) {
       // 认不出书签栏时没有任何可选项，把原因写出来，而不是留一个空下拉框让人猜。
       select.disabled = true
       select.replaceChildren(new Option('无法读取书签栏', ''))
+      lastSignature = ''
+      lastWidth = 0
       setStatus(status, errorText(error), 'error')
     }
   }
@@ -127,6 +155,8 @@ export function createDefaultFolderPicker(events: AppEvents): DefaultFolderPicke
       select.value = (await loadSettings()).defaultFolderId
     } finally {
       select.disabled = false
+      // 选中项换了，宽度要重新量（先清掉缓存值，否则相同宽度会被跳过）。
+      lastWidth = 0
       sizeToSelection()
     }
   })

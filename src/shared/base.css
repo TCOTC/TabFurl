@@ -128,6 +128,10 @@ body {
   max-width: none;
 }
 
+/*
+ * 页面标题块。**只有阅读页在用**：主界面把 `TabFurl / 窗口 ⇄ 收藏文件夹` 两行去掉了
+ * （那里省下的几十像素要留给两个列表），名字改放进标签页标题（`document.title`）。
+ */
 .app__header {
   display: flex;
   flex-direction: column;

@@ -335,6 +335,8 @@
  *
  * 两条横线是**真实元素**（`.divider__rule`）而不是伪元素：`::after` 永远排在所有子元素之后，
  * 用伪元素就没办法把按钮放在线的右边。
+ *
+ * `cursor: grab` 与其他可拖的行一致：它也能拖（位置本身就有意义）。
  */
 .divider {
   display: flex;
@@ -344,6 +346,11 @@
   color: var(--text-muted);
   font-size: var(--text-xs);
   font-weight: 600;
+  cursor: grab;
+}
+
+.divider:active {
+  cursor: grabbing;
 }
 
 .divider__rule {
@@ -386,7 +393,7 @@
 }
 
 /*
- * 「不建分组」复选框与撤销按钮都居中（它们是两个按钮之外的±修饰，不跟着按钮拉满宽）。
+ * 「打开不建分组」复选框与撤销按钮都居中（它们是几个按钮之外的修饰，不跟着按钮拉满宽）。
  */
 .check {
   display: inline-flex;
@@ -396,6 +403,15 @@
   color: var(--text-muted);
   font-size: var(--text-sm);
   cursor: pointer;
+}
+
+/*
+ * 「存过去」与下面两个打开按钮之间拉开一道：它们是两个不同的方向（往收藏夹送 / 从收藏夹取），
+ * 等距排下来看着像一个整体，而实际上中间那条分界很重要。
+ * 多出来的间隔比 `.mid` 的 `gap` 大一档，所以看得出来是「两组」。
+ */
+#save-btn {
+  margin-bottom: var(--space-5);
 }
 
 .check:hover {
@@ -490,4 +506,47 @@
 
 .is-drop-after {
   box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* ———————————————— 修改书签的对话框 ———————————————— */
+
+/*
+ * 用原生 `<dialog>` + `showModal()`（见 BookmarkDialog.ts）：居中、Esc 关闭、焦点回到触发点、
+ * 背景被惰化，这些都由浏览器负责，这里只管外观。
+ *
+ * 宽度不用纯 `fit-content`：输入框是 `width: 100%`，没有一条下限的话弹窗会被输入框的
+ * 最小宽度撑成一条细缝。给一个能放下常见网址的宽度（420px），窄窗口下由 `max-width` 收住。
+ */
+.dialog {
+  width: min(420px, calc(100vw - var(--space-6)));
+  padding: 0;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 24%);
+}
+
+.dialog::backdrop {
+  background: rgb(0 0 0 / 32%);
+}
+
+.dialog__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+}
+
+.dialog__title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+/* 两个按钮靠右：确认在最后（与「读到最后才确认」的习惯一致）。 */
+.dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }
