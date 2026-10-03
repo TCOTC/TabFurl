@@ -21,8 +21,11 @@ interface StubTab {
   pinned: boolean
   title: string
   url: string
-  /** 不传就是「已加载」，与 `chrome.tabs.Tab` 一样是可选的。 */
-  discarded?: boolean
+  /**
+   * 必填（与 `TabSnapshot` 对齐），但类型本身是可选的：`chrome.tabs.Tab.status` 就是可选，
+   * 而「字段缺失」那一条测试要的是**真的没有这个键**，所以它只能绕过类型。
+   */
+  status: 'unloaded' | 'loading' | 'complete'
 }
 
 interface StubNode {
@@ -91,7 +94,7 @@ const shape = (children: CreatedNode[]) =>
 const plainTab = (
   id: number,
   url: string,
-  extra: {groupId?: number; pinned?: boolean; discarded?: boolean} = {}
+  extra: {groupId?: number; pinned?: boolean; status?: 'unloaded' | 'loading' | 'complete'} = {}
 ): StubTab => ({
   tabId: id,
   id,
@@ -101,7 +104,7 @@ const plainTab = (
   pinned: extra.pinned ?? false,
   title: url,
   url,
-  discarded: extra.discarded ?? false
+  status: extra.status ?? 'complete'
 })
 
 test('snapshotCurrentWindow 按 groupId 分桶，不按标题合并', async () => {
@@ -125,14 +128,17 @@ test('snapshotCurrentWindow 按 groupId 分桶，不按标题合并', async () =
   assert.equal(snapshot.skipped, 1)
 })
 
-test('卸载状态被带进快照，缺字段时算作已加载', async () => {
-  stubChrome([plainTab(1, 'https://a.com'), plainTab(2, 'https://b.com', {discarded: true})])
+test('加载状态被带进快照；字段缺失时算作已加载', async () => {
+  // 造一个**真的没有 `status` 键**的标签（`chrome.tabs.Tab.status` 是可选字段）。
+  const noStatus = {...plainTab(1, 'https://a.com')} as unknown as Record<string, unknown>
+  delete noStatus.status
+  stubChrome([noStatus as unknown as StubTab, plainTab(2, 'https://b.com', {status: 'unloaded'})])
 
   const snapshot = await snapshotCurrentWindow()
 
-  // 左栏据此决定要不要给这一行多一个「加载」按钮，缺字段时不能误判成「已卸载」。
-  assert.equal(snapshot.ungrouped[0].discarded, false)
-  assert.equal(snapshot.ungrouped[1].discarded, true)
+  // 缺字段时不能误判成「已卸载」，否则每一行都会冒出一个「加载」按钮。
+  assert.equal(snapshot.ungrouped[0].status, 'complete')
+  assert.equal(snapshot.ungrouped[1].status, 'unloaded')
 })
 
 test('分组元数据取不到时退化为空标题，不抛错', async () => {

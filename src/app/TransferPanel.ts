@@ -418,19 +418,11 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    * 右侧的「打开」是**切过去**（`active: true` + 聚焦窗口），不是「打开一个新标签」——
    * 这一栏是活着的标签的清单，对着它点一条就是要跳到那一条上去。
    *
-   * 被卸载的标签（还原时懒加载出来的，或 Chrome 自己卸掉的）会多一个「加载」：
-   * 它只 `tabs.reload()`，**不切过去**——想先把几页读出来、又不离开手上这一页时才用它。
-   *
-   * 「加载」摆在「打开」**前面**不是为了读起来顺：按钮组是贴右的，而加载一开始这一行就会重画，
-   * 消失的那个若在右边，就会把「打开」当场往右推一格（实测 30px）。
+   * 行尾那个「加载」/「加载中」的位置见 `loadSlotMarkup()`。
    */
   function tabRowMarkup(tab: TabSnapshot): string {
     const url = tab.url
     const groupAttr = tab.groupId === undefined ? '' : ` data-tab-group="${tab.groupId}"`
-    const loadButton = tab.discarded
-      ? `<button type="button" class="btn btn--ghost btn--sm" data-load-tab="${tab.tabId}"
-                  title="在后台加载这一页（标签已卸载）">加载</button>`
-      : ''
     return `
       <li class="item leaf" draggable="true" data-row data-drop-row="tab"
           data-tab-index="${tab.index}"${groupAttr} data-drag-tab="${tab.tabId}">
@@ -440,7 +432,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
           <span class="item__title">${escapeHtml(tab.title || url)}${tab.pinned ? PIN_ICON : ''}</span>
           <span class="item__meta item__meta--url" title="${escapeHtml(url)}">${escapeHtml(url)}</span>
         </span>
-        <span class="tree__actions">${loadButton}
+        <span class="tree__actions">${loadSlotMarkup(tab)}
           <button type="button" class="btn btn--ghost btn--sm"
                   data-switch-tab="${tab.tabId}" title="切换到这个标签页">打开</button>
         </span>
@@ -449,33 +441,65 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   /**
+   * 行尾那个「加载」位置的三种样子。
+   *
+   * - `unloaded`：标签被 Chrome 卸载了（懒加载出来的，或它自己卸的）→ 给一个可点的「加载」。
+   * - `loading`：点过「加载」之后、到页面给出标题之前的那一段 → 显示「加载中」并禁用。
+   *   这一段可能持续很久，而**页面什么时候给出标题由网站自己决定**：
+   *   有的站点（x.com 这类重 SPA）在标签不可见时走不到设置标题那一步，
+   *   于是标题要等用户切过去才更新。显示「加载中」比让按钮无声消失诚实得多——
+   *   否则用户看到的是「点了没反应」。
+   * - 其余（`complete`）：什么都不占。
+   *
+   * 两档都用 `.btn--load`（定宽）：
+   * 「加载」是两个字、「加载中」是三个，不定宽就会差一个字宽。
+   */
+  function loadSlotMarkup(tab: TabSnapshot): string {
+    if (tab.status === 'unloaded') {
+      return `<button type="button" class="btn btn--ghost btn--sm btn--load" data-load-tab="${tab.tabId}"
+                  title="在后台加载这一页（标签已卸载）">加载</button>`
+    }
+    if (tab.status === 'loading') {
+      return `<button type="button" class="btn btn--ghost btn--sm btn--load" disabled
+                  title="这一页正在加载">加载中</button>`
+    }
+    return ''
+  }
+
+  /** 一行里真正**画出来**的字段，顺序即渲染顺序。 */
+  function drawnFieldsOf(tab: TabSnapshot): (string | number)[] {
+    return [tab.tabId, tab.title, tab.url, tab.pinned ? 1 : 0, tab.status]
+  }
+
+  /**
    * 左栏现在的样子：结构 + 文本。
    *
    * **勾选不在签名里**：它由 `syncWindowStates()` 回填，把它算进签名反而会因为「勾一下」
    * 重建整列（而重建又会把勾选框恢复成未勾选）。
    *
-   * 反过来，**凡是行里画出来的东西都要进签名**：漏了 `discarded`，点了「加载」之后
-   * 按钮不会消失；漏了分组内的 `pinned`，组内标签固定后那个图钉要等到别的变化才出现
-   * （这两个都是实测出来的，不是推想）。
+   * 反过来，**凡是行里画出来的东西都要进签名**：漏了 `status`，点了「加载」之后那一行不会变；
+   * 漏了分组内的 `pinned`，组内标签固定后那个图钉要等到别的变化才出现（两处都是实测踩到的）。
    *
-   * 分隔符是控制字符（写成 `\u0000` 这样的**转义**，不要往源码里放裸字符）：
-   * 标题与网址里什么字符都可能出现，用空格拼会让两个不同的列表拼出同一个串，
-   * 该重画的就被「结构没变」跳过去了。裸 NUL 还有第二个代价——grep / ripgrep 见到它
-   * 会把整个文件当二进制，这个文件会**从搜索结果里整个消失**（实测踩过）。
+   * 拼串交给 `JSON.stringify`，**不自己定分隔符**。手写的分隔符都要求「内容里不会出现这个字符」，
+   * 而标题与网址里什么字符都可能出现（实测：用空格拼时 `[a, b, a b]` 与 `[a b, a, b]` 拼出了同一个串，
+   * 该重画的就被「结构没变」跳过去了）。JSON 的转义是双射、数组结构自己就编码了「几条记录、谁是分组」，
+   * 于是连记录之间的分隔符都不需要。
+   *
+   * 天真的反例：以前用裸 NUL 当分隔符，既留下了那个「内容里不能有 NUL」的前提，
+   * 又让 ripgrep 把整个文件当二进制（**这个文件会从搜索结果里整个消失**），
+   * 还让编辑工具改不动这一段（`oldString` 表达不了裸控制字符）。这两件事都是实测踩到的。
+   *
+   * 代价是**字段要显式列出**——而这恰好是我们想要的：把整份快照直接塞进去会把 `lastAccessed`
+   * 也算上，而它每点一次标签就变，签名会永远在变，「结构没变就跳过重建」就彻底失效了。
    */
   function windowSignatureOf(children: readonly WindowChild[]): string {
-    return children
-      .map((child) =>
+    return JSON.stringify(
+      children.map((child) =>
         child.kind === 'tab'
-          ? `t ${child.tab.tabId} ${child.tab.title} ${child.tab.url} ${child.tab.pinned ? 1 : 0}\u0000${child.tab.discarded ? 1 : 0}`
-          : `g ${child.name} ${child.tabs
-              .map(
-                (tab) =>
-                  `${tab.tabId} ${tab.title} ${tab.url}\u0000${tab.pinned ? 1 : 0}\u0000${tab.discarded ? 1 : 0}`
-              )
-              .join('')}`
+          ? ['t', ...drawnFieldsOf(child.tab)]
+          : ['g', child.name, child.tabs.map(drawnFieldsOf)]
       )
-      .join('')
+    )
   }
 
   function renderWindow(): void {
@@ -952,15 +976,16 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
     // 只关心会改变这一行长相的字段。
     //
-    // `discarded` 是必需的，不是顺手加的：它决定这一行要不要显示「加载」按钮，
-    // 而卸载与解除卸载**只会**派发这一个字段（Chrome 那边把它与 `status` 一起塞进同一个事件，
-    // 两者永远同时到达）。漏了它，点了「加载」按钮就不会消失。
+    // `status` 是必需的，不是顺手加的：卸载 / 正在加载 / 加载完三种状态各对应行尾的一种样子
+    // （「加载」按钮 / 「加载中」/ 什么都不显示），而且它与 `discarded` **永远在同一个事件里
+    // 一起到达**（Chrome 那边同时插入两个 key）。少了它，点「加载」之后那行不会变，
+    // 看起来就是「点了没反应」。
     if (
       changeInfo.title !== undefined ||
       changeInfo.url !== undefined ||
       changeInfo.groupId !== undefined ||
       changeInfo.pinned !== undefined ||
-      changeInfo.discarded !== undefined
+      changeInfo.status !== undefined
     ) {
       scheduleWindowRefresh()
     }
@@ -1668,14 +1693,19 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    * 重新加载它**不会切走**当前这一页（`active` 根本不动）——这正是这一栏要的动作。
    * 「打开」也能让它加载，但那是**跳过去**：想先把几页读出来接着干别的就不行了。
    *
-   * 不写成功提示：重载一开始 Chrome 就会派发 `onUpdated`（`discarded` 变回 false），
-   * 这一行会自己重画、按钮自己消失，这件事在浏览器里也看得见。
-   * 这不是猜的，是 Chrome 自己的 API 测试覆盖的行为（`tabs/basics/discarded/discarded.js`：
+   * 这条路是 Chrome 自己的 API 测试覆盖过的（`tabs/basics/discarded/discarded.js`：
    * 「Tab is already discarded」→ `chrome.tabs.reload(id)` → 断言 `changeInfo.discarded` 为假）。
+   *
+   * 但要先说清楚**它能做到哪一步**：它只把「开始加载」这件事说出来。
+   * 网页标题是页面自己给的，什么时候给由网站决定——重 SPA（x.com 这类）在标签不可见时
+   * 往往走不到设置标题那一步，那些页面的标题要等用户切过去才更新。
+   * 这时行尾会停在「加载中」（而不是按钮无声消失），所以看上去是「还在加载」而不是「点了没反应」。
+   * 状态行也会说一句——不是报账，而是因为标题可能一直不来，得先说清楚请求已经发出去了。
    */
   async function loadTab(tabId: number): Promise<void> {
     try {
       await chrome.tabs.reload(tabId)
+      setStatus(status, '已在后台加载这一页；标题要等页面自己给出。', 'ok')
     } catch (error) {
       setStatus(status, `加载失败：${errorText(error)}`, 'error')
     }

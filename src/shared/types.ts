@@ -20,6 +20,16 @@ export type TabGroupColor =
   | 'cyan'
   | 'orange'
 
+/**
+ * 标签的加载状态，取自 `chrome.tabs.Tab.status`。
+ *
+ * `unloaded` 就是「被 Chrome 卸载了」：内容被丢掉、地址还留着，点开才重新加载。
+ * 用 `status` 而不是 `Tab.discarded`：两者在这个状态下等价（Chrome 自己的 API 测试断言
+ * 卸载时 `status === 'unloaded'`），但 `status` 能把「正在加载」也表达出来，
+ * 而界面恰好需要那一档（点过「加载」之后到页面给出标题之前）。
+ */
+export type TabStatus = 'unloaded' | 'loading' | 'complete'
+
 /** 采集到的一个标签页。 */
 export interface TabSnapshot {
   /**
@@ -47,12 +57,12 @@ export interface TabSnapshot {
   index: number
   lastAccessed?: number
   /**
-   * 网页是否已被 Chrome 卸载（`Tab.discarded`）。
+   * 网页的加载状态（`Tab.status`）。
    *
-   * 只给界面用：左栏的行尾据此多一个「加载」按钮（在后台把这一页读出来，不切过去）。
-   * 不参与写入与还原——书签只认标题与网址，卸载与否不影响存下去的东西。
+   * 只给界面用：左栏的行尾据此决定要不要给一个「加载」按钮（`unloaded` 时可点、
+   * `loading` 时显示「加载中」）。不参与写入与还原——书签只认标题与网址。
    */
-  discarded?: boolean
+  status: TabStatus
 }
 
 /** 一个标签分组，以及组内标签。 */

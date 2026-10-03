@@ -5,6 +5,7 @@ import type {
   TabGroupBucket,
   TabGroupColor,
   TabSnapshot,
+  TabStatus,
   WindowSnapshot
 } from './types'
 import {isInternalUrl} from './urls'
@@ -23,6 +24,12 @@ const GROUP_COLORS: readonly TabGroupColor[] = [
 
 function isTabGroupColor(value: string | undefined): value is TabGroupColor {
   return value !== undefined && (GROUP_COLORS as readonly string[]).includes(value)
+}
+
+const TAB_STATUSES: readonly TabStatus[] = ['unloaded', 'loading', 'complete']
+
+function isTabStatus(value: string | undefined): value is TabStatus {
+  return value !== undefined && (TAB_STATUSES as readonly string[]).includes(value)
 }
 
 interface GroupMeta {
@@ -69,8 +76,10 @@ export async function snapshotCurrentWindow(): Promise<WindowSnapshot> {
       pinned: tab.pinned ?? false,
       index: tab.index,
       lastAccessed: tab.lastAccessed,
-      // 懒加载出来的标签就在这个状态：内容被丢掉了、地址还留着，点开才重新加载。
-      discarded: tab.discarded === true
+      // `unloaded` 就是懒加载出来的那种：内容被丢掉了、地址还留着。
+      // 类型里 status 是可选的，缺了就当成已加载——**不能**当成卸载，
+      // 那会让每一行都冒出一个「加载」按钮。
+      status: isTabStatus(tab.status) ? tab.status : 'complete'
     }
 
     const groupId = tab.groupId
