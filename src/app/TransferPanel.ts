@@ -7,7 +7,6 @@ import {
 } from '../shared/capture'
 import {discardCommittedTabs, restoreFolder} from '../shared/restore'
 import {loadSettings} from '../shared/settings'
-import {escapeHtml, faviconMarkup} from '../shared/tile'
 import type {RestoreOptions, TabSnapshot} from '../shared/types'
 import {
   createPanelElement,
@@ -26,7 +25,24 @@ import {
   type Panel
 } from './dom'
 import {createArchivePane, type ArchivePane} from './ArchivePane'
-import {FAVICON_BASE, OPEN_MANAGER_ICON, PIN_ICON, REFRESH_ICON, plusIcon} from './icons'
+import {OPEN_MANAGER_ICON, REFRESH_ICON, plusIcon} from './icons'
+import {
+  childrenFor,
+  moveIndexFor,
+  payloadFromDataset,
+  payloadNodeId,
+  windowTabsFor,
+  type WindowDrop
+} from './windowDrag'
+import {
+  parseCloseKey,
+  pendingCloseKey,
+  tabRowMarkup,
+  groupRowMarkup,
+  countLabel,
+  windowSignatureOf,
+  type CloseTarget
+} from './windowMarkup'
 
 /**
  * 内建拖拽载荷的类型名。
@@ -44,22 +60,6 @@ type RestoreKind = 'newWindow' | 'currentWindow'
  * 两档互斥、又没有「一次点两个」的说法，所以界面上是一枚分段控件而不是两个按钮。
  */
 type Mode = 'window' | 'archive'
-
-/** 左栏的落点。`end` 表示落在末尾（空白处），那时归组看**最后一行**属于哪个分组。 */
-type WindowDrop =
-  | {kind: 'tab'; anchorIndex: number; after: boolean; groupId?: number}
-  | {kind: 'end'; groupId?: number}
-
-/**
- * 中间按钮上的计数。
- *
- * 括号用**半角并留一个空格**：全角括号在中文字体里占满一格，与数字之间看着空得发虚。
- * 位数变化带来的宽度差由按钮自己的 `min-width` 吃掉（见 base.css 的 `--move-btn-min`），
- * 不在这里预留。
- */
-function countLabel(text: string, count: number): string {
-  return `${text} (${count})`
-}
 
 /**
  * 收藏文件夹 chip 栏的挂载点 id。
@@ -437,7 +437,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    * 与右栏的 `pendingDeleteId` 分开一个变量：两边长得像，但一个是书签 id、一个是
    * tabId / 分组下标，合成一个变量只会让两处的判断互相干扰。
    */
-  let pendingClose: {kind: 'tab'; tabId: number} | {kind: 'group'; index: number} | undefined
+  let pendingClose: CloseTarget | undefined
   /** 正在拖的是什么；`dragover` 靠它决定收不收。 */
   let dragging: DragPayload | undefined
   /**
@@ -524,135 +524,11 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     })
   }
 
-  /**
-   * 行尾那一对「关闭 / 确认关闭 + 取消」（左栏用）。
-   *
-   * 与右栏的「删除」同一套两步确认：关闭是**不可逆**的（标签里的内容没存下来就没了），
-   * 而它在行尾离「打开」只有一个按钮的距离，误点太容易。
-   *
-   * 两档的宽度并不相同（「确认关闭」四个字 + 一个「取消」比「关闭」宽 70 多像素）——**不刻意定宽**：
-   * 与右栏的「删除 → 确认删除」同一套做法，代价只是**这一行**里「打开」往左让一格、
-   * 标题短一点；行高不变、别的行一个都不动。反过来若给它预留那么宽，
-   * 每一行平时都要白占 70 像素的标题空间，那更亏。
-   */
-  function closeSlotMarkup(kind: 'tab' | 'group', id: number, label: string): string {
-    const key = closeKey(kind, id)
-    if (pendingCloseKey() !== key) {
-      return `<button type="button" class="btn btn--ghost btn--sm" data-close="${key}"
-                  title="${label}">关闭</button>`
-    }
-    return `<button type="button" class="btn btn--danger btn--sm" data-confirm-close="${key}"
-                title="${label}">确认关闭</button>
-            <button type="button" class="btn btn--ghost btn--sm" data-cancel-close="">取消</button>`
-  }
-
-  /** 左栏关闭目标的主键：`t<tabId>` / `g<分组下标>`。用一个字符串就够了（不分两种状态）。 */
-  function closeKey(kind: 'tab' | 'group', id: number): string {
-    return `${kind === 'tab' ? 't' : 'g'}${id}`
-  }
-
-  /** 当前正在等确认的那个关闭目标的主键。渲染时用它决定画「关闭」还是「确认关闭」。 */
-  function pendingCloseKey(): string | undefined {
-    if (!pendingClose) return undefined
-    return closeKey(
-      pendingClose.kind,
-      pendingClose.kind === 'tab' ? pendingClose.tabId : pendingClose.index
-    )
-  }
-
-  /** `data-close` 值 → 关闭目标。 */
-  function parseCloseKey(value: string): {kind: 'tab'; tabId: number} | {kind: 'group'; index: number} {
-    const id = Number(value.slice(1))
-    return value.startsWith('t') ? {kind: 'tab', tabId: id} : {kind: 'group', index: id}
-  }
-
-  /**
-   * 一条标签行。三个 data 属性各有用处：`data-row` 供「点整行切换勾选」找到勾选框；
-   * `data-tab-index` / `data-tab-group` 供拖拽算落点。
-   * 副文案是**完整网址**（与右栏一致）：同站不同页靠路径区分，只显主机名时两条看着一模一样。
-   * 行尾按钮从左到右：**状态（加载/加载中/释放）· 打开 · 关闭**。
-   */
-  function tabRowMarkup(tab: TabSnapshot): string {
-    const url = tab.url
-    const groupAttr = tab.groupId === undefined ? '' : ` data-tab-group="${tab.groupId}"`
-    return `
-      <li class="item leaf" draggable="true" data-row data-drop-row="tab"
-          data-tab-index="${tab.index}"${groupAttr} data-drag-tab="${tab.tabId}">
-        <input type="checkbox" data-window-tab="${tab.tabId}" />
-        ${faviconMarkup(url, FAVICON_BASE)}
-        <span class="item__main">
-          <span class="item__title">${escapeHtml(tab.title || url)}${tab.pinned ? PIN_ICON : ''}</span>
-          <span class="item__meta item__meta--url" title="${escapeHtml(url)}">${escapeHtml(url)}</span>
-        </span>
-        <span class="tree__actions">${statusSlotMarkup(tab)}
-          <button type="button" class="btn btn--ghost btn--sm"
-                  data-switch-tab="${tab.tabId}" title="切换到这个标签页">打开</button>
-          ${closeSlotMarkup('tab', tab.tabId, '关闭这一枚标签页（里面的内容不会存下来）')}
-        </span>
-      </li>
-    `
-  }
-
-  /**
-   * 行尾那个位置的三种样子（加载 / 加载中 / 释放）。
-   *
-   * - `unloaded`：标签被 Chrome 卸载了（懒加载出来的，或它自己卸的）→ 可点的「加载」。
-   * - `loading`：点过「加载」之后、到页面给出标题之前的那一段 → 「加载中」并禁用。
-   *   这一段可能持续很久，而**页面什么时候给出标题由网站自己决定**：
-   *   有的站点（x.com 这类重 SPA）在标签不可见时走不到设置标题那一步，
-   *   于是标题要等用户切过去才更新。显示「加载中」比让按钮无声消失诚实得多——
-   *   否则用户看到的是「点了没反应」。
-   * - `complete` 且**不是活动标签**：给一个「释放」，把这一页占的内存交回去（点开时才重新加载）。
-   *   活动标签不给：它就在屏幕上，卸载它没意义（浏览器马上就会读回来）。
-   *   Chromium 自己的 discards 页用的是同一条判据（`visibility !== VISIBLE`）。
-   *
-   * 三个分支都占同一个位置（`.btn--load` 定宽）：
-   * 「加载」两个字、「加载中」三个字，不定宽就会在切换时差一个字宽。
-   */
-  function statusSlotMarkup(tab: TabSnapshot): string {
-    if (tab.status === 'unloaded') {
-      return `<button type="button" class="btn btn--ghost btn--sm btn--load" data-load-tab="${tab.tabId}"
-                  title="在后台加载这一页（标签已卸载）">加载</button>`
-    }
-    if (tab.status === 'loading') {
-      return `<button type="button" class="btn btn--ghost btn--sm btn--load" disabled
-                  title="这一页正在加载">加载中</button>`
-    }
-    if (tab.active) return ''
-    return `<button type="button" class="btn btn--ghost btn--sm btn--load" data-release-tab="${tab.tabId}"
-                title="释放这一页占用的内存（点开时才重新加载，地址不会丢）">释放</button>`
-  }
-
-  /**
-   * 一行里影响「画出来什么」的字段，顺序即渲染顺序。
-   * `active` 不显示在行里，但它决定行尾给不给「释放」→ 也算「画出来的一部分」，漏进签名就会「该重画的没重画」。
-   */
-  function drawnFieldsOf(tab: TabSnapshot): (string | number)[] {
-    return [tab.tabId, tab.title, tab.url, tab.pinned ? 1 : 0, tab.status, tab.active ? 1 : 0]
-  }
-
-  /**
-   * 左栏现在的样子：结构 + 文本。
-   * **勾选不在签名里**（由 `syncWindowStates()` 回填，算进去会「勾一下重绘整列」）；
-   * 但**行里画出来的东西一个都不能漏**（漏 `status` → 点「加载」后那行不变；漏 `pinned` → 图钉要等别的变化才出现）。
-   * 拼串用 `JSON.stringify`，**不自己定分隔符**——手写分隔符要求「内容里不会出现这个字符」，而标题与网址里什么都有
-   *（实测：空格拼时 `[a, b, a b]` 与 `[a b, a, b]` 撞成同一个串）；代价是字段要显式列出，而这恰好是想要的
-   *（整份快照会把每点一次就变的 `lastAccessed` 也算上）。细节见 `AGENTS.md` 第 27 条。
-   */
-  function windowSignatureOf(children: readonly WindowChild[]): string {
-    return JSON.stringify(
-      children.map((child) =>
-        child.kind === 'tab'
-          ? ['t', ...drawnFieldsOf(child.tab)]
-          : ['g', child.name, child.tabs.map(drawnFieldsOf)]
-      )
-    )
-  }
-
   function renderWindow(): void {
     // 结构没变就什么都不做：`refresh()` 会被频繁重跑（保存、删除、改名、拖一条收藏夹条目…），
     // 每次重建整个左栏在屏幕上就是一次无意义的整列重绘（实测：挪一根分隔线时「存过去 (N)」闪一下）。
-    const signature = windowSignatureOf(windowChildren) + '|' + (pendingCloseKey() ?? '')
+    const key = pendingCloseKey(pendingClose)
+    const signature = windowSignatureOf(windowChildren) + '|' + (key ?? '')
     if (signature === windowSignature) {
       syncWindowStates()
       return
@@ -668,27 +544,11 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     }
 
     windowList.innerHTML = windowChildren
-      .map((child, index) => {
-        if (child.kind === 'tab') return tabRowMarkup(child.tab)
-        // 分组行的 groupId 从组内第一枚标签上取：整组同属一个分组，取一个就够。
-        const bucketGroupId = child.tabs[0]?.groupId
-        const groupAttr = bucketGroupId === undefined ? '' : ` data-group-id="${bucketGroupId}"`
-        return `
-          <li class="group" data-row data-drop-row="group"${groupAttr}>
-            <div class="item group__head" draggable="true" data-drag-group="${index}">
-              <input type="checkbox" data-window-group="${index}" />
-              <span class="item__title">${escapeHtml(child.name)}</span>
-              <span class="item__meta">${child.tabs.length} 个标签</span>
-              <span class="tree__actions">${closeSlotMarkup(
-                'group',
-                index,
-                `解散这一组并关闭它的全部标签页（共 ${child.tabs.length} 枚已列出；组里的浏览器内部页面也会一起关）`
-              )}</span>
-            </div>
-            <ul class="kids">${child.tabs.map(tabRowMarkup).join('')}</ul>
-          </li>
-        `
-      })
+      .map((child, index) =>
+        child.kind === 'tab'
+          ? tabRowMarkup(child.tab, key)
+          : groupRowMarkup(child, index, key)
+      )
       .join('')
 
     syncWindowStates()
@@ -978,20 +838,6 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
   // ———————————————— 拖拽 ————————————————
 
-  function payloadOf(dragged: HTMLElement): DragPayload | undefined {
-    const tabId = dragged.dataset.dragTab
-    if (tabId !== undefined) return {kind: 'tab', tabId: Number(tabId)}
-    const group = dragged.dataset.dragGroup
-    if (group !== undefined) return {kind: 'group', index: Number(group)}
-    const bookmark = dragged.dataset.dragBookmark
-    if (bookmark !== undefined) return {kind: 'bookmark', id: bookmark}
-    const folder = dragged.dataset.dragFolder
-    if (folder !== undefined) return {kind: 'folder', id: folder}
-    const separator = dragged.dataset.dragSeparator
-    if (separator !== undefined) return {kind: 'separator', id: separator}
-    return undefined
-  }
-
   function draggedElement(event: DragEvent): HTMLElement | undefined {
     return (event.target as HTMLElement).closest<HTMLElement>(
       '[data-drag-tab], [data-drag-group], [data-drag-bookmark], [data-drag-folder], [data-drag-separator]'
@@ -1013,7 +859,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     draggingPane = archivePaneAt(dragged)
     // 多选时拖任意一条都是拖**整批**，载荷里是规约过的顶层 id（否则同一棵子树会被搬两次）。
     const pickedIds = draggingPane?.dragIdsOf(dragged)
-    const single = payloadOf(dragged)
+    const single = payloadFromDataset(dragged.dataset)
     const payload: DragPayload | undefined = pickedIds
       ? {kind: 'selection', ids: pickedIds}
       : single
@@ -1086,16 +932,6 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
 
-
-  /**
-   * 这条载荷指向哪个节点（只有收藏夹那三类有）。用于判「拖到自己那一行上了」（见 `overOwnRow`）。
-   */
-  function payloadNodeId(payload: DragPayload | undefined): string | undefined {
-    if (!payload) return undefined
-    return payload.kind === 'bookmark' || payload.kind === 'folder' || payload.kind === 'separator'
-      ? payload.id
-      : undefined
-  }
 
   /**
    * 鼠标底下这一行就是被拖的那一行吗。
@@ -1257,7 +1093,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       }
       const parentId =
         archiveSpot?.kind === 'into' ? archiveSpot.folderId : target.currentFolderId()
-      const children = payload ? childrenFor(payload) : []
+      const children = payload ? childrenFor(payload, windowChildren) : []
       if (children.length > 0) await writeInto(parentId, children)
       else if (urls.length > 0) await saveUrls(urls, parentId)
       return
@@ -1281,43 +1117,6 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     }
   })
 
-  /** 把拖拽载荷翻译成要写入的子级。 */
-  function childrenFor(payload: DragPayload): WindowChild[] {
-    if (payload.kind === 'group') {
-      const child = windowChildren[payload.index]
-      return child?.kind === 'group' ? [child] : []
-    }
-    if (payload.kind !== 'tab') return []
-
-    for (const child of windowChildren) {
-      if (child.kind === 'tab') {
-        if (child.tab.tabId === payload.tabId) return [child]
-        continue
-      }
-      const hit = child.tabs.find((tab) => tab.tabId === payload.tabId)
-      // 组内的标签单独拖出来时存成散装书签，而不是把整组建一遍。
-      if (hit) return [{kind: 'tab', tab: hit}]
-    }
-    return []
-  }
-
-  /** 载荷在窗口里的全部标签，以及它们在窗口里的下标（算插入位置要用）。 */
-  function windowTabsFor(payload: DragPayload): TabSnapshot[] {
-    if (payload.kind === 'group') {
-      const child = windowChildren[payload.index]
-      return child?.kind === 'group' ? [...child.tabs] : []
-    }
-    if (payload.kind !== 'tab') return []
-    for (const child of windowChildren) {
-      if (child.kind === 'tab' && child.tab.tabId === payload.tabId) return [child.tab]
-      if (child.kind === 'group') {
-        const hit = child.tabs.find((tab) => tab.tabId === payload.tabId)
-        if (hit) return [hit]
-      }
-    }
-    return []
-  }
-
   /**
    * 把窗口里的标签挪到落点，并按落点所在的分组决定归组。
    *
@@ -1326,18 +1125,13 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    */
   async function moveWindowTabs(payload: DragPayload, drop: WindowDrop): Promise<void> {
     if (flags.busy) return
-    const tabs = windowTabsFor(payload)
+    const tabs = windowTabsFor(payload, windowChildren)
     if (tabs.length === 0) return
     const tabIds = tabs.map((tab) => tab.tabId)
 
-    // 拖到自己身上 = 原地不动，而不是「与邻居交换」：index 是**移动之后**的位置，
-    // 所以「拖到自己这行的下缘」会算出「自己 + 1」，真把标签往后挪一格（实测踩到）。
-    if (drop.kind === 'tab' && tabs.length === 1 && drop.anchorIndex === tabs[0].index) return
-
-    const insertAt =
-      drop.kind === 'end'
-        ? allWindowTabs().length - tabIds.length
-        : anchorInsertIndex(drop.anchorIndex, drop.after, tabs.map((tab) => tab.index))
+    // `undefined` = 拖到自己身上，**原地不动**（不是「与邻居交换」）。
+    const insertAt = moveIndexFor(drop, tabs, allWindowTabs().length)
+    if (insertAt === undefined) return
 
     flags.busy = true
     updateButtons()
@@ -1361,16 +1155,6 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    */
   function tabIdArg(tabIds: readonly number[]): [number, ...number[]] {
     return tabIds as [number, ...number[]]
-  }
-
-  /**
-   * 「插到第 anchor 枚标签前/后」对应的最终下标。
-   * `dragged` 是那几枚当前的下标：它们会先从数组里摘出去 → 锚点之前的那几枚都会让它前移一格。
-   */
-  function anchorInsertIndex(anchor: number, after: boolean, dragged: readonly number[]): number {
-    const removedBefore = dragged.filter((index) => index < anchor).length
-    const anchorInRest = anchor - removedBefore
-    return after ? anchorInRest + 1 : anchorInRest
   }
 
   /**
@@ -1650,7 +1434,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    * 关闭之后**不等去抖就立刻重读窗口**：`onRemoved` 那条路要 120ms，那段时间里那行还留在屏幕上、
    * 且停在新出现的「确认关闭」状态上——看着就像「点了没反应」。
    */
-  async function closeTarget(target: {kind: 'tab'; tabId: number} | {kind: 'group'; index: number}): Promise<void> {
+  async function closeTarget(target: CloseTarget): Promise<void> {
     if (flags.busy) return
     const isGroup = target.kind === 'group'
     let tabIds: number[] = []
