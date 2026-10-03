@@ -45,7 +45,20 @@ await page.waitForSelector('#window-list li')
 | `--root` | `dist/chrome` | 产物目录 |
 | `--port` | `8788` | 监听端口 |
 | `--tree` | `sample-tree.mjs` 的合成树 | 换成真实导出（`chrome.bookmarks.getTree()` 的 JSON），压大数据用；路径由调用方给 |
+### 用真实书签树压数据
 
+合成树只有几十行，验证虚拟滚动 / 「全部展开」得用真数据：
+
+```bash
+node tools/preview/export-tree.mjs --out "$env:TEMP/tree.json"   # Chrome 的 Bookmarks → API 形状
+pnpm preview:serve --tree "$env:TEMP/tree.json"
+```
+
+`export-tree.mjs` 是必需的中间一步：Chrome 自己的文件里字段叫 `name` 而 API 叫 `title`，
+顶层是 `{roots}` 而 API 是数组。它会顺带打印书签栏那一层的形态序列，用来核对它和
+合成树是否还对得上（合成树的形状就是照着真实数据定的）。
+
+**输出文件里含你的真实书签**，写到 `%TEMP%` 之类的临时位置，别提交。
 ## 桩给了什么
 
 - `window.__tabs`：左栏看到的标签。一个分组三枚，其中一枚是**浏览器内部页面**（`chrome://newtab`，
