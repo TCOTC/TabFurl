@@ -92,22 +92,24 @@ export function toggledSeparatorKind(kind: SeparatorKind): SeparatorKind {
 }
 
 /**
- * 浏览器自带书签管理器里搜某个名字的地址。
+ * 浏览器自带书签管理器里某个文件夹的地址。
  *
- * **为什么不是「直接打开某一层」**：管理器的 `?id=` 只认它自己的 UUID。它虽然留了一条
- * 旧数字 id 的兜底（`router.ts` 里的 `findIdByLegacyId()`，注释说明它就是为了支持
- * `chrome://bookmarks/?id=123` 这种老 URL），但实测在用户机器上**不生效**：传数字 id 时
- * 它静默退回默认层。而扩展 API 里没有 UUID 这个字段（`chrome.bookmarks` 给的 id 是数字），
- * 所以我们**拿不到**能定位的 id。
+ * 主界面的「打开书签管理器」用它：在那儿能看到整棵树、也能批量整理，
+ * 而扩展本来就不打算重做一套通用收藏管理（见 docs/design.md 二）。
  *
- * 退而用搜索（`?q=`）：管理器会在结果里把名字命中的目录列出来（目录也参与搜索），
- * 点一下就进去了。它不是「直接落在那一层」，但比“落在根目录让用户自己找”强得多。
+ * `?id=` 收的是 `chrome.bookmarks` 给的**数字 id**。管理器的 URL 平时显示成
+ * `?id=<UUID>`（它内部用 UUID），但传数字 id 是官方支持的入口：浏览器自己的书签栏右键菜单
+ * 「打开书签管理器」就是这么干的（见 issue 565829425 的复现步骤），
+ * 而 `router.ts` 里的 `findIdByLegacyId()` 专门把数字 id 映射成 UUID，**映射完会改写地址栏**。
+ * 所以看到 UUID 不代表数字 id 不被接受。
  *
- * @param title 目标层的标题。空标题（书签树的根）就没得搜，退回管理器默认页。
+ * 已知的地雷：**Chrome 154.x 上这个入口是坏的**（Mojo 迁移的回归，见 issue 565829425 /
+ * 受限制的 565108351：传数字 id 会静默退回默认层）。修复已进 M155 并回并到 154 之前的稳定线。
+ * 曾经为此把这里改成 `?q=<层名>` 搜索，何必：搜出来的是一堆结果、还要用户自己点进去，
+ * 而 `?id=` 是直接落在那一层。修好之后就该用回它。
  */
-export function bookmarkManagerUrl(title: string): string {
-  const term = title.trim()
-  return term ? `chrome://bookmarks/?q=${encodeURIComponent(term)}` : 'chrome://bookmarks/'
+export function bookmarkManagerUrl(folderId: string): string {
+  return `chrome://bookmarks/?id=${encodeURIComponent(folderId)}`
 }
 
 /** 分隔线标题两端的手画横杠（`─`）与空白，一起去掉。 */

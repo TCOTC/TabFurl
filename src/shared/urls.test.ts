@@ -115,14 +115,10 @@ test('两种记号各有自己的名字（按钮与状态文案都从这里取�
   assert.equal(SEPARATOR_LABELS.gap, '间隔')
 })
 
-test('bookmarkManagerUrl 按名字搜索（无法按 id 定位，见函数注释）', () => {
-  // 数字 id 在管理器的 `?id=` 上不生效（实测），而扩展拿不到 UUID，所以只能搜。
-  assert.equal(bookmarkManagerUrl('工具'), 'chrome://bookmarks/?q=%E5%B7%A5%E5%85%B7')
-  assert.equal(bookmarkManagerUrl('a b'), 'chrome://bookmarks/?q=a%20b')
-  assert.equal(bookmarkManagerUrl('  工具  '), 'chrome://bookmarks/?q=%E5%B7%A5%E5%85%B7')
-  // 空标题（书签树的根）没得搜，退回管理器默认页。
-  assert.equal(bookmarkManagerUrl(''), 'chrome://bookmarks/')
-  assert.equal(bookmarkManagerUrl('   '), 'chrome://bookmarks/')
+test('bookmarkManagerUrl 用数字 id 直接定位到那一层', () => {
+  // 数字 id 是官方入口（浏览器自己的右键菜单就这么生成 URL），只是 154.x 有个回归。
+  assert.equal(bookmarkManagerUrl('80'), 'chrome://bookmarks/?id=80')
+  assert.equal(bookmarkManagerUrl('380'), 'chrome://bookmarks/?id=380')
 })
 
 test('separatorTitle 剔除首尾手画的横杠，并收掉留下的空白', () => {

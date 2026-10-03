@@ -317,15 +317,17 @@ pnpm icons          # 重新生成占位图标
       而它想解决的问题浏览器做得更好。`chrome://` 能不开得开由 Chrome 的白名单决定，所以
       `openInBookmarkManager()` 里要 `try/catch` 并给出一句**可操作**的提示（含 Ctrl+Shift+O），
       不要把 API 的原始错误直接丢给用户。
-    - **不要试图用 `?id=` 定位某一层——实测不行**。管理器只认它自己的 UUID（用户看到的
-      `chrome://bookmarks/?id=914d6618-…` 就是 UUID），而 `chrome.bookmarks` 给的 id 是数字。
-      源码里确实有一条旧数字 id 的兜底（`router.ts` 的 `findIdByLegacyId()`，注释说明它就是为了
-      支持 `chrome://bookmarks/?id=123` 这种老 URL），但**实测传数字 id 会静默退回默认层**；
-      而扩展 API 里根本没有 UUID 字段，所以定位这条路是断的。别再把时间花在它上面。
-      现在的做法是**按标题搜**（`?q=`）：管理器的搜索也匹配目录名（只有内置目录因
-      `permanentFolderType` 被排除），搜出来点一下就进去了。状态行必须如实写出
-      「已按「X」搜索……不能直接跳进去」——它不是定位，不能让用户以为打开了那一层。
-      书签树的根没有标题（`getNodePath` 给它兜底的是「书签」），那一层就不搜、开默认页。
+    - **打开书签管理器用 `?id=<数字 id>`**：管理器地址栏平时显示的是 UUID，但 `?id=`
+      **认的就是 `chrome.bookmarks` 给的数字 id**——浏览器自己的书签栏右键菜单「打开书签管理器」
+      就是这么生成 URL 的；`router.ts` 里的 `findIdByLegacyId()` 专门把数字 id 映射成 UUID，
+      而且**映射完会改写地址栏**。看到 UUID 并不代表数字 id 不被接受。
+      **曾经为此走过一次弯路**：Chrome 154.x 上这条路径坏了（Mojo 迁移的回归，
+      issue 565829425 / 受限制的 565108351），当时实测「传数字 id 会静默退回默认层」，
+      于是改成了 `?q=<层名>` 搜索。后来确认那是**上游 bug 而不是设计如此**：
+      修复（commit `60fdad74c32b2caf516f316888607881a54b0d3e`，CL 8471113，
+      改了 `bookmarks/router.ts` + `util.ts`）已进 M155、并回并到 154 之前的稳定线，
+      另有一个补充测试的提交 `3af685fc8cf361980d66ac4a3c1a6e0947442c3c`（CL 8496589）。
+      所以已经改回 `?id=`。**下次再碰到「?id= 不生效」，先去查上游 issue，不要先改设计。**
     - 左栏每行末尾的「打开」（`data-switch-tab`）也只是 `tabs.update({active: true})`，
       但**必须再 `windows.update({focused: true})`**：主界面与那一枚标签在不同的浏览器窗口时，
       不聚焦窗口看着就是「点了没反应」。

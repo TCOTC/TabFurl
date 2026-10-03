@@ -1814,25 +1814,13 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   openWindowButton.addEventListener('click', () => void openSelection('newWindow'))
   undoButton.addEventListener('click', () => void undo())
 
-  // 「打开书签管理器」要的是当前展示的这一层，但给不出能定位的 id：
-  //
-  // 管理器只认它自己的 UUID，而 `chrome.bookmarks` 给的是数字 id（`?id=` 上的旧数字 id 兜底
-  // 实测不生效）。所以我们只能**按标题搜**，把那一层摆到搜索结果里让用户点一下。
-  // 状态行要如实写出这一点——它毕竟不是「直接跳进那一层」。
+  // 「打开书签管理器」开的就是当前展示的这一层：给管理器的 `?id=` 一个数字 id，
+  // 它就能直接落在那一层（Chrome 154.x 上这个入口有个已知回归，见 `bookmarkManagerUrl`）。
   openRootButton.addEventListener('click', async () => {
     if (!viewFolderId) return
-    // 书签树的根没有自己的标题（`getNodePath` 给它的兜底是「书签」），拿它去搜没有意义，
-    // 那一层就直接开管理器的默认页。
-    const title = canWrite() ? (viewPath.at(-1)?.title ?? '') : ''
     try {
-      await openInBookmarkManager(title)
-      setStatus(
-        status,
-        title
-          ? `书签管理器已打开，已按「${title}」搜索——扩展拿不到管理器要的 UUID，不能直接跳进去。`
-          : '书签管理器已打开。',
-        'ok'
-      )
+      await openInBookmarkManager(viewFolderId)
+      setStatus(status, '书签管理器已打开。', 'ok')
     } catch (error) {
       // 这里的错误文案是写给用户看的（含快捷键），不是 API 的原文，所以直接展示。
       setStatus(status, errorText(error), 'error')
