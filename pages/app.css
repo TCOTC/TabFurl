@@ -268,6 +268,92 @@
   min-height: 0;
 }
 
+/*
+ * 左栏那一枚两档控件（`当前窗口 | 收藏夹`）。
+ *
+ * 它是**同一件事的两种取值**，所以做成一枚分段控件而不是两个并列的按钮：
+ * 两个按钮会被读成两条命令，而它们其实互斥——界面上不存在「同时点两个」这种结果。
+ *
+ * 圆角按「套盒子」的写法：外圆角 = 内圆角 + 内边距。各写一个值的话，
+ * 里面那两块的角会顶到外框的弧线上。
+ */
+.modes {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+
+.mode {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-md);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mode:hover:not(.is-active) {
+  color: var(--text);
+}
+
+/* 当前那一档：底色抬起来表示「已选中」，与旁边那档形成明暗差。 */
+.mode.is-active {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.mode:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/*
+ * 左栏的两块内容（「当前窗口」那一份与「收藏夹」那一份）。
+ *
+ * **`[hidden]` 必须显式写出来**：它是浏览器默认样式表里的 `display: none`，
+ * 而上面那条是作者样式、优先级更高——不补这一句，两块会同时显示、上下摞在一起。
+ *
+ * 用一层壳子而不是直接藏两个 `.box`：`.col` 的子项是「全选框那一行 + 框」这一整套，
+ * 少一层就没法整块换掉。间隙与 `.col` 一致，所以两档看起来是同一个布局。
+ */
+.left-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+}
+
+.left-view[hidden] {
+  display: none;
+}
+
+/*
+ * 中间那一列在「两栏都是收藏夹」时换成的那一组。
+ *
+ * 与那五个窗口语义的控件互斥（见 `applyMode`），所以各自成块、各自 `hidden`。
+ */
+.mid__archive {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mid__archive[hidden] {
+  display: none;
+}
+
 .col {
   display: flex;
   flex-direction: column;

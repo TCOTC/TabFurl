@@ -1,4 +1,4 @@
-import {createBookmark, removeSubTree} from '../shared/bookmarks'
+import {createBookmark, getNodePath, removeSubTree} from '../shared/bookmarks'
 import {
   planWindowChildren,
   snapshotCurrentWindow,
@@ -38,6 +38,13 @@ const DRAG_TYPE = 'application/x-tabfurl'
 
 type RestoreKind = 'newWindow' | 'currentWindow'
 
+/**
+ * 左栏看什么：当前窗口的标签，还是另一个收藏夹。
+ *
+ * 两档互斥、又没有「一次点两个」的说法，所以界面上是一枚分段控件而不是两个按钮。
+ */
+type Mode = 'window' | 'archive'
+
 /** 左栏的落点。`end` 表示落在末尾（空白处），那时归组看**最后一行**属于哪个分组。 */
 type WindowDrop =
   | {kind: 'tab'; anchorIndex: number; after: boolean; groupId?: number}
@@ -64,24 +71,115 @@ function countLabel(text: string, count: number): string {
  */
 export const FAVORITE_HOST_ID = 'favorite-host'
 
-const TEMPLATE = `
-  <div class="split">
-    <section class="col">
-      <header class="col__head">
-        <h2 class="col__title">当前窗口 <span class="badge" id="window-count">0</span></h2>
-      </header>
-      <div class="row row--compact" id="window-all-host"></div>
-      <div class="box" data-drop-pane="window">
+/**
+ * 左栏那枚两档控件的挂载点 id。
+ *
+ * `App` 用它把**左栏**的 chip 栏放进左栏表头（与右栏那条是同一份数据的两块视图）。
+ * 与 `FAVORITE_HOST_ID` 同理：面板只留位置，两个界面模块仍然互不 import。
+ */
+export const LEFT_FAVORITE_HOST_ID = 'left-favorite-host'
+
+/**
+ * 一个收藏夹栏的标记——**不含表头**（表头两栏不一样：右栏是标题 + chip 栏，左栏是两档控件）。
+ *
+ * 右栏本来就是这一套，F7 之后**左栏也能切成收藏夹**，所以它必须能被生成两份，而不是复制一遍 HTML。
+ * 两栏的 `id` 用前缀区分（`archive` / `left-archive`）：两个 `ArchivePane` 住在同一份 DOM 里，
+ * 而 `ArchivePane` 是按 id 找元素的——id 重了就会各自找到对方的东西，而且那种错很安静
+ * （一边勾选、另一边跟着变）。
+ *
+ * 必须定义在 `TEMPLATE` **之前**：模板字面量在求值时就会调用它。
+ */
+function archiveColumnMarkup(prefix: string): string {
+  return `
+      <div class="row row--compact" id="${prefix}-all-host"></div>
+      <div class="box" data-drop-pane="archive">
+        <!--
+          当前位置与导航按钮都在**列表框里面**的顶部，而且粘住不滚走：
+          它们与列表是同一份内容的两个视角（「我在哪」与「这里有什么」），
+          摆在一起才不用在两个区域之间来回对；粘住是因为列表可以很长，
+          滚到一半时退路不该消失。
+
+          退路就是面包屑本身，所以旁边不再单放一个「上一层」按钮：一样东西两个入口，
+          总有一个会先被人遗忘。按钮组推到最右，它们与「往哪走」无关。
+        -->
+        <div class="box__top">
+          <div class="box__bar">
+            <nav class="path" id="${prefix}-path" aria-label="当前所在的收藏夹位置"></nav>
+            <div class="row row--compact">
+              <button type="button" class="btn btn--ghost btn--sm" id="${prefix}-expand-all-btn">全部展开</button>
+              <button type="button" class="btn btn--ghost btn--sm" id="${prefix}-new-folder-btn">＋ 新建文件夹</button>
+              <button type="button" class="btn btn--ghost btn--sm" id="${prefix}-new-separator-btn"
+                      title="在当前位置插一条分隔线（竖线，给横向排列的书签栏用）">＋ 分隔线</button>
+              <button type="button" class="btn btn--ghost btn--sm" id="${prefix}-new-gap-btn"
+                      title="在当前位置插一条间隔（横线，给竖向排列的列表用）">＋ 间隔</button>
+              <!-- 它挂在全选框那一行的右端（在刷新按钮左边），见 makeRefreshButton 附近。 -->
+              <button type="button" class="btn btn--ghost btn--icon" id="${prefix}-open-root-btn"
+                      title="在浏览器自带的书签管理器里打开这一层"
+                      aria-label="在浏览器自带的书签管理器里打开这一层">${OPEN_MANAGER_ICON}</button>
+            </div>
+          </div>
+          <!-- 在书签树根上时写入入口会是灰的，用一句话说明为何以及怎么退出去。 -->
+          <p class="box__note" id="${prefix}-note" hidden></p>
+        </div>
         <!--
           先放几块骨架：数据是异步读来的（设置 + 标签 + 书签树三处），在它们回来之前列表是空的，
-          而「空列表」与「真的没有标签」长得一模一样——用户看到的是「先空一下、内容再蹦出来」。
+          而「空列表」与「真的没有内容」长得一模一样——用户看到的是「先空一下、内容再蹦出来」。
           骨架把这一段变成「正在读」（尺寸见 app.css 的 .skeleton）。
         -->
-        <ul class="list" id="window-list">
+        <ul class="list" id="${prefix}-list">
+          <li class="skeleton" aria-hidden="true"></li>
           <li class="skeleton" aria-hidden="true"></li>
           <li class="skeleton" aria-hidden="true"></li>
           <li class="skeleton" aria-hidden="true"></li>
         </ul>
+      </div>
+  `
+}
+
+const TEMPLATE = `
+  <div class="split">
+    <section class="col" id="left-col">
+      <header class="col__head">
+        <!--
+          左栏看什么，是**两档**而不是两个按钮：这两个东西互斥、又没有「一次点两个」的说法，
+          所以做成一枚分段控件（同一件事的两种取值），而不是两条命令。
+
+          位置就在这一栏表头、顶掉原来那个标题：它改的就是这一栏装什么，
+          摆在别处都要用户先建立一次「这点的是左边」的心智映射；
+          而右栏同一个位置放的是 chip 栏，于是两栏表头从此对称——
+          左边是「这一栏看什么」，右边是「这一栏从哪开始」。
+
+          **不新增一行高度**：这个位置本来就空着一大片（理由见 docs/design.md 七）。
+        -->
+        <div class="modes" role="group" aria-label="左栏显示什么">
+          <button type="button" class="mode is-active" data-mode="window" aria-pressed="true">当前窗口 <span class="badge" id="window-count">0</span></button>
+          <button type="button" class="mode" data-mode="archive" aria-pressed="false">收藏夹 <span class="badge" id="left-archive-count">0</span></button>
+        </div>
+        <!--
+          左栏的 chip 栏只在这一栏看着收藏夹时出现（看窗口时它没地方可跳）。
+          与右栏那条是**同一份数据的两块视图**：在任一栏加/删/排序，两条一起变；
+          点某一栏的 chip 只跳那一栏。理由见 docs/design.md 七。
+        -->
+        <div class="favs-host" id="${LEFT_FAVORITE_HOST_ID}" hidden></div>
+      </header>
+      <div class="left-view" id="window-view">
+        <div class="row row--compact" id="window-all-host"></div>
+        <div class="box" data-drop-pane="window">
+          <!--
+            先放几块骨架：数据是异步读来的（设置 + 标签 + 书签树三处），在它们回来之前列表是空的，
+            而「空列表」与「真的没有标签」长得一模一样——用户看到的是「先空一下、内容再蹦出来」。
+            骨架把这一段变成「正在读」（尺寸见 app.css 的 .skeleton）。
+          -->
+          <ul class="list" id="window-list">
+            <li class="skeleton" aria-hidden="true"></li>
+            <li class="skeleton" aria-hidden="true"></li>
+            <li class="skeleton" aria-hidden="true"></li>
+          </ul>
+        </div>
+      </div>
+      <!-- 左栏的收藏夹视图：右栏那一整套的第二个实例（模板同一份，id 前缀不同）。 -->
+      <div class="left-view" id="left-archive-view" hidden>
+${archiveColumnMarkup('left-archive')}
       </div>
     </section>
 
@@ -115,9 +213,27 @@ const TEMPLATE = `
         一出现就把上面三个按钮顶上去，看着像界面跳了一下。
       -->
       <button type="button" class="btn btn--ghost btn--sm" id="undo-btn" disabled>撤销上次保存</button>
+
+      <!--
+        两栏都是收藏夹时，中间这一列换成「搬」而不是「开」：
+        书签到书签用的是 bookmarks.move（**移动**，不是复制），而上面那一整组
+        （存过去 / 打开 / 新窗口 / 不建分组 / 撤销）都是窗口语义，在这个档下没有意义。
+
+        箭头方向就是两栏的方向：箭头指哪边，就是把勾选的东西送到哪边。
+      -->
+      <div class="mid__archive" id="mid-archive" hidden>
+        <button type="button" class="btn btn--primary btn--move" id="move-right-btn" disabled>
+          <span class="move__arrow">→</span>
+          <span id="move-right-label">移动过去</span>
+        </button>
+        <button type="button" class="btn btn--move" id="move-left-btn" disabled>
+          <span class="move__arrow">←</span>
+          <span id="move-left-label">移动过来</span>
+        </button>
+      </div>
     </div>
 
-    <section class="col">
+    <section class="col" id="right-col">
       <header class="col__head">
         <h2 class="col__title">收藏夹 <span class="badge" id="archive-count">0</span></h2>
         <!--
@@ -130,43 +246,7 @@ const TEMPLATE = `
         -->
         <div class="favs-host" id="${FAVORITE_HOST_ID}"></div>
       </header>
-      <div class="row row--compact" id="archive-all-host"></div>
-      <div class="box" data-drop-pane="archive">
-        <!--
-          当前位置与导航按钮都在**列表框里面**的顶部，而且粘住不滚走：
-          它们与列表是同一份内容的两个视角（「我在哪」与「这里有什么」），
-          摆在一起才不用在两个区域之间来回对；粘住是因为列表可以很长，
-          滚到一半时退路不该消失。
-
-          退路就是面包屑本身，所以旁边不再单放一个「上一层」按钮：一样东西两个入口，
-          总有一个会先被人遗忘。按钮组推到最右，它们与「往哪走」无关。
-        -->
-        <div class="box__top">
-          <div class="box__bar">
-            <nav class="path" id="archive-path" aria-label="当前所在的收藏夹位置"></nav>
-            <div class="row row--compact">
-              <button type="button" class="btn btn--ghost btn--sm" id="expand-all-btn">全部展开</button>
-              <button type="button" class="btn btn--ghost btn--sm" id="new-folder-btn">＋ 新建文件夹</button>
-              <button type="button" class="btn btn--ghost btn--sm" id="new-separator-btn"
-                      title="在当前位置插一条分隔线（竖线，给横向排列的书签栏用）">＋ 分隔线</button>
-              <button type="button" class="btn btn--ghost btn--sm" id="new-gap-btn"
-                      title="在当前位置插一条间隔（横线，给竖向排列的列表用）">＋ 间隔</button>
-              <!-- 它现在挂在全选框那一行的右端（在刷新按钮左边），见 makeRefreshButton 附近。 -->
-              <button type="button" class="btn btn--ghost btn--icon" id="open-root-btn"
-                      title="在浏览器自带的书签管理器里打开这一层"
-                      aria-label="在浏览器自带的书签管理器里打开这一层">${OPEN_MANAGER_ICON}</button>
-            </div>
-          </div>
-          <!-- 在书签树根上时写入入口会是灰的，用一句话说明为何以及怎么退出去。 -->
-          <p class="box__note" id="archive-note" hidden></p>
-        </div>
-        <ul class="list" id="archive-list">
-          <li class="skeleton" aria-hidden="true"></li>
-          <li class="skeleton" aria-hidden="true"></li>
-          <li class="skeleton" aria-hidden="true"></li>
-          <li class="skeleton" aria-hidden="true"></li>
-        </ul>
-      </div>
+${archiveColumnMarkup('archive')}
     </section>
   </div>
 
@@ -200,6 +280,16 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   element.innerHTML = TEMPLATE
 
   const status = q<HTMLSpanElement>(element, '#status')
+  const windowView = q<HTMLElement>(element, '#window-view')
+  const leftArchiveView = q<HTMLElement>(element, '#left-archive-view')
+  const leftCol = q<HTMLElement>(element, '#left-col')
+  const rightCol = q<HTMLElement>(element, '#right-col')
+  const leftFavoritesHost = q<HTMLElement>(element, `#${LEFT_FAVORITE_HOST_ID}`)
+  const midArchive = q<HTMLElement>(element, '#mid-archive')
+  const moveRightButton = q<HTMLButtonElement>(element, '#move-right-btn')
+  const moveRightLabel = q<HTMLSpanElement>(element, '#move-right-label')
+  const moveLeftButton = q<HTMLButtonElement>(element, '#move-left-btn')
+  const moveLeftLabel = q<HTMLSpanElement>(element, '#move-left-label')
 
   /**
    * 共享的忙标记。
@@ -210,25 +300,33 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   const flags = {busy: false}
 
   /**
-   * 收藏夹那一栏（右栏）。
+   * 两栏的收藏夹实例。
    *
-   * 面板只提供**位置**与几个回调，状态（我站在哪一层、展开了哪些、勾掉了哪些）都在实例自己那里。
-   * 它要的那些元素都从 `element` 里取——模板刚被写进 DOM，所以这里拿得到。
+   * 右栏一直有；左栏那个在「当前窗口」档下藏着（`display: none`），切过去才读数据。
+   * 元素靠 **id 前缀**分开（`archive` / `left-archive`）——两个实例住在同一份 DOM 里，
+   * id 重了就会各自找到对方的东西。
    *
    * `rememberWrite` / `favoriteIds` 读的是下面才声明的变量：回调都在用户操作之后才执行，
    * 那时它们早已初始化（与 `App.ts` 里现问 `panel.currentFolderId()` 同一个道理）。
    */
-  const archive: ArchivePane = createArchivePane({
-    root: element,
+  const paneDeps = {
     events,
     flags,
     status,
-    rememberWrite: (result) => {
+    rememberWrite: (result: {folderIds: string[]; bookmarkIds: string[]}) => {
       lastWrite = {folderIds: result.folderIds, bookmarkIds: result.bookmarkIds}
     },
     favoriteIds: () => favoriteFolderIds,
-    // 右栏换层或勾选变了时重算中间那一列（存过去的提示、「打开 (N)」）。
+    // 换层或勾选变了时重算中间那一列（存过去的提示、「打开 / 移动 (N)」）。
     onStateChanged: () => updateButtons()
+  }
+  const archive: ArchivePane = createArchivePane({...paneDeps, root: rightCol, idPrefix: 'archive'})
+  const leftArchive: ArchivePane = createArchivePane({
+    ...paneDeps,
+    // 根用**整栏**而不是那个视图：胸章（`left-archive-count`）在表头里，不在视图里。
+    // id 都带前缀，所以在整栏范围内查也不会串到右栏去。
+    root: leftCol,
+    idPrefix: 'left-archive'
   })
 
   const windowList = q<HTMLUListElement>(element, '#window-list')
@@ -240,6 +338,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   const openWindowButton = q<HTMLButtonElement>(element, '#open-window-btn')
   const openWindowLabel = q<HTMLSpanElement>(element, '#open-window-label')
   const undoButton = q<HTMLButtonElement>(element, '#undo-btn')
+  const noGroupHost = q<HTMLElement>(element, '#no-group-host')
   const noGroupCheck = q<HTMLInputElement>(element, '#no-group-check')
 
   const windowSelectAll = createSelectAll(q<HTMLDivElement>(element, '#window-all-host'), {
@@ -300,13 +399,17 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   q<HTMLDivElement>(element, '#window-all-host').append(
     makeRefreshButton('window-refresh-btn', '重新读取当前窗口的标签页')
   )
-  const archiveActions = document.createElement('div')
-  archiveActions.className = 'row row--compact row--push-end'
-  archiveActions.append(
-    archive.openRootButton,
-    makeRefreshButton('archive-refresh-btn', '重新读取书签树')
-  )
-  archive.actionsHost.append(archiveActions)
+  // 右栏那一组（管理器 + 刷新）。左栏的收藏夹档也照摆一组，两栏位置对称——
+  // 左栏那个实例用的是它自己的管理器按钮，刷新按钮也各有一个（它俩读的是各栏那一层）。
+  for (const [pane, prefix, label] of [
+    [archive, 'archive', '重新读取书签树'],
+    [leftArchive, 'left', '重新读取左栏这一层']
+  ] as const) {
+    const actions = document.createElement('div')
+    actions.className = 'row row--compact row--push-end'
+    actions.append(pane.openRootButton, makeRefreshButton(`${prefix}-refresh-btn`, label))
+    pane.actionsHost.append(actions)
+  }
 
   /**
    * 收藏的文件夹（书签树 id，按用户排的顺序）。
@@ -344,6 +447,61 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   let lastWrite: {folderIds: string[]; bookmarkIds: string[]} | undefined
   /** 正在拖的是什么；`dragover` 靠它决定收不收。 */
   let dragging: DragPayload | undefined
+  /**
+   * 这一次拖动**从哪一栏**开始（只有内部拖动有值）。
+   *
+   * 两栏都有收藏夹条目，而载荷里只有 id —— 光看 id 分不出它来自哪一边
+   * （两栏停在同一层时，两边认得的是同一批 id，那就真的有歧义了）。
+   * 所以起点在 `dragstart` 时记一次。
+   */
+  let draggingPane: ArchivePane | undefined
+
+  /**
+   * 左栏看什么。
+   *
+   * **不落盘**：与展开状态同理，它是一次浏览过程中的视图状态，不是偏好——
+   * 打开界面永远是「窗口 ⇄ 收藏夹」那副样子。
+   */
+  let mode: Mode = 'window'
+
+  /**
+   * 切换左栏这一档。
+   *
+   * 两侧的收藏夹数据都**只在自己可见时才读**：窗口档下左栏那个实例是 `display: none`，
+   * 读了也白读（还要多一次 `getSubTree`）。所以第一次切过去时才 `reload()`。
+   */
+  async function setMode(next: Mode): Promise<void> {
+    if (mode === next) return
+    mode = next
+    applyMode()
+    if (next === 'archive') await leftArchive.reload()
+    updateButtons()
+  }
+
+  /**
+   * 让界面反映 `mode`：换左栏那一块、换中间那一列、给出两档的选中态。
+   *
+   * 中间那一列**整组换掉**而不是留一半：窗口语义的五个控件（存过去 / 打开 / 新窗口 /
+   * 不建分组 / 撤销）在书签 ⇄ 书签时一个都不成立，留着它们只会让人以为那也能用。
+   */
+  function applyMode(): void {
+    const isArchive = mode === 'archive'
+    windowView.hidden = isArchive
+    leftArchiveView.hidden = !isArchive
+    // 左栏的 chip 栏只在看着收藏夹时露面（看窗口时它没地方可跳）。
+    leftFavoritesHost.hidden = !isArchive
+    for (const button of element.querySelectorAll<HTMLButtonElement>('.mode')) {
+      const active = button.dataset.mode === mode
+      button.classList.toggle('is-active', active)
+      button.setAttribute('aria-pressed', String(active))
+    }
+    saveButton.hidden = isArchive
+    openButton.hidden = isArchive
+    openWindowButton.hidden = isArchive
+    noGroupHost.hidden = isArchive
+    undoButton.hidden = isArchive
+    midArchive.hidden = !isArchive
+  }
 
   // ———————————————— 左栏 ————————————————
 
@@ -587,10 +745,13 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   // ———————————————— 状态 ————————————————
 
   /**
-   * 面板级的刷新：设置 + 左栏 + 右栏（右栏交给它自己的实例）。
+   * 面板级的刷新：设置 + 左栏 + 右栏。
    *
-   * 两栏那两个刷新按钮都走这一条路——**不给右栏另写一条「只重读书签树」的路径**，
+   * 两栏那两个刷新按钮都走这一条路——**不给某一栏另写一条「只重读书签树」的路径**，
    * 多一条路径就多一处会分叉的地方。
+   *
+   * 左栏那个收藏夹实例只在它可见时才重读：窗口档下它是隐形的，重读一遍谁也看不见，
+   * 只是白白多一次 `getSubTree`。
    */
   async function refresh(): Promise<void> {
     favoriteFolderIds = (await loadSettings()).favoriteFolderIds
@@ -601,14 +762,19 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     for (const tabId of [...windowSelected]) if (!aliveTabs.has(tabId)) windowSelected.delete(tabId)
 
     renderWindow()
+    if (mode === 'archive') await leftArchive.reload()
     await archive.reload()
   }
 
   /**
-   * 中间那一列（存过去 / 打开 / 新窗口 / 撤销）的可用状态。
+   * 中间那一列的可用状态与计数。
    *
-   * **与收藏夹实例自己那份分开**：新建文件夹 / 记号 / 全部展开 / 管理器那几枚归实例管，
-   * 它自己会同步。合成一个函数会让「谁的按钮在谁手里」变成猜谜。
+   * 两档各算各的：窗口档是「存过去 / 打开 / 新窗口 / 撤销」（跟着左栏的标签勾选），
+   * 收藏夹档是「移动过去 / 移动过来」（跟着**两栏各自的**书签勾选）。
+   * 两套都算一遍而不是只算当前那档——另一档的按钮还留在 DOM 里，切回去时不该先闪一个旧数字。
+   *
+   * 收藏夹实例自己那几枚（新建文件夹 / 记号 / 全部展开 / 管理器）不在这里，
+   * 由 `ArchivePane.updateButtons()` 管：合成一个函数会让「谁的按钮在谁手里」变成猜谜。
    */
   function updateButtons(): void {
     const keptTabs = allWindowTabs().filter((tab) => windowSelected.has(tab.tabId)).length
@@ -629,7 +795,19 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     // 这样它出现 / 消失都不会把上面三个按钮上下推一下。
     undoButton.classList.toggle('is-slot-hidden', !lastWrite)
     undoButton.disabled = flags.busy || !lastWrite
+
+    // 「移动过去」搬的是**左栏**勾选的那些书签，落到右栏当前这一层；
+    // 「移动过来」反过来。所以一个按钮的计数来自一边、落点来自另一边——别弄反。
+    const leftKept = leftArchive.keptCount()
+    moveRightLabel.textContent = countLabel('移动过去', leftKept)
+    moveLeftLabel.textContent = countLabel('移动过来', keptBookmarks)
+    moveRightButton.title = `把左栏勾选的 ${leftKept} 枚书签移到「${archive.currentFolderTitle()}」`
+    moveLeftButton.title = `把右栏勾选的 ${keptBookmarks} 枚书签移到「${leftArchive.currentFolderTitle()}」`
+    moveRightButton.disabled = flags.busy || leftKept === 0 || !archive.isWritable()
+    moveLeftButton.disabled = flags.busy || keptBookmarks === 0 || !leftArchive.isWritable()
+
     archive.updateButtons()
+    leftArchive.updateButtons()
   }
 
   /** 只重读左栏。窗口里的标签变了（而收藏夹没动）时用它。 */
@@ -865,7 +1043,11 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     if (!payload) return
 
     dragging = payload
-    // 栏内是「移动」，跨栏是「复制一份」；两者都值得，所以 effectAllowed 给 copyMove。
+    // 起点也要记：两栏都有收藏夹条目，而载荷里只有 id——两栏停在同一层时
+    // 两边认得的是同一批 id，光看 id 真的分不出它来自哪一边。
+    draggingPane = archivePaneAt(dragged)
+    // 栏内是「移动」、跨栏也是「移动」（F7 之后两栏之间搬东西就是 `bookmarks.move`）；
+    // 只有「拖到窗口里」是「开一份」，所以给 copyMove 让两边都收。
     event.dataTransfer.effectAllowed = 'copyMove'
     event.dataTransfer.setData(DRAG_TYPE, JSON.stringify(payload))
 
@@ -877,8 +1059,21 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
   element.addEventListener('dragend', () => {
     dragging = undefined
+    draggingPane = undefined
     clearDropMarks()
   })
+
+  /**
+   * 这个元素属于哪一个收藏夹栏。
+   *
+   * 两栏的 `.box` 都写着 `data-drop-pane="archive"`（它说的是「这一格收收藏夹条目」），
+   * 所以还得看它在哪个视图里。**不靠 id 前缀去猜**：那会把「模板怎么命名」变成隐式契约。
+   */
+  function archivePaneAt(target: HTMLElement): ArchivePane | undefined {
+    const pane = target.closest<HTMLElement>('[data-drop-pane="archive"]')
+    if (!pane) return undefined
+    return pane.closest('#left-archive-view') ? leftArchive : archive
+  }
 
 
   /** 左栏的落点：插到哪一格、归不归组。落在空白处则返回 `end`（追加到末尾）。 */
@@ -936,9 +1131,12 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     if (!pane || !event.dataTransfer) return
 
     const toArchive = pane.dataset.dropPane === 'archive'
+    // 落点要落到**具体哪一个**收藏夹栏上：两栏都有收藏夹，而它们的行长得一模一样。
+    const target = toArchive ? archivePaneAt(pane) : undefined
+    if (toArchive && !target) return
     const externalUrls = Array.from(event.dataTransfer.types).includes('text/uri-list')
     if (!dragging && !externalUrls) return
-    if (toArchive && !archive.isWritable()) return
+    if (target && !target.isWritable()) return
 
     const fromWindow = dragging?.kind === 'tab' || dragging?.kind === 'group'
     const fromArchive =
@@ -947,13 +1145,15 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       dragging?.kind === 'separator'
 
     event.preventDefault()
+    // 从窗口拖过去是「存一份」（复制），收藏夹之间是「搬」（移动）。
     event.dataTransfer.dropEffect = toArchive && fromWindow ? 'copy' : 'move'
     clearDropMarks()
 
-    if (toArchive && fromArchive) {
-      // 挪一条收藏夹条目：与左栏同一套「行内三分法」。
-      const spot = archive.dropSpot(event)
-      if (dragging && spot && !archive.canDropAt(dragging, archive.dropTargetId(spot))) {
+    if (target && fromArchive) {
+      // 挪一条收藏夹条目：同栏是排序，跨栏是搬去另一层——两处都是「行内三分法」。
+      const spot = target.dropSpot(event)
+      const samePane = draggingPane === target
+      if (samePane && dragging && spot && !target.canDropAt(dragging, target.dropTargetId(spot))) {
         /*
          * 拖到自己或自己的子孙里：**整份拖拽直接拒收**。
          *
@@ -980,17 +1180,17 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
         }
       }
       // 落在行之间的空白处（或这一层是空的）：一律按「追加到末尾」提示。
-      markEndDrop(archive.list, pane)
+      markEndDrop(target.list, pane)
       return
     }
 
-    if (toArchive) {
+    if (target) {
       // 存标签：落在文件夹行的中间就进那一层，否则进当前这一层（也就是追加到它的末尾）。
       const folderRow = (event.target as HTMLElement).closest<HTMLElement>('[data-drop-row="folder"]')
       const inner = folderRow?.querySelector<HTMLElement>('.group__head') ?? folderRow
       const into = folderRow && inner && spotIn(inner, event.clientY, true) === 'into'
       if (into && folderRow) folderRow.classList.add('is-drop-active')
-      else markEndDrop(archive.list, pane)
+      else markEndDrop(target.list, pane)
       return
     }
 
@@ -1020,6 +1220,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     event.preventDefault()
 
     const payload = dragging
+    const sourcePane = draggingPane
     const urls = event.dataTransfer
       .getData('text/uri-list')
       .split(/\r?\n/)
@@ -1027,22 +1228,27 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       .filter((line) => line && !line.startsWith('#'))
 
     const toArchive = pane.dataset.dropPane === 'archive'
+    const target = toArchive ? archivePaneAt(pane) : undefined
     // 落点在清掉标记之前算完：drop 的 target 与坐标都只在这一次事件里有效。
-    const archiveSpot = toArchive ? archive.dropSpot(event) : undefined
+    const archiveSpot = target ? target.dropSpot(event) : undefined
     const windowSpot = toArchive ? undefined : windowDropSpot(event)
 
     dragging = undefined
+    draggingPane = undefined
     clearDropMarks()
 
-    if (toArchive) {
-      if (!archive.isWritable()) return
+    if (target) {
+      if (!target.isWritable()) return
       if (payload?.kind === 'bookmark' || payload?.kind === 'folder' || payload?.kind === 'separator') {
-        // 收藏夹里的条目拖回收藏夹 = **挪**（同一个东西换位置），不是再存一份。
-        await archive.moveNode(payload, archiveSpot)
+        // 收藏夹条目落到收藏夹上：
+        //   同栏 = **挪**（同一个东西在它自己那一层里换位置）；
+        //   跨栏 = 搬到对面那一层。两件事用的是同一个 API，只是目标层不同。
+        if (sourcePane && sourcePane !== target) await moveAcrossPanes(target, payload, archiveSpot)
+        else await target.moveNode(payload, archiveSpot)
         return
       }
       const parentId =
-        archiveSpot?.kind === 'into' ? archiveSpot.folderId : archive.currentFolderId()
+        archiveSpot?.kind === 'into' ? archiveSpot.folderId : target.currentFolderId()
       const children = payload ? childrenFor(payload) : []
       if (children.length > 0) await writeInto(parentId, children)
       else if (urls.length > 0) await saveUrls(urls, parentId)
@@ -1059,7 +1265,9 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       payload?.kind === 'folder' ||
       payload?.kind === 'separator'
     ) {
-      await openArchiveInto(payload, windowSpot ?? {kind: 'end'})
+      // 用**起点那一栏**的数据：能拖到窗口里的条目一定来自某个收藏夹实例，
+      // 而两栏各有一份自己的树（`nodeIndex`），拿错一份就找不到那个 id。
+      await openArchiveInto(sourcePane ?? archive, payload, windowSpot ?? {kind: 'end'})
       return
     }
     if (urls.length > 0) {
@@ -1168,6 +1376,95 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     return after ? anchorInRest + 1 : anchorInRest
   }
 
+  /**
+   * 落点解出「搬进哪一层」。
+   *
+   * 三种落点各有归属：`into` 是那个文件夹本身，`here` 是**它所在的那一层**（展开子级之后
+   * 这两者不是一回事），都不是就是目标栏当前这一层（追加到末尾）。
+   * 返回的 `index` 只对 `here` 有意义，而且直接就是 `bookmarks.move` 要的那个坐标系
+   * ——新旧父级不同，没有「同父下移要先减一」那回事。
+   */
+  function destOf(target: ArchivePane, spot: ArchiveDrop | undefined): {id: string; index?: number} {
+    if (spot?.kind === 'into') return {id: spot.folderId}
+    if (spot?.kind === 'here') return {id: spot.parentId, index: spot.index}
+    return {id: target.currentFolderId()}
+  }
+
+  /** 某一层显示出来的名字（搬完报一句「挪到哪儿了」用）。 */
+  function destLabel(target: ArchivePane, destId: string): string {
+    return target.folderTitle(destId) ?? target.currentFolderTitle()
+  }
+
+  /**
+   * 把一条收藏夹条目从一栏搬到另一栏——F7 的主要动作。
+   *
+   * 与栏内排序共用同一个 API（`chrome.bookmarks.move`），差别只在「目标层属于另一栏」。
+   * 所以这条路上没有 `canDropAt`：它查的是**本栏**那份父子索引，跨栏时里面根本没有源这一侧的节点。
+   * 于是自己沿目标那一层的父链走一遍（`getNodePath()` 就是那条链），命中就拒收——
+   * 让 Chrome 去抛错会在界面上留下「拖了但没动」而没有任何解释的痕迹。
+   */
+  async function moveAcrossPanes(
+    target: ArchivePane,
+    payload: {kind: 'bookmark' | 'folder' | 'separator'; id: string},
+    spot: ArchiveDrop | undefined
+  ): Promise<void> {
+    if (flags.busy) return
+    const dest = destOf(target, spot)
+    if (!dest.id) return
+
+    if (payload.kind === 'folder' && (await getNodePath(dest.id)).some((node) => node.id === payload.id)) {
+      setStatus(status, '不能把文件夹挪进它自己里面。', 'error')
+      return
+    }
+
+    // 不置灰按钮：搬一条几乎是瞬时的（与栏内排序同一个理由），置灰只会让那排按钮闪一下。
+    flags.busy = true
+    try {
+      await chrome.bookmarks.move(payload.id, {parentId: dest.id, index: dest.index})
+      setStatus(status, `已挪到「${destLabel(target, dest.id)}」。`, 'ok')
+    } catch (error) {
+      setStatus(status, `移动失败：${errorText(error)}`, 'error')
+    } finally {
+      flags.busy = false
+      await events.archiveChanged()
+      await refresh()
+    }
+  }
+
+  /**
+   * 把某一栏**勾选的那些书签**搬到另一栏当前这一层（中间那排「移动过去 / 移动过来」）。
+   *
+   * 搬的是勾选集（`keptIds()`，与「打开 (N)」严格同一个集合），**不是整行整行地搬**：
+   * 勾选框说的始终是「这一行里的书签」，文件夹要整个搬靠拖拽（拖文件夹行搬的是它自己）。
+   * 这条口径让两档下的勾选框是同一个意思，不用为了 F7 再教用户一套新读法。
+   *
+   * 一枚一枚地调（省略 `index` 就是追加到末尾），所以搬过去的顺序与勾选时的顺序一致。
+   * 书签是叶子节点，不存在「搬进自己的子孙」，所以这里不需要环检测。
+   */
+  async function moveSelection(source: ArchivePane, target: ArchivePane): Promise<void> {
+    if (flags.busy) return
+    const ids = source.keptIds()
+    const destId = target.currentFolderId()
+    if (ids.length === 0 || !destId || !target.isWritable()) return
+
+    flags.busy = true
+    updateButtons()
+    try {
+      for (const id of ids) await chrome.bookmarks.move(id, {parentId: destId})
+      setStatus(
+        status,
+        `已把 ${ids.length} 枚书签移到「${target.currentFolderTitle()}」。`,
+        'ok'
+      )
+    } catch (error) {
+      setStatus(status, `移动失败：${errorText(error)}`, 'error')
+    } finally {
+      flags.busy = false
+      await events.archiveChanged()
+      await refresh()
+    }
+  }
+
 
 
   /**
@@ -1180,9 +1477,13 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    * 标签同样会在导航提交后被 `discard` 卸掉：拖一个几十枚书签的文件夹过来，
    * 不至于把浏览器同时点燃几十个页面。
    */
-  async function openArchiveInto(payload: DragPayload, drop: WindowDrop): Promise<void> {
+  async function openArchiveInto(
+    source: ArchivePane,
+    payload: DragPayload,
+    drop: WindowDrop
+  ): Promise<void> {
     if (flags.busy) return
-    const items = archive.openItems(payload)
+    const items = source.openItems(payload)
     if (items.length === 0) {
       setStatus(status, '这一条里没有可以打开的网址。', 'error')
       return
@@ -1202,7 +1503,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       }
 
       // 文件夹开的标签收进一个同名分组；单条书签就让它当散装标签。
-      const groupTitle = payload.kind === 'folder' ? (archive.folderTitle(payload.id) ?? '') : ''
+      const groupTitle = payload.kind === 'folder' ? (source.folderTitle(payload.id) ?? '') : ''
       if (groupTitle && tabIds.length > 0) {
         const groupId = await chrome.tabs.group({tabIds: tabIdArg(tabIds)})
         await chrome.tabGroups.update(groupId, {title: groupTitle})
@@ -1453,11 +1754,30 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     }
 
     // 收藏夹那一栏的勾选（三态、叶子、以及「只有它认识这个输入框」）全在实例里。
-    // 面板只把事件递过去，它说不是它的、再往下走。
-    if (archive.handleChange(input)) return
+    // 面板只把事件递给**输入框所在的那一栏**——不问它「是不是你的、不是再问另一个」：
+    // `data-archive-item` 两栏都有，第一个实例会把它当成自己的，而它属于另一栏。
+    const owner = input.closest('#left-archive-view') ? leftArchive : archive
+    if (owner.handleChange(input)) return
   })
 
   // ———————————————— 按钮 ————————————————
+
+  /**
+   * 左栏那枚两档控件。
+   *
+   * 点击不是「命令」而是「换一档」，所以两个按钮各管自己那一档；当前档由 `applyMode()` 标出来。
+   */
+  for (const button of element.querySelectorAll<HTMLButtonElement>('.mode')) {
+    button.addEventListener('click', () => void setMode(button.dataset.mode as Mode))
+  }
+
+  // 两栏互相搬（只在收藏夹档下出现）。箭头指哪边，就把勾选的东西送到哪边。
+  moveRightButton.addEventListener('click', () => void moveSelection(leftArchive, archive))
+  moveLeftButton.addEventListener('click', () => void moveSelection(archive, leftArchive))
+
+  // 初始那一档要在建完两个实例之后摆一次：模板里写的是窗口档，但可见性与
+  // 按钮的 disabled / 文案都得按当前状态算一遍。
+  applyMode()
 
   // 「存过去」写的是**当前展示的这一层**，不是某个固定的起点：右栏是一个可导航的浏览器，
   // 「站在哪儿就往哪儿存」才说得通。书签树的根不接受写入，用 `isWritable()` 挡住。

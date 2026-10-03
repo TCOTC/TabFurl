@@ -59,6 +59,13 @@ import {CHEVRON_ICON, FAVICON_BASE, FOLDER_ICON, VERT_LINE_ICON} from './icons'
 export interface ArchivePaneDeps {
   /** 面板的根元素：本实例的元素都从它里面取（模板由面板给出）。 */
   root: HTMLElement
+  /**
+   * 本实例那几个元素的 id 前缀（`archive` / `left-archive`）。
+   *
+   * 两栏各有一个实例、又住在同一份 DOM 里，元素 id 重了就会各自找到对方的东西
+   * （`q()` 只查第一个匹配），而那种错很安静：一边勾选、另一边变。
+   */
+  idPrefix: string
   /** 跨模块通知（改了书签树之后要让别处刷新）。 */
   events: AppEvents
   /**
@@ -104,6 +111,13 @@ export interface ArchivePane {
   currentFolderTitle(): string
   /** 这一层里「还会被打开」的书签枚数。 */
   keptCount(): number
+  /**
+   * 这一层里被勾选的那些书签 id（与 `keptCount()` 与「打开 (N)」同一集合）。
+   *
+   * 两栏互相搬东西时用它：搬的就是这几个 id。**不含文件夹**——
+   * 勾选框说的始终是「这一行里的书签」，文件夹要整个搬靠拖拽（拖文件夹行搬的是它自己）。
+   */
+  keptIds(): string[]
   /** 被勾掉的书签 id（打开侧默认全不勾）。 */
   excluded(): ReadonlySet<string>
   /** 重新读自己这一层并重绘。 */
@@ -135,7 +149,10 @@ export interface ArchivePane {
 
 export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   const {root, events, flags, status} = deps
-  const archiveList = q<HTMLUListElement>(root, '#archive-list')
+  /** 本实例的元素 id 都带这个前缀（见 `ArchivePaneDeps.idPrefix`）。 */
+  const id = (suffix: string): string => `#${deps.idPrefix}-${suffix}`
+
+  const archiveList = q<HTMLUListElement>(root, id('list'))
   /**
    * 本栏的滚动容器（`.box`，不是那个 `ul`）。
    *
@@ -144,17 +161,17 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
    */
   const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
 
-  const archiveCount = q<HTMLSpanElement>(root, '#archive-count')
-  const archivePath = q<HTMLElement>(root, '#archive-path')
-  const archiveNote = q<HTMLParagraphElement>(root, '#archive-note')
+  const archiveCount = q<HTMLSpanElement>(root, id('count'))
+  const archivePath = q<HTMLElement>(root, id('path'))
+  const archiveNote = q<HTMLParagraphElement>(root, id('note'))
 
-  const expandAllButton = q<HTMLButtonElement>(root, '#expand-all-btn')
-  const newFolderButton = q<HTMLButtonElement>(root, '#new-folder-btn')
-  const newSeparatorButton = q<HTMLButtonElement>(root, '#new-separator-btn')
-  const newGapButton = q<HTMLButtonElement>(root, '#new-gap-btn')
-  const openRootButton = q<HTMLButtonElement>(root, '#open-root-btn')
+  const expandAllButton = q<HTMLButtonElement>(root, id('expand-all-btn'))
+  const newFolderButton = q<HTMLButtonElement>(root, id('new-folder-btn'))
+  const newSeparatorButton = q<HTMLButtonElement>(root, id('new-separator-btn'))
+  const newGapButton = q<HTMLButtonElement>(root, id('new-gap-btn'))
+  const openRootButton = q<HTMLButtonElement>(root, id('open-root-btn'))
 
-  const archiveSelectAll = createSelectAll(q<HTMLDivElement>(root, '#archive-all-host'), {
+  const archiveSelectAll = createSelectAll(q<HTMLDivElement>(root, id('all-host')), {
     describe: (kept, total) => {
       // 与左栏同一套嗍词（「已选 K / N 个标签页」）。
       // 不说「收藏夹里共 N 枚」：勾选跟着展示的层走，「打开 (N)」也只算这一层，写成整个收藏夹会与按钮对不上。
@@ -1391,7 +1408,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /** 本栏全选框那一行的容器（面板往里面塞刷新按钮）。 */
-  const actionsHost = q<HTMLDivElement>(root, '#archive-all-host')
+  const actionsHost = q<HTMLDivElement>(root, id('all-host'))
 
   return {
     list: archiveList,
@@ -1401,6 +1418,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     currentFolderId: () => viewFolderId,
     currentFolderTitle: () => viewPath.at(-1)?.title ?? '',
     keptCount: archiveKeptCount,
+    keptIds: () => archiveBookmarkIds().filter((id) => !archiveExcluded.has(id)),
     excluded: () => archiveExcluded,
     reload: refresh,
     navigateTo,
