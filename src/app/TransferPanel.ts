@@ -392,6 +392,17 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
   const expandedIds = new Set<string>()
 
   /**
+   * 下一次刷新时要展开的文件夹（刚存下的分组）。
+   *
+   * 为什么不在 `writeInto` 里当场展开：新节点的 `parentById` 要等 `applyArchive`
+   * 重新读完树、重建索引之后才知道，而祖先链得靠它。所以这里只记下 id，
+   * 到索引完备的那一趟再展开（见 `applyArchive`）。
+   */
+  let pendingExpandIds: string[] = []
+  /** 下一次刷新后要滚进视野的那一行。新建的东西会落在末尾，不滚过去就看不见。 */
+  let pendingScrollId: string | undefined
+
+  /**
    * 已载入节点的索引：当前层 + 它下面**所有后代**。
    *
    * 为什么可以先建一张全量索引：`getSubTree()` 本来就把整棵子树递归读进来了，
@@ -716,15 +727,46 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
     syncArchiveStates()
   }
 
-  /** 把某一行滚进视野（新建 / 改名的那一行可能落在视口外，`focusRenameInput()` 会抓不到输入框）。 */
+  /**
+   * 把某一行滚进视野（新建 / 改名的那一行可能落在视口外，`focusRenameInput()` 会抓不到输入框）。
+   *
+   * **两步：先按行高估一次，渲染出来再量真实位置修正。**
+   *
+   * 只靠估算不够：列表上面还压着一条**吸顶**的面包屑（`.box__top`），它占着滚动内容的一段高度、
+   * 滚动时又盖在内容上，再加上取整，估算会差几个像素甚至**一整行**——
+   * 而这一行的用户可见后果就是「新建的东西没滚到、还在屏幕外」。
+   * 量一次真实元素就没有这些假设了：它同时得到了吸顶栏遮挡区与真实边界。
+   */
   function scrollRowIntoView(id: string): void {
     const index = archiveRows.findIndex((row) => row.kind === 'node' && row.node.id === id)
     if (index < 0) return
     const height = rowHeight()
-    const top = index * height
-    if (top < archiveBox.scrollTop) archiveBox.scrollTop = top
-    else if (top + height > archiveBox.scrollTop + archiveBox.clientHeight) {
-      archiveBox.scrollTop = top + height - archiveBox.clientHeight
+    const boxRect = archiveBox.getBoundingClientRect()
+    const listTop = archiveList.getBoundingClientRect().top - boxRect.top + archiveBox.scrollTop
+    const rowTop = listTop + index * height
+
+    const sticky = archiveBox.querySelector('.box__top')
+    const occluded = sticky ? Math.max(0, sticky.getBoundingClientRect().bottom - boxRect.top) : 0
+    if (rowTop < archiveBox.scrollTop + occluded) archiveBox.scrollTop = rowTop - occluded
+    else if (rowTop + height > archiveBox.scrollTop + archiveBox.clientHeight) {
+      archiveBox.scrollTop = rowTop + height - archiveBox.clientHeight
+    }
+
+    // 修正：把这一行渲染出来、量它真实的位置，差多少补多少（最多再渲染一次）。
+    renderArchiveWindow()
+    const target = [...archiveList.querySelectorAll<HTMLElement>('[data-node-id]')].find(
+      (row) => row.dataset.nodeId === id
+    )
+    if (!target) return
+    const rect = target.getBoundingClientRect()
+    const limitTop = boxRect.top + occluded
+    const limitBottom = boxRect.bottom
+    let delta = 0
+    if (rect.top < limitTop) delta = rect.top - limitTop
+    else if (rect.bottom > limitBottom) delta = rect.bottom - limitBottom
+    if (delta !== 0) {
+      archiveBox.scrollTop += delta
+      renderArchiveWindow()
     }
   }
 
@@ -789,7 +831,9 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
     const bookmark = row.node
     // 三样东西每行都要带上：所在层（拖拽算插到哪一层的第几格）、层内下标（同一件事，
     // 但不必再去 DOM 里数兄弟）、缩进（扁平之后层级只能这样表达）。
+    // `data-node-id` 是给「把这一行滚进视野」按 id 定位元素用的。
     const boxAttrs = `data-parent-id="${escapeHtml(row.parentId)}" data-sibling-index="${row.siblingIndex}" style="--depth:${row.depth}"`
+    const nodeAttr = `data-node-id="${escapeHtml(bookmark.id)}"`
     const kind = separatorKind(bookmark.url)
     if (kind) {
       const isRenaming = renaming?.id === bookmark.id
@@ -806,7 +850,7 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
       // 而按钮必须在这条线**右边**——用伪元素就只能得到「线在按钮右边」那种坏排布。
       return `
         <li class="marker marker--${kind}" draggable="true" data-drop-row="separator"
-            ${boxAttrs} data-drag-separator="${escapeHtml(bookmark.id)}">
+            ${boxAttrs} ${nodeAttr} data-drag-separator="${escapeHtml(bookmark.id)}">
           <span class="marker__slot" aria-hidden="true"></span>
           ${
             kind === 'sep' ? VERT_LINE_ICON : rules
@@ -847,7 +891,7 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
 
     return `
       <li class="item leaf" data-row data-drop-row="bookmark" draggable="true"
-          ${boxAttrs} data-drag-bookmark="${escapeHtml(bookmark.id)}"
+          ${boxAttrs} ${nodeAttr} data-drag-bookmark="${escapeHtml(bookmark.id)}"
           data-bookmark-url="${escapeHtml(url)}">
         ${selectableAt(row.depth, false) ? `<input type="checkbox" data-archive-item="${escapeHtml(bookmark.id)}" />` : NO_BOX_SLOT}
         ${faviconMarkup(url, FAVICON_BASE)}
@@ -923,7 +967,7 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
     return `
       <li class="item group__head${expanded ? ' is-expanded' : ''}" data-row data-drop-row="folder"
           data-parent-id="${escapeHtml(row.parentId)}" data-sibling-index="${row.siblingIndex}"
-          style="--depth:${row.depth}"
+          style="--depth:${row.depth}" data-node-id="${escapeHtml(folder.id)}"
           data-drop-folder="${escapeHtml(folder.id)}" data-enter-folder="${escapeHtml(folder.id)}">
         ${selectableAt(row.depth, true) ? `<input type="checkbox" data-archive-item="${escapeHtml(folder.id)}" />` : NO_BOX_SLOT}
         <button type="button" class="folder-tile" data-toggle-folder="${escapeHtml(folder.id)}"
@@ -1027,9 +1071,14 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
     }
 
     archiveRows = flattenArchive()
-    // 编辑中的那一行可能不在视口里（新建的文件夹会落在末尾），先把它滚进来再渲染窗口，
-    // 否则 `focusRenameInput()` 抓不到输入框。
+    // 编辑中的那一行、或刚存下的那一个文件夹，都可能不在视口里
+    // （新建的文件夹落在末尾）。先把它滚进来再渲染窗口：否则 `focusRenameInput()`
+    // 抓不到输入框，用户也看不到自己刚建的东西。
     if (renaming) scrollRowIntoView(renaming.id)
+    if (pendingScrollId) {
+      scrollRowIntoView(pendingScrollId)
+      pendingScrollId = undefined
+    }
     renderArchiveWindow()
   }
 
@@ -1295,6 +1344,25 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
     // 但集合没理由越攒越大。
     for (const id of [...expandedIds]) if (!nodeIndex.has(id)) expandedIds.delete(id)
 
+    /*
+     * 刚存下的分组默认展开，而且**连它的祖先一起展开**。
+     *
+     * 两层都要的理由不同：展开自己是「拖过去之后马上看到里面存了什么」；
+     * 展开祖先是必需的——落点可以是一个**收起的**文件夹（拖到它那一行的中间就进它里面），
+     * 只展开自己的话，那个展开根本不在视野里，看着就像没生效。
+     */
+    for (const id of pendingExpandIds) {
+      if (nodeIndex.has(id)) expandedIds.add(id)
+      for (
+        let at = parentById.get(id);
+        at !== undefined && at !== viewFolderId;
+        at = parentById.get(at)
+      ) {
+        expandedIds.add(at)
+      }
+    }
+    pendingExpandIds = []
+
     const alive = new Set(archiveBookmarkIds())
     for (const id of alive) {
       if (!knownBookmarks.has(id)) {
@@ -1317,6 +1385,12 @@ const archiveBox = archiveList.closest<HTMLElement>('.box') ?? archiveList
     try {
       const result = await writeChildren(parentId, children)
       lastWrite = {folderIds: result.folderIds, bookmarkIds: result.bookmarkIds}
+      // 新存下的分组展开给自己看（存下去的是一整组，收起来那个文件夹看不出存了什么），
+      // 并把它滚进视野——写入总是追加到这一层的末尾，那一行往往在屏幕外。
+      if (result.folderIds.length > 0) {
+        pendingExpandIds = result.folderIds
+        pendingScrollId = result.folderIds[0]
+      }
       const parts = [`已存下 ${result.saved} 个标签页`]
       if (result.groups > 0) parts.push(`${result.groups} 个分组`)
       setStatus(status, parts.join(' · '), 'ok')
