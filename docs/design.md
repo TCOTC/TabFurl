@@ -188,7 +188,7 @@ TabFurl 把它们当成书签树里的组织记号，而不是页面：
 那会把该域名下的任意页面也当成记号。`?t=` 只把 `horz` / `horizontal` 认作横向，其余
 （无参数、`?t=vert`、其他参数）一律算竖向——竖向本来就是默认形态。
 
-实现在 `src/app/TransferPanel.ts` 的 `archiveBookmarkRow()`（分出 `.marker--sep` / `.marker--gap`），
+实现在 `src/app/archiveMarkup.ts`（分出 `.marker--sep` / `.marker--gap`），
 与 `restore.ts` 的 `PlannedBookmark.separator` 共用同一份判定：记号照常留在 `planRestore()` 的计划里，
 只有真正的标签才走 `restorableBookmarks()`。只含记号的子文件夹等于空子文件夹，不产生项。
 
@@ -394,9 +394,17 @@ src/app/            主界面的界面模块（只被 pages/app.ts 引用）
   FavoriteFolders.ts 收藏文件夹的**状态**（createFavoriteStore）与它的视图（createFavoriteBar，两栏各一份）
   FolderPicker.ts 可搜索的文件夹选择器（给 chip 栏挑一层用；带 id 前缀，两条栏各一个）
   icons.ts        内联 SVG 图标与 favicon 基址（唯一一份，各模块共用）
-  ArchivePane.ts  **一个收藏夹栏**（面包屑导航 + 就地展开 + 虚拟滚动 + 勾选 + 行内改名删除 + 拖拽落点）。
-                  右栏一直有一个，左栏切到收藏夹时是第二个实例；靠 id 前缀分开。
+  ArchivePane.ts  **一个收藏夹栏**的状态与 DOM 接线（面包屑导航 + 就地展开 + 虚拟滚动 + 勾选
+                  + 行内改名删除 + 拖拽落点）。右栏一直有一个，左栏切到收藏夹时是第二个实例；靠 id 前缀分开。
+                  —— 它下面这五个是**不碰 DOM 的纯函数**（所以有单元测试，而界面层本来一处都没有）：
+  archiveRows.ts      拍平可见行（flattenArchive：只走树、只产数据）
+  archiveCounts.ts    拆数：这一层「会被打开」的书签 id / 「能干活的东西」枚数（记号两边都不算）
+  archiveMarkup.ts    三类行的 HTML 与勾选框占位规则（分隔线、深层行都不给勾选框）
+  archivePick.ts      多选数学：规约顶层项 / 高亮框归属 / Shift 范围
+  archiveDrop.ts      落点收不收（拦「搬进自己的子孙」，会成环）
   TransferPanel.ts 两栏外壳：左栏窗口／收藏夹两档、中间那列、写入与打开、拖拽路由
+  windowMarkup.ts     左栏窗口视图的 HTML、签名（windowSignatureOf）与两步关闭的主键
+  windowDrag.ts       载荷解析、载荷→子级、插入位置（两个 move API 的 index 语义相反的那处）
   BookmarkDialog.ts 改书签的那个模态框（标题 + 网址两个字段）
   dom.ts          模块契约（Panel / AppEvents / PaneSide）与共用小工具
                   （三态勾选框、行内三分法 spotIn、末尾落点 markEndDrop、点行勾选）
