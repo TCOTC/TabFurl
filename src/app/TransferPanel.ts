@@ -43,7 +43,7 @@ import {
   type Panel
 } from './dom'
 import {openBookmarkDialog} from './BookmarkDialog'
-import {FOLDER_ICON, PIN_ICON, VERT_LINE_ICON, plusIcon} from './icons'
+import {FOLDER_ICON, PIN_ICON, REFRESH_ICON, VERT_LINE_ICON, plusIcon} from './icons'
 
 /** Chrome 本地 favicon 缓存端点：读缓存、不联网。 */
 const FAVICON_BASE = chrome.runtime.getURL('_favicon/')
@@ -261,6 +261,29 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       else for (const tab of allWindowTabs()) windowExcluded.add(tab.tabId)
       syncWindowStates()
     }
+  })
+
+  /**
+   * 左栏的刷新按钮。
+   *
+   * 它追着全选框那一行摆，但**不紧紧跟在文字后面**：那行文字会随着勾选从
+   * 「已全选 3 个标签页」变成「已选 2 / 127 个标签页」，紧跟就会左右滑动。
+   * `margin-left: auto` 把它钉在这一行的右端，位置与文字长度无关。
+   *
+   * 它**不置灰**（哪怕 `busy`）：这是用户的手动退路，正因为「界面看着不对」才点它。
+   */
+  const windowRefreshButton = document.createElement('button')
+  windowRefreshButton.type = 'button'
+  windowRefreshButton.id = 'window-refresh-btn'
+  windowRefreshButton.className = 'btn btn--ghost btn--icon'
+  windowRefreshButton.title = '重新读取当前窗口的标签页'
+  windowRefreshButton.setAttribute('aria-label', '重新读取当前窗口的标签页')
+  windowRefreshButton.innerHTML = REFRESH_ICON
+  q<HTMLDivElement>(element, '#window-all-host').append(windowRefreshButton)
+
+  windowRefreshButton.addEventListener('click', async () => {
+    await refresh()
+    setStatus(status, '已刷新。', 'ok')
   })
 
   const archiveSelectAll = createSelectAll(q<HTMLDivElement>(element, '#archive-all-host'), {
@@ -791,6 +814,54 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     renderWindow()
     applyArchive(viewFolderId ? await getSubTree(viewFolderId) : undefined)
   }
+
+  /** 只重读左栏。窗口里的标签变了（而收藏夹没动）时用它。 */
+  async function refreshWindowOnly(): Promise<void> {
+    windowChildren = planWindowChildren(await snapshotCurrentWindow())
+    // 被关掉的标签不能继续留在排除集里，否则那个集合只会越涨越大。
+    const alive = new Set(allWindowTabs().map((tab) => tab.tabId))
+    for (const tabId of [...windowExcluded]) if (!alive.has(tabId)) windowExcluded.delete(tabId)
+    renderWindow()
+  }
+
+  /**
+   * 窗口里**任何**标签变化都重读左栏。
+   *
+   * 之前只有我们自己的动作才会主动 `refresh()`，所以不由我们发起的变化就看不到：最典型的是
+   * 「从收藏夹拖一条到左栏」——新建的标签刚出现时 `url` 可能还没提交（此时它会被
+   * `isInternalUrl('')` 当成内部页面过滤掉），而下一次刷新要等到用户再点别的东西。
+   * 现在由事件驱动：谁改的窗口都算数，界面自己会跟上（拿到提交后的 `url` 那一轮就会把标签补上）。
+   *
+   * 去抖是必需的：一次拖动会连着触发好几个事件（`onCreated` + `onUpdated` + `onMoved`…），
+   * 不去抖就会在一惊之内重读好几遍。
+   */
+  const WINDOW_REFRESH_DEBOUNCE_MS = 120
+  let windowRefreshTimer: number | undefined
+  function scheduleWindowRefresh(): void {
+    if (windowRefreshTimer !== undefined) return
+    windowRefreshTimer = window.setTimeout(() => {
+      windowRefreshTimer = undefined
+      void refreshWindowOnly()
+    }, WINDOW_REFRESH_DEBOUNCE_MS)
+  }
+
+  chrome.tabs.onCreated.addListener(scheduleWindowRefresh)
+  chrome.tabs.onRemoved.addListener(scheduleWindowRefresh)
+  chrome.tabs.onMoved.addListener(scheduleWindowRefresh)
+  chrome.tabs.onAttached.addListener(scheduleWindowRefresh)
+  chrome.tabs.onDetached.addListener(scheduleWindowRefresh)
+  chrome.tabGroups.onUpdated.addListener(scheduleWindowRefresh)
+  chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
+    // 只关心会改变这一行长相的字段；`status` / `favIconUrl` 变一次就重读一遍太多余。
+    if (
+      changeInfo.title !== undefined ||
+      changeInfo.url !== undefined ||
+      changeInfo.groupId !== undefined ||
+      changeInfo.pinned !== undefined
+    ) {
+      scheduleWindowRefresh()
+    }
+  })
 
   /**
    * 重新决定右栏落在哪一层。
@@ -1734,11 +1805,16 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   openWindowButton.addEventListener('click', () => void openSelection('newWindow'))
   undoButton.addEventListener('click', () => void undo())
 
-  // 阅读页开的就是当前展示的这一层，这样「看这一层的全貌」与「打开这一层」是同一处。
+  // 「打开书签管理器」开的就是当前展示的这一层。
   openRootButton.addEventListener('click', async () => {
     if (!viewFolderId) return
+    const target = viewPath.map((node) => node.title).join(' / ')
     try {
       await openInBookmarkManager(viewFolderId)
+      // 管理器解析这个 id 是**它自己**的事（`?id=` 既收 UUID 也收旧的数字 id，后者靠
+      // `findIdByLegacyId` 映射），而解析失败时它会静默退回默认的那一层——我们拿不到那个结果。
+      // 所以把「要找的是哪一层」写出来：它落在别处时，用户至少知道该去哪儿找。
+      setStatus(status, `书签管理器已打开，要找的是：${target}`, 'ok')
     } catch (error) {
       // 这里的错误文案是写给用户看的（含快捷键），不是 API 的原文，所以直接展示。
       setStatus(status, errorText(error), 'error')

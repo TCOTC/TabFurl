@@ -62,6 +62,23 @@
    * 就不可能出现「外面的勾选框差几像素」这种看上去像没对齐的效果。
    */
   --item-pad-x: var(--space-3);
+  /* 行条目的上下内边距。与横向一样抽成变量：行的总高由它算出来。 */
+  --item-pad-y: var(--space-2);
+  /*
+   * 行的**内容盒**高度 = 图标方块（`.favicon` / `.folder-tile`）的 26px。
+   *
+   * 两行文字（标题 + 副文案）必须装得进它，否则行会被文字撑高、图标周围空出一圈，
+   * 看着就像没对齐（实测 13px×1.15 + 11px×1.1 = 27.05px 时，行是 39px 而不是 38px——
+   * 左栏的标签行比右栏的书签行高 1px，肉眼能看出来）。所以 `.item__meta` 的行高是 1 而不是 1.1。
+   */
+  --row-inner: 26px;
+  /*
+   * 一行的总高。
+   *
+   * 列表里**所有**行都用它对齐：文件夹、书签、分隔线、间隔，以及数据未到时的骨架。
+   * 种类之间的高度差会直接看出来（分隔线行比旁边的书签行矮一截，像没排好）。
+   */
+  --row-height: calc(var(--row-inner) + var(--item-pad-y) * 2);
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
     'Hiragino Sans GB', sans-serif;
 }
@@ -162,7 +179,8 @@ input[type='checkbox'] {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
-  padding: var(--space-2) var(--item-pad-x);
+  min-height: var(--row-height);
+  padding: var(--item-pad-y) var(--item-pad-x);
 }
 
 .item__main {
@@ -175,8 +193,12 @@ input[type='checkbox'] {
 /*
  * 一行里的两行文字（标题 + 副文案）。
  *
- * 行高卡得很紧（而不是继承 body 的 1.5），因为这一块的总高不能超过左边的图标方块：
- * 超过了就会把行撑高，图标周围空出一圈，看着像没对齐（实测 13px/10px 配 1.15/1.1 → 25.9px ≤ 26px 图标）。
+ * 行高卡得很紧（而不是继承 body 的 1.5），因为这一块的总高**不能超过图标方块**（`--row-inner`）：
+ * 超过了就会把行撑高、图标周围空出一圈，看着像没对齐。
+ * 13px×1.15 + 11px×1.1 = 27.05px 就超了 26px（实测左栏每一行都比右栏高 1px），
+ * 所以副文案的行高收到 1：14.95 + 11 = 25.95 ≤ 26。
+ *
+ * `.item__meta--url` 已经自己写了行高，不受影响。
  */
 .item__title {
   font-size: var(--text-md);
@@ -189,7 +211,7 @@ input[type='checkbox'] {
 .item__meta {
   color: var(--text-muted);
   font-size: var(--text-xs);
-  line-height: 1.1;
+  line-height: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

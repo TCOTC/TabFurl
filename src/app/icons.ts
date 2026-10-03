@@ -59,6 +59,20 @@ export const STAR_ICON = `
 `
 
 /**
+ * 刷新：一段近乎整圈的弧 + 一个箭头。
+ *
+ * 弧从正上方起、逆时针绕过左下到正右方（`large-arc=1, sweep=0`），留下右上角那一段缺口，
+ * 箭头就画在弧的终点上指向上方——正是「转了一圈回来」的样子。
+ */
+export const REFRESH_ICON = `
+  <svg class="icon" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M8 2.5A5.5 5.5 0 1 0 13.5 8" fill="none" stroke="currentColor"
+          stroke-width="1.4" stroke-linecap="round" />
+    <path d="M13.5 5.1 12.1 8.4h2.8Z" fill="currentColor" />
+  </svg>
+`
+
+/**
  * 分隔线的图标：一枚竖线。
  *
  * **描边要按渲染尺寸折算**：viewBox 是 16，而它实际画在 26px 的槽位里，

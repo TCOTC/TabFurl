@@ -199,6 +199,15 @@
   font-size: var(--text-xs);
 }
 
+/*
+ * 左栏的刷新按钮钉在这一行的**右端**，而不是紧跟在全选框文字后面。
+ *
+ * 那行文字的长度会变（`已全选 3 个标签页` ↔ `已选 2 / 127 个标签页`），紧跟就会左右滑。
+ */
+#window-refresh-btn {
+  margin-left: auto;
+}
+
 /* 内联 SVG 图标：字形做图标时各平台画得不一样，所以自己画，尺寸也由自己定。 */
 .icon {
   display: block;
@@ -452,6 +461,9 @@
  * 两者的外观必须完全不同：新建它们的是两个只差一个字的按钮，画得一样用户就分不清自己建的是哪一个，
  * 也看不出它们在书签栏里各管什么——分隔线给**横排**的书签栏，间隔给**竖排**的列表。
  *
+ * 高度与 `.item` 用**同一个** `--row-height`：记号行与文件夹行 / 书签行摆在同一列里，
+ * 差一像素都会看出「这一行矮一截」。
+ *
  * 横线用**真实元素**（`.marker__rule`）而不是伪元素：`::after` 永远排在所有子元素之后，
  * 用伪元素就没办法把按钮放在线的右边。
  *
@@ -461,7 +473,8 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--item-pad-x);
+  min-height: var(--row-height);
+  padding: var(--item-pad-y) var(--item-pad-x);
   color: var(--text-muted);
   font-size: var(--text-xs);
   font-weight: 600;
@@ -486,8 +499,8 @@
 /* 分隔线：一枚竖线，占位宽度与网站图标一致，所以它落在**同一列的中心**上。 */
 .marker__vert {
   flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
+  width: var(--row-inner);
+  height: var(--row-inner);
   color: var(--text-muted);
 }
 
@@ -518,11 +531,11 @@
 /*
  * 载入占位。
  *
- * 高度与一行条目一致（`.item` 的上下内边距 6+6 加上图标 26px = 38px）：数据到达时换上去的
- * 是同样高的行，列表不会「先短一截再变长」。脉冲只在系统允许动效时才加。
+ * 高度与一行条目一致（`--row-height`）：数据到达时换上去的是同样高的行，
+ * 列表不会「先短一截再变长」。脉冲只在系统允许动效时才加。
  */
 .skeleton {
-  height: 38px;
+  height: var(--row-height);
   margin: var(--space-1) var(--item-pad-x);
   border-radius: var(--radius-sm);
   background: var(--bg-subtle);
