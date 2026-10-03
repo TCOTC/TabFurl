@@ -187,6 +187,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   const archiveNote = q<HTMLParagraphElement>(root, id('note'))
 
   const expandAllButton = q<HTMLButtonElement>(root, id('expand-all-btn'))
+  const clearPickButton = q<HTMLButtonElement>(root, id('clear-pick-btn'))
   const newFolderButton = q<HTMLButtonElement>(root, id('new-folder-btn'))
   const newSeparatorButton = q<HTMLButtonElement>(root, id('new-separator-btn'))
   const newGapButton = q<HTMLButtonElement>(root, id('new-gap-btn'))
@@ -909,6 +910,11 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
 
   function renderArchive(): void {
     renderArchivePath()
+    // 「取消选中」只在真的选中了东西时露面。
+    //
+    // 放在**开头**而不是末尾：这个函数有好几条提前 return（空文件夹、书签树根），
+    // 每一条都得把它算一遍，否则从「选中了一批」的层走到空层时它还会留在那里。
+    clearPickButton.classList.toggle('is-slot-hidden', pickedIds.size === 0)
     // 胸章数的是「这一层里能干活的东西」：子文件夹可以进去，书签可以打开。分隔线两样都不是。
     //
     // **这一栏可以没有胸章**（左栏那个实例就是）：它的两档共用一个胸章，而那一枚归面板管
@@ -1556,6 +1562,12 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   // 全部展开 / 全部折叠：不置灰按钮、不写状态行——它不是耗时操作，也不改变任何数据，
   // 行数当场变了一下就是它的全部反馈（与展开单个文件夹一致）。
   expandAllButton.addEventListener('click', () => toggleExpandAll())
+  // 与「点空白处」同一条路（`clearPick` + 重绘），只是给了一个看得见的入口——
+  // 选中之后那一批会亮着，而「怎么把它们取消掉」不该只有「点空白」一个暗示。
+  clearPickButton.addEventListener('click', () => {
+    clearPick()
+    renderArchive()
+  })
 
   /**
    * 把一枚记号在两种形态之间转换（分隔线 ⇄ 间隔）。

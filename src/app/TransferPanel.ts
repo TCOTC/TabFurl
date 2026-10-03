@@ -106,6 +106,13 @@ function archiveColumnMarkup(prefix: string): string {
           <div class="box__bar">
             <nav class="path" id="${prefix}-path" aria-label="当前所在的收藏夹位置"></nav>
             <div class="row row--compact">
+              <!--
+                「取消选中」在**全部展开左边**，而且只在真的选中了东西时才露面
+                （没有时用 is-slot-hidden 藏起来而不是 display: none——一出现就把右边四个
+                按钮整体往右顶，看着像整排跳了一下）。
+              -->
+              <button type="button" class="btn btn--ghost btn--sm is-slot-hidden"
+                      id="${prefix}-clear-pick-btn" title="取消选中的条目（也可以点空白处）">取消选中</button>
               <button type="button" class="btn btn--ghost btn--sm" id="${prefix}-expand-all-btn">全部展开</button>
               <button type="button" class="btn btn--ghost btn--sm" id="${prefix}-new-folder-btn">＋ 新建文件夹</button>
               <button type="button" class="btn btn--ghost btn--sm" id="${prefix}-new-separator-btn"
