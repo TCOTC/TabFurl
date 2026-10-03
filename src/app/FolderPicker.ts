@@ -76,6 +76,17 @@ export function createFolderPicker(options: {
   let trigger: HTMLElement | undefined
   /** `showModal()` 那类 API 会抛，但这里不用它；这个闩只是让「重复点」不会叠加监听器。 */
   let open = false
+  /**
+   * 输入法正在合成（中文 / 日文这类需要选字的输入）。
+   *
+   * 合成期间 `input` 事件会带着**未选定的拼音字母**连着触发（打「工具」会先来 `g`、`go`、`gon`…），
+   * 拿它们去过滤只会让候选在一瞬间被筛成空的或乱七八糟的，选字那一刻又跳回来。
+   * 所以合成期间不重绘，等 `compositionend` 再按最终的文字筛一次。
+   *
+   * 只用 `isComposing` 不行：`compositionend` 之后的那个 `input` 里它已经是 `false`，
+   * 但顺序在各浏览器里并不一致，所以自己记一个闩更稳。
+   */
+  let composing = false
 
   function isOpen(): boolean {
     return open
@@ -174,7 +185,20 @@ export function createFolderPicker(options: {
     }))
   }
 
-  search.addEventListener('input', () => render())
+  search.addEventListener('input', () => {
+    // 合成中的字母不是用户要搜的东西（见 `composing`）。
+    if (composing) return
+    render()
+  })
+
+  // 合成结束再筛一次：此时 `search.value` 已经是选定的那几个字。
+  search.addEventListener('compositionstart', () => {
+    composing = true
+  })
+  search.addEventListener('compositionend', () => {
+    composing = false
+    render()
+  })
 
   search.addEventListener('keydown', (event) => {
     if (event.key === 'ArrowDown') {

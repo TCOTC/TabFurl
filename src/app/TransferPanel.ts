@@ -257,8 +257,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
           ? `已全选 ${total} 个标签页`
           : `已选 ${kept} / ${total} 个标签页`,
     onChange: (wantAll) => {
-      if (wantAll) windowExcluded.clear()
-      else for (const tab of allWindowTabs()) windowExcluded.add(tab.tabId)
+      if (wantAll) for (const tab of allWindowTabs()) windowSelected.add(tab.tabId)
+      else windowSelected.clear()
       syncWindowStates()
     }
   })
@@ -334,8 +334,14 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    * 初次为 `undefined`（还没渲染过，列表里是骨架），所以第一次一定会建 DOM。
    */
   let windowSignature: string | undefined
-  /** 左栏被勾掉的标签 id（保存侧默认全选，所以记排除）。 */
-  const windowExcluded = new Set<number>()
+  /**
+   * 左栏**被勾选**的标签 id。
+   *
+   * 保存侧现在是**默认一个都不选**（用户要的是「挑几条去存」，而不是「先整窗收起来再排除几条」），
+   * 所以这里记的是选中集，不是排除集。右边收藏夹那一侧也默认不选，但用的是排除集 +
+   * 一份「见过的书签」（因为那边的列表会随导航换掉，见 `applyArchive`）。
+   */
+  const windowSelected = new Set<number>()
   /** 右栏被勾掉的书签 id（打开侧默认全不勾，所以记排除 + 一份「见过的」）。 */
   const archiveExcluded = new Set<string>()
   const knownBookmarks = new Set<string>()
@@ -358,13 +364,13 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   function windowKeptTabs(tabs: readonly TabSnapshot[]): TabSnapshot[] {
-    return tabs.filter((tab) => !windowExcluded.has(tab.tabId))
+    return tabs.filter((tab) => windowSelected.has(tab.tabId))
   }
 
-  /** 左栏里「还会被存下去」的子级：整组被勾掉就不写这个文件夹。 */
+  /** 左栏里「还会被存下去」的子级：整组没选就不写这个文件夹。 */
   function keptWindowChildren(): WindowChild[] {
     return windowChildren.flatMap<WindowChild>((child) => {
-      if (child.kind === 'tab') return windowExcluded.has(child.tab.tabId) ? [] : [child]
+      if (child.kind === 'tab') return windowSelected.has(child.tab.tabId) ? [child] : []
       const tabs = windowKeptTabs(child.tabs)
       return tabs.length > 0 ? [{...child, tabs}] : []
     })
@@ -376,20 +382,23 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    * 三个 data 属性各有用处：`data-row` 供「点整行切换勾选」找到勾选框；
    * `data-tab-index` 与 `data-tab-group` 供拖拽算落点（插到哪儿、归哪个组）。
    *
+   * 副文案是**完整网址**（与右栏收藏夹条目一致）：同一站点下的不同页面靠路径区分，
+   * 只显示主机名时两条看起来一模一样。太长的仍会省略，完整那份在 `title` 里。
+   *
    * 右侧的「打开」是**切过去**（`active: true` + 聚焦窗口），不是「打开一个新标签」——
    * 这一栏是活着的标签的清单，对着它点一条就是要跳到那一条上去。
    */
   function tabRowMarkup(tab: TabSnapshot): string {
-    const host = hostnameOf(tab.url) ?? tab.url
+    const url = tab.url
     const groupAttr = tab.groupId === undefined ? '' : ` data-tab-group="${tab.groupId}"`
     return `
       <li class="item leaf" draggable="true" data-row data-drop-row="tab"
           data-tab-index="${tab.index}"${groupAttr} data-drag-tab="${tab.tabId}">
         <input type="checkbox" data-window-tab="${tab.tabId}" />
-        ${faviconMarkup(tab.url, FAVICON_BASE)}
+        ${faviconMarkup(url, FAVICON_BASE)}
         <span class="item__main">
-          <span class="item__title">${escapeHtml(tab.title || tab.url)}${tab.pinned ? PIN_ICON : ''}</span>
-          <span class="item__meta">${escapeHtml(host)}</span>
+          <span class="item__title">${escapeHtml(tab.title || url)}${tab.pinned ? PIN_ICON : ''}</span>
+          <span class="item__meta item__meta--url" title="${escapeHtml(url)}">${escapeHtml(url)}</span>
         </span>
         <span class="tree__actions">
           <button type="button" class="btn btn--ghost btn--sm"
@@ -459,10 +468,10 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     syncWindowStates()
   }
 
-  /** 让左栏的勾选框反映 `windowExcluded`。`innerHTML` 写不出 `checked`，必须手工回填。 */
+  /** 让左栏的勾选框反映 `windowSelected`。`innerHTML` 写不出 `checked`，必须手工回填。 */
   function syncWindowStates(): void {
     for (const input of windowList.querySelectorAll<HTMLInputElement>('[data-window-tab]')) {
-      input.checked = !windowExcluded.has(Number(input.dataset.windowTab))
+      input.checked = windowSelected.has(Number(input.dataset.windowTab))
     }
 
     for (const input of windowList.querySelectorAll<HTMLInputElement>('[data-window-group]')) {
@@ -475,7 +484,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
     const tabs = allWindowTabs()
     windowSelectAll.update(
-      tabs.filter((tab) => !windowExcluded.has(tab.tabId)).length,
+      tabs.filter((tab) => windowSelected.has(tab.tabId)).length,
       tabs.length
     )
     updateButtons()
@@ -751,7 +760,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   // ———————————————— 状态 ————————————————
 
   function updateButtons(): void {
-    const keptTabs = allWindowTabs().filter((tab) => !windowExcluded.has(tab.tabId)).length
+    const keptTabs = allWindowTabs().filter((tab) => windowSelected.has(tab.tabId)).length
     const keptBookmarks = archiveKeptCount()
 
     saveLabel.textContent = countLabel('存过去', keptTabs)
@@ -804,7 +813,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
     // 标签被关掉之后它的 tabId 不会再出现；留着只会让集合越涨越大。
     const aliveTabs = new Set(allWindowTabs().map((tab) => tab.tabId))
-    for (const tabId of [...windowExcluded]) if (!aliveTabs.has(tabId)) windowExcluded.delete(tabId)
+    for (const tabId of [...windowSelected]) if (!aliveTabs.has(tabId)) windowSelected.delete(tabId)
 
     // 视图落点：能留在原地就留在原地——用户在浏览收藏夹，不该因为一次刷新被弹回起点。
     // 只有当前层真的没了（被删掉 / 被挪到别处）才重新找一层。
@@ -818,9 +827,9 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   /** 只重读左栏。窗口里的标签变了（而收藏夹没动）时用它。 */
   async function refreshWindowOnly(): Promise<void> {
     windowChildren = planWindowChildren(await snapshotCurrentWindow())
-    // 被关掉的标签不能继续留在排除集里，否则那个集合只会越涨越大。
+    // 被关掉的标签不能继续留在选中集里，否则那个集合只会越涨越大。
     const alive = new Set(allWindowTabs().map((tab) => tab.tabId))
-    for (const tabId of [...windowExcluded]) if (!alive.has(tabId)) windowExcluded.delete(tabId)
+    for (const tabId of [...windowSelected]) if (!alive.has(tabId)) windowSelected.delete(tabId)
     renderWindow()
   }
 
@@ -1559,8 +1568,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
     const tabId = input.dataset.windowTab
     if (tabId !== undefined) {
-      if (input.checked) windowExcluded.delete(Number(tabId))
-      else windowExcluded.add(Number(tabId))
+      if (input.checked) windowSelected.add(Number(tabId))
+      else windowSelected.delete(Number(tabId))
       syncWindowStates()
       return
     }
@@ -1572,8 +1581,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
         // 不读原生取反的结果：部分选择时它会变成「全不选」，与惯例相反。
         const wantAll = nextSelectAll(triState(windowKeptTabs(child.tabs).length, child.tabs.length))
         for (const tab of child.tabs) {
-          if (wantAll) windowExcluded.delete(tab.tabId)
-          else windowExcluded.add(tab.tabId)
+          if (wantAll) windowSelected.add(tab.tabId)
+          else windowSelected.delete(tab.tabId)
         }
       }
       syncWindowStates()

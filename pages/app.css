@@ -448,11 +448,24 @@
   margin-left: auto;
 }
 
+/*
+ * 行内改名的输入框。
+ *
+ * **高度必须等于行内可用高度**（`--row-inner`，26px）——不是 `--row-height`：
+ * 那个 38px 是「26px 内容 + 上下各 6px 内边距」，而输入框是内容的一部分，
+ * 写成 38px 会让整行变成 50px（实测就是 50）。
+ * 撑高了以后进入改名状态时下面的行全部往下跳，退出又跳回来，改个名字界面抖两下。
+ *
+ * `padding-top/bottom: 0` 与高度一起作用：`.input` 自己的上下内边距会把内容盒压扁。
+ */
 .input--rename {
   flex: 1;
   min-width: 120px;
   max-width: 280px;
   width: auto;
+  height: var(--row-inner);
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 /*
