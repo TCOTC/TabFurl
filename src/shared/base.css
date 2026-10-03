@@ -44,6 +44,18 @@
   --radius-sm: 7px;
   --border-width: 1px;
   /*
+   * 中间那几个方向按钮的最小宽度。
+   *
+   * 它存在的原因很具体：按钮文字里带一个计数（`存过去 (123)`），位数一变文字就变长，
+   * 而这三个按钮恰好就出现在勾选的瞬间——不固定宽度，每点一下就整列横向抽动。
+   * 所以这个值只需**装得下三位数的最长文案**，不是设计尺度，而是一次实测出来的下限
+   * （实测最长的「存过去 (123)」为 88px，留一点余量取 96）。
+   *
+   * 注意：不是把数字包进定宽盒子（那样一位数会被推到盒子右侧，看着是 `打开 (  3)`），
+   * 而是按钮整体够宽。
+   */
+  --move-btn-min: 96px;
+  /*
    * 行条目的横向内边距。
    *
    * 抽成变量是因为**列表外面的全选框要跟列表里面的勾选框对齐**：两者的左边距都从它算，
@@ -172,7 +184,15 @@ input[type='checkbox'] {
   min-width: 0;
 }
 
+/*
+ * 一行里的两行文字（标题 + 副文案）。
+ *
+ * 行高卡得很紧（而不是继承 body 的 1.5），因为这一块的总高不能超过左边的图标方块：
+ * 超过了就会把行撑高，图标周围空出一圈，看着像没对齐（实测 13px/10px 配 1.15/1.1 → 25.9px ≤ 26px 图标）。
+ */
 .item__title {
+  font-size: var(--text-md);
+  line-height: 1.15;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -181,9 +201,22 @@ input[type='checkbox'] {
 .item__meta {
   color: var(--text-muted);
   font-size: var(--text-xs);
+  line-height: 1.1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/*
+ * 收藏夹条目上的网址：比一般的副文案再小一号。
+ *
+ * 它是**完整网址**（不是主机名），本来就比别的副文案长得多；
+ * 小一号才能在一样的宽度里多装下几十个字符（字号只有 `--text-xs` 一档往下可走，
+ * 所以直接写 10px——它不在尺度表里，是因为它就靠比 `--text-xs` 小一点来办事）。
+ */
+.item__meta--url {
+  font-size: 10px;
+  line-height: 1;
 }
 
 /*
@@ -363,39 +396,46 @@ input[type='checkbox'] {
   font-size: var(--text-sm);
 }
 
-/* 网站图标：Chrome 本地 favicon 缓存里的真图标；缓存未命中时端点给的是默认地球。 */
+/*
+ * 网站图标：Chrome 本地 favicon 缓存里的真图标；缓存未命中时端点给的是默认地球。
+ *
+ * 尺寸与 `.folder-tile` **必须一致**：两者在同一列里交替出现，差一像素都会让标题的左边错开。
+ */
 .favicon {
   flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   border-radius: var(--space-1);
   /* contain 而非 cover：图标通常带透明边，裁掉会缺角。 */
   object-fit: contain;
 }
 
 /*
- * 文件夹图标：占住宅与网站图标相同的 22px 位。
+ * 文件夹图标：与网站图标占同一个宽度位置。
  *
  * 两处都用它（阅读页的子文件夹卡片、主界面右栏的文件夹行），所以放在这里而不是各自的页面样式里：
  * 它要解决的是同一个问题——同一列里文件夹与书签两种行的高度与左侧宽度必须一致，
- * 否则两类卡片/行会参差不齐。底色用的是淡强调色，与 favicon 的彩色相映而不抢镜。
+ * 否则两类卡片/行会参差不齐。
+ *
+ * 方块尺寸跟着 favicon 一起定（26px），而**字形**要占满方块内侧：
+ * 网站图标多数是满格的彩色块，文件夹字形如果画得小，两个方块看着就不一样大。
  */
 .folder-tile {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   border-radius: var(--space-1);
   background: var(--accent-soft);
   color: var(--accent-strong);
 }
 
 .folder-tile__icon {
-  /* 与同行真实网站图标（22px 满格）的重量对齐：略小于容器，但描边不能太细。 */
-  width: 15px;
-  height: 15px;
+  /* 方块 26px 时字形占 19px：再大就会顶到圆角上，看着像溢出。 */
+  width: 19px;
+  height: 19px;
 }
 
 [hidden] {

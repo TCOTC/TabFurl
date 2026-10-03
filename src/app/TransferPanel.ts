@@ -379,8 +379,12 @@ export function createTransferPanel(events: AppEvents): Panel {
   /**
    * 一条书签行。分隔线占位书签也画成一条横线。
    *
-   * 两者都不带勾选框（分隔线不是书签，见 `isRealBookmark`），所以也都没有 `data-row`：
-   * 「点整行切换勾选」对它们无意义。分隔线在编辑中会临时变成一个输入框。
+   * 两种行都没有勾选框：书签有（它是「要打开哪些」的一枚），分隔线没有（它不是书签）。
+   * 分隔线在编辑中会临时变成一个输入框。
+   *
+   * 网址**完整显示**（不截成主机名）：收藏夹条目本来就靠网址区分同名页面，
+   * 而小一号的字与一行的限制能把绝大多数网址完整装下。真的过长时仍会省略，
+   * 那时 `title` 里还有完整的一份。
    */
   function archiveBookmarkRow(bookmark: BookmarkNode): string {
     if (isSeparatorUrl(bookmark.url)) {
@@ -401,6 +405,26 @@ export function createTransferPanel(events: AppEvents): Panel {
 
     const url = bookmark.url ?? ''
     const host = hostnameOf(url) ?? url
+    const isRenaming = renaming?.id === bookmark.id
+
+    const title = isRenaming
+      ? `<input type="text" class="input input--rename" data-rename-input="${escapeHtml(bookmark.id)}"
+                value="${escapeHtml(bookmark.title)}" aria-label="重命名书签" />`
+      : `<span class="item__title">${escapeHtml(bookmark.title.trim() || host)}</span>`
+
+    const actions = isRenaming
+      ? '<span class="item__meta">回车保存，Esc 取消</span>'
+      : `<span class="tree__actions">
+           <button type="button" class="btn btn--ghost btn--sm" data-open="${escapeHtml(bookmark.id)}">打开</button>
+           <button type="button" class="btn btn--ghost btn--sm" data-rename="${escapeHtml(bookmark.id)}">修改</button>
+           ${
+             pendingDeleteId === bookmark.id
+               ? `<button type="button" class="btn btn--danger btn--sm" data-confirm-delete="${escapeHtml(bookmark.id)}">确认删除</button>
+                  <button type="button" class="btn btn--ghost btn--sm" data-cancel-delete="">取消</button>`
+               : `<button type="button" class="btn btn--ghost btn--sm" data-delete="${escapeHtml(bookmark.id)}">删除</button>`
+           }
+         </span>`
+
     return `
       <li class="item leaf" data-row data-drop-row="bookmark" draggable="true"
           data-drag-bookmark="${escapeHtml(bookmark.id)}"
@@ -408,9 +432,10 @@ export function createTransferPanel(events: AppEvents): Panel {
         <input type="checkbox" data-archive-item="${escapeHtml(bookmark.id)}" />
         ${faviconMarkup(url, FAVICON_BASE)}
         <span class="item__main">
-          <span class="item__title">${escapeHtml(bookmark.title.trim() || host)}</span>
-          <span class="item__meta">${escapeHtml(host)}</span>
+          ${title}
+          <span class="item__meta item__meta--url" title="${escapeHtml(url)}">${escapeHtml(url)}</span>
         </span>
+        ${actions}
       </li>
     `
   }
@@ -1317,9 +1342,39 @@ export function createTransferPanel(events: AppEvents): Panel {
       return
     }
 
+    const openButton = target.closest<HTMLButtonElement>('[data-open]')
+    if (openButton?.dataset.open) {
+      void openBookmarkNow(openButton.dataset.open)
+      return
+    }
+
     // 剩下的情况就是「点在行上」：切换这一行的勾选。按钮与输入框在上面已经拦住了。
     toggleRowFromClick(archiveList, event)
   })
+
+  /**
+   * 点「打开」把这一条开成一枚活动标签。
+   *
+   * 与拖到窗口里不同：拖过去是「把它放进这一批里」，所以不抢焦点（`active: false`）；
+   * 而点「打开」就是「我现在要看它」，所以让它成为当前标签。
+   *
+   * 内部页面（`chrome://` 等）先挡掉：Chrome 不允许扩展打开它们，
+   * 不挡的话用户看到的是 API 抛出的原始错误（实测 `chrome://discards/` 这类书签在收藏夹里是存在的）。
+   */
+  async function openBookmarkNow(id: string): Promise<void> {
+    const url = bookmarkUrl(id)
+    if (!url) return
+    if (isInternalUrl(url)) {
+      setStatus(status, '这是浏览器内部页面，扩展打不开它，请手动复制网址。', 'error')
+      return
+    }
+    try {
+      await chrome.tabs.create({url, active: true})
+      setStatus(status, '已打开。', 'ok')
+    } catch (error) {
+      setStatus(status, `打开失败：${errorText(error)}`, 'error')
+    }
+  }
 
   /**
    * 双击进入下一层。
@@ -1373,7 +1428,10 @@ export function createTransferPanel(events: AppEvents): Panel {
     const node = archiveChildren.find((child) => child.id === id)
     if (!node) return
 
-    const next = sanitizeFolderName(input.value, node.title)
+    // 书签的标题允许被清空（Chrome 会退回去显示网址），所以 fallback 给空串；
+    // 文件夹名不能为空，就退回原名字。
+    const fallback = node.url ? '' : node.title
+    const next = sanitizeFolderName(input.value, fallback)
     try {
       if (next !== node.title) await renameNode(id, next)
     } catch (error) {

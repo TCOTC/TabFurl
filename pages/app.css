@@ -210,6 +210,12 @@
   list-style: none;
 }
 
+/*
+ * 行内操作按钮组。
+ *
+ * 它们紧跟在文字后面，所以是 `flex: 0 0 auto`（不被文字挤走），并且整个行都保持一条线：
+ * 书签两行文字 + 三个按钮同在一行，按钮组自己不该换行。
+ */
 .tree__actions {
   display: flex;
   flex: 0 0 auto;
@@ -322,8 +328,10 @@
  * 中间那列：按钮等宽。
  *
  * `align-items: stretch` 让每个按钮的宽度都等于这一列的宽度，而这一列的宽度
- * （grid 里的 `auto` 轨道）取的是最宽那个按钮的 max-content——
- * 于是四个按钮天然一样宽，不需要写死一个 `min-width`，将来改文案也不会跑偏。
+ * （grid 里的 `auto` 轨道）取的是最宽那个按钮的 max-content——于是四个按钮天然一样宽。
+ *
+ * 但光靠这个还不够：按钮文字里带着计数（`存过去 (123)`），位数一变 max-content 就变，
+ * 整列就跟着抖动。所以 `--move-btn-min` 再给一个「装得下三位数」的下限（见 base.css）。
  */
 .mid {
   display: flex;
@@ -339,6 +347,7 @@
   flex-direction: column;
   align-items: center;
   gap: 2px;
+  min-width: var(--move-btn-min);
   padding: var(--space-3) var(--space-4);
   line-height: 1.2;
   white-space: nowrap;
@@ -357,19 +366,15 @@
 }
 
 /*
- * 按钮里的计数。
+ * 行内操作按钮组。
  *
- * `min-width: 3ch` 把位置给三位数字占好（`ch` 就是「0」的宽度，配 `tabular-nums` 后每个数字同宽），
- * 所以「打开 (3)」与「打开 (123)」一样宽。不预留的话勾选一变按钮就横向抽动，
- * 而这两个按钮恰好就出现在勾选的瞬间。
- *
- * 右对齐（不是居中）：这样右括号不会随位数左右跑。
+ * 紧随文字之后，所以 `flex: 0 0 auto`（不被文字挤走也不好被压扁）——书签行里它是
+ * 「打开 / 修改 / 删除」三个按钮，文件夹行里是「进入 / 改名 / 删除」。
  */
-.num {
-  display: inline-block;
-  min-width: 3ch;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
+.tree__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--space-1);
 }
 
 /* ———————————————— 拖拽 ———————————————— */
