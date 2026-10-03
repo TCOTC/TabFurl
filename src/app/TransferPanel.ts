@@ -1039,21 +1039,28 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   element.addEventListener('dragstart', (event) => {
     const dragged = draggedElement(event)
     if (!dragged || !event.dataTransfer) return
-    const payload = payloadOf(dragged)
+    // 起点先在：两栏都有收藏夹条目，而载荷里只有 id——两栏停在同一层时
+    // 两边认得的是同一批 id，光看 id 真的分不出它来自哪一边。
+    draggingPane = archivePaneAt(dragged)
+    // 多选时拖任意一条都是拖**整批**（Ctrl / Shift 选出来的那几条），
+    // 载荷里带的是规约过的顶层 id（被选中的文件夹的后代不再单列，否则会被搬两次）。
+    const pickedIds = draggingPane?.dragIdsOf(dragged)
+    const single = payloadOf(dragged)
+    const payload: DragPayload | undefined = pickedIds
+      ? {kind: 'selection', ids: pickedIds}
+      : single
     if (!payload) return
 
     dragging = payload
-    // 起点也要记：两栏都有收藏夹条目，而载荷里只有 id——两栏停在同一层时
-    // 两边认得的是同一批 id，光看 id 真的分不出它来自哪一边。
-    draggingPane = archivePaneAt(dragged)
     // 栏内是「移动」、跨栏也是「移动」（F7 之后两栏之间搬东西就是 `bookmarks.move`）；
     // 只有「拖到窗口里」是「开一份」，所以给 copyMove 让两边都收。
     event.dataTransfer.effectAllowed = 'copyMove'
     event.dataTransfer.setData(DRAG_TYPE, JSON.stringify(payload))
 
     // 有网址时也写一份 `text/uri-list`，这样拖到浏览器别处（书签栏、地址栏）也有意义。
+    // 只有单条拖动才写：一批里可能有文件夹，而 `text/uri-list` 表达不了那种东西。
     const url = dragged.dataset.bookmarkUrl
-    if (url) event.dataTransfer.setData('text/uri-list', url)
+    if (!pickedIds && url) event.dataTransfer.setData('text/uri-list', url)
     dragged.classList.add('is-dragging')
   })
 
@@ -1176,7 +1183,9 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     const fromArchive =
       dragging?.kind === 'bookmark' ||
       dragging?.kind === 'folder' ||
-      dragging?.kind === 'separator'
+      dragging?.kind === 'separator' ||
+      // 多选拖动也是一批收藏夹条目（同一个去向：搬）。
+      dragging?.kind === 'selection'
 
     // 拖到自己那一行上：拒收。`dropEffect = 'none'` 按规范会让浏览器**连 drop 都不派发**，
     // 所以上面那一句就不只是提示了，而是真的什么都没发生。
@@ -1285,6 +1294,11 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
     if (target) {
       if (!target.isWritable()) return
+      // 一次拖好几条：搬的是整批，落点只用来解出「搬到哪一层」（见 `movePickedTo`）。
+      if (payload?.kind === 'selection') {
+        await movePickedTo(target, payload.ids, archiveSpot)
+        return
+      }
       if (payload?.kind === 'bookmark' || payload?.kind === 'folder' || payload?.kind === 'separator') {
         // 拖到自己身上：位置本来就没变，什么都不做（也就不会报「已调整收藏夹顺序」）。
         if (onOwnRow) return
@@ -1443,6 +1457,69 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   /** 某一层显示出来的名字（搬完报一句「挪到哪儿了」用）。 */
   function destLabel(target: ArchivePane, destId: string): string {
     return target.folderTitle(destId) ?? target.currentFolderTitle()
+  }
+
+  /**
+   * 把一批选中的条目搬到目标那一层（多选拖动）。
+   *
+   * **一律追加到目标层的末尾**，不认「插到第几格」：一批条目一起精确插入的语义很绕
+   *（相对顺序、同父下移时 index 要先减一…），而用户拖一批过来要说的是「搬到那一层」。
+   * 所以落点只用来解出**哪一层**（进那个文件夹 / 落在它所在的那一层 / 目标栏当前这一层）。
+   *
+   * 三种情况留在原地，而且都要说出来（不说的话用户看到的是「拖了但没动」）：
+   * - **已经在目标那一层的**：`bookmarks.move` 对同一个父级是**追加到末尾**，
+   *   而用户要的不是「把这几条排到最后」，所以跳过；
+   * - **要搬进它自己里面的文件夹**（会成环）；
+   * - 一条都搬不动时整件事直接说不做。
+   */
+  async function movePickedTo(
+    target: ArchivePane,
+    ids: readonly string[],
+    spot: ArchiveDrop | undefined
+  ): Promise<void> {
+    if (flags.busy || ids.length === 0) return
+    const dest = destOf(target, spot)
+    if (!dest.id) return
+
+    const destPath = new Set((await getNodePath(dest.id)).map((node) => node.id))
+    const movable: string[] = []
+    let here = 0
+    let cyclic = 0
+    for (const id of ids) {
+      // 文件夹落在它自己（或它自己的子孙）里：`move` 会成环。
+      if (destPath.has(id)) cyclic++
+      else if (target.parentOf(id) === dest.id) here++
+      else movable.push(id)
+    }
+
+    const destName = destLabel(target, dest.id)
+    if (movable.length === 0) {
+      setStatus(
+        status,
+        cyclic > 0 ? '不能把文件夹搬进它自己里面。' : `这些已经在「${destName}」里了。`,
+        cyclic > 0 ? 'error' : 'ok'
+      )
+      return
+    }
+
+    flags.busy = true
+    try {
+      for (const id of movable) await chrome.bookmarks.move(id, {parentId: dest.id})
+      const notes: string[] = []
+      if (here > 0) notes.push(`${here} 条本来就在这一层`)
+      if (cyclic > 0) notes.push('文件夹不能搬进它自己里面')
+      setStatus(
+        status,
+        `已把 ${movable.length} 条移到「${destName}」。${notes.length > 0 ? `（${notes.join('；')}）` : ''}`,
+        'ok'
+      )
+    } catch (error) {
+      setStatus(status, `移动失败：${errorText(error)}`, 'error')
+    } finally {
+      flags.busy = false
+      await events.archiveChanged()
+      await refresh()
+    }
   }
 
   /**

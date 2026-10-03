@@ -126,6 +126,19 @@ export interface ArchivePane {
    * 「先勾上、再点中间的按钮」——而中间那一列在那个档下整个不在了。
    */
   setSelectable(enabled: boolean): void
+  /**
+   * 这一条现在挂在哪一层。
+   *
+   * 批量搬运时用它判「它本来就在目的地那一层」——那种情况不该再 `move` 一次：
+   * 同一个父级下省略 index 是**追加到末尾**，而用户要的显然不是「把这几个排到最后」。
+   */
+  parentOf(nodeId: string): string | undefined
+  /** 拖动这一行时该带走哪些 id（多选时是整批；`undefined` = 就拖这一行）。 */
+  dragIdsOf(row: HTMLElement): string[] | undefined
+  /** 本栏选中的条目（规约过的顶层项），写进拖拽载荷用。 */
+  selectionIds(): string[]
+  /** 清空本栏的多选（换档、换层、以及搬完之后）。 */
+  clearPick(): void
   /** 被勾掉的书签 id（打开侧默认全不勾）。 */
   excluded(): ReadonlySet<string>
   /** 重新读自己这一层并重绘。 */
@@ -350,7 +363,34 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
 
     const parts: string[] = []
     if (first > 0) parts.push(`<li class="vpad" style="height:${first * height}px"></li>`)
-    for (let index = first; index < last; index++) parts.push(archiveRowMarkup(archiveRows[index]))
+    /*
+     * 高亮框**一段一段地拼**，而不是另外摆一个绝对定位的框。
+     *
+     * 「在框里」这件事只看一个布尔量：这一行自己，或者它的某个祖先被选中了
+     *（`pickOwnerOf` 沿父链找）。两个后果正是我们要的：
+     * ① 选中一个展开的文件夹 → 它下面那些行全在框里 → **一个框包住整个文件夹**；
+     * ② 同一个文件夹里再单点一条 → 它本来就在框里 → 并**不会多出一个嵌套的框**。
+     * 而段的首尾靠**比邻居**判（邻居在视口外也算得出来，`archiveRows` 里有全部可见行），
+     * 于是相邻的两条选中会连成一段（一个框），而不是每条各画一个框。
+     *
+     * 虚拟滚动下这样做比“一个框”简单得多：不用关心视口裁剪，渲染哪几行就画哪几行的边。
+     */
+    const top = new Set(topLevelPicked())
+    const boxCache = new Map<number, boolean>()
+    const inBoxAt = (index: number): boolean => {
+      if (index < 0 || index >= archiveRows.length) return false
+      const hit = boxCache.get(index)
+      if (hit !== undefined) return hit
+      const value = pickOwnerOf(archiveRows[index], top) !== undefined
+      boxCache.set(index, value)
+      return value
+    }
+    for (let index = first; index < last; index++) {
+      const pickCls = inBoxAt(index)
+        ? ` is-picked${inBoxAt(index - 1) ? '' : ' is-picked-start'}${inBoxAt(index + 1) ? '' : ' is-picked-end'}`
+        : ''
+      parts.push(archiveRowMarkup(archiveRows[index], pickCls))
+    }
     const rest = total - last * height
     if (rest > 0) parts.push(`<li class="vpad" style="height:${rest}px"></li>`)
 
@@ -450,12 +490,148 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
    *
    * **不重读书签树**：这一档只影响列两行的长相，数据早就手上（与展开文件夹同一个道理）。
    * 全选框那一行也要跟着收起——只剩右端那几枚按钮（那一行本来就是它们的容身之处）。
+   *
+   * 它同时也是**多选的开关**：没有勾选框的那一档（两栏都是收藏夹）用 Ctrl / Shift 点选，
+   * 而这两套不能共存（同一行上两个“选中”会让“选了几条”有两种说法）。
    */
   function setSelectable(enabled: boolean): void {
     if (selectable === enabled) return
     selectable = enabled
     archiveSelectAll.input.closest('label')?.toggleAttribute('hidden', !enabled)
+    archiveList.classList.toggle('is-picking', !enabled)
+    clearPick()
     renderArchive()
+  }
+
+  /**
+   * 被点选过的条目（**多选**，只在没有勾选框的那一档用）。
+   *
+   * 存的是「用户点过的 id」，而不是「画出来的那些」——一个被选中的文件夹的子项不必再记一份
+   * （它们靠父链归属过去）。所以这里是**原样的选择**，要用的时候先过 `topLevelPicked()`，
+   * 否则同一个文件夹会被搬两次。
+   */
+  const pickedIds = new Set<string>()
+  /**
+   * Shift 范围选择的起点（上一次「不带修饰键」点击的那一行）。
+   *
+   * Shift 点击**不更新它**：这样连按几次可以反复调范围，而不会每次都以本次结果为新起点
+   * （那是资源管理器一类界面的惯例）。
+   */
+  let pickAnchor: string | undefined
+
+  /** 现在能不能点选（没有勾选框的那一档）。 */
+  function picking(): boolean {
+    return !selectable
+  }
+
+  function clearPick(): void {
+    pickedIds.clear()
+    pickAnchor = undefined
+  }
+
+  /**
+   * 把选择**规约成顶层项**：被选中的文件夹的后代不再单列一份。
+   *
+   * 两个消费方都需要它：绘制（不然嵌套的框一个套一个）与拖拽（不然同一棵子树会被搬两次）。
+   */
+  function topLevelPicked(): string[] {
+    const out: string[] = []
+    for (const id of pickedIds) {
+      let nested = false
+      for (let at = parentById.get(id); at !== undefined; at = parentById.get(at)) {
+        if (pickedIds.has(at)) {
+          nested = true
+          break
+        }
+      }
+      if (!nested) out.push(id)
+    }
+    return out
+  }
+
+  /**
+   * 这一行归谁的高亮框（沿父链向上找第一个顶层选中项）。
+   *
+   * 返回 `undefined` 就是没被选中。用**规约过**的集合查，所以一个展开的文件夹被选中时，
+   * 它下面那些行全都归到它名下——于是它们连成**一段**、共用一个框（不再各自画一个）。
+   */
+  function pickOwnerOf(row: ArchiveRow, top: ReadonlySet<string>): string | undefined {
+    if (row.kind !== 'node' || top.size === 0) return undefined
+    for (let id: string | undefined = row.node.id; id !== undefined; id = parentById.get(id)) {
+      if (top.has(id)) return id
+    }
+    return undefined
+  }
+
+  /** 换一批选择（普通点击）。 */
+  function selectOnly(id: string): void {
+    pickedIds.clear()
+    pickedIds.add(id)
+  }
+
+  /**
+   * Shift 点击：把从起点到这一行之间的**可见行**全选上。
+   *
+   * 按**可见顺序**而不是层级：用户看到的就是这一列行，而展开的文件夹的子级也在这列里——
+   * 于是「从上面那个文件夹拖到下面那条书签」会连中间隔着的都选上，与资源管理器一致。
+   */
+  function extendPickTo(id: string): void {
+    const from = archiveRows.findIndex((row) => row.kind === 'node' && row.node.id === pickAnchor)
+    const to = archiveRows.findIndex((row) => row.kind === 'node' && row.node.id === id)
+    if (from < 0 || to < 0) {
+      selectOnly(id)
+      return
+    }
+    const [start, end] = from <= to ? [from, to] : [to, from]
+    pickedIds.clear()
+    for (let index = start; index <= end; index++) {
+      const row = archiveRows[index]
+      if (row.kind === 'node') pickedIds.add(row.node.id)
+    }
+  }
+
+  /**
+   * 点一行：选中它（Ctrl / Cmd 切换、Shift 扩范围、什么都不按就只选它）。
+   *
+   * 返回 true 表示这次点击是「点选」，已经处理完了。
+   * 落在行内按钮 / 勾选框 / 输入框上时返回 false——那些各有自己的语义。
+   */
+  function handlePickClick(event: MouseEvent): boolean {
+    if (!picking()) return false
+    const target = event.target as HTMLElement
+    if (target.closest('input, button, a, [data-rename-input]')) return false
+    const row = target.closest<HTMLElement>('[data-node-id]')
+    const id = row && archiveList.contains(row) ? row.dataset.nodeId : undefined
+
+    // 点在空白处：取消选择（不然那几条会一直在下面亮着，而用户以为已经点掉了）。
+    if (id === undefined) {
+      if (pickedIds.size === 0) return false
+      clearPick()
+      renderArchive()
+      return true
+    }
+
+    if (event.shiftKey) extendPickTo(id)
+    else if (event.ctrlKey || event.metaKey) {
+      if (pickedIds.has(id)) pickedIds.delete(id)
+      else pickedIds.add(id)
+    } else selectOnly(id)
+    // Shift 不挪起点，其余都挪（见 `pickAnchor`）。
+    if (!event.shiftKey) pickAnchor = id
+    renderArchive()
+    return true
+  }
+
+  /**
+   * 拖动开始时把整段选中项都标成「正在拖」（不然只看得到鼠标下那一条在变淡）。
+   *
+   * 面板在 `dragstart` 里调 `dragIdsOf()`，它顺手调这里。
+   */
+  function markPickedDragging(): void {
+    for (const row of archiveList.querySelectorAll<HTMLElement>('[data-node-id]')) {
+      const id = row.dataset.nodeId
+      if (id !== undefined && pickedIds.has(id)) row.classList.add('is-dragging')
+    }
   }
 
   /** 没有勾选框的行用它占位：`.marker__slot` 与复选框实测都是 14px，不给就会整列左移一格。 */
@@ -479,11 +655,11 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /** 一条行的 HTML（三类行 + 空文件夹提示，都在这里分派）。 */
-  function archiveRowMarkup(row: ArchiveRow): string {
+  function archiveRowMarkup(row: ArchiveRow, pickCls = ''): string {
     if (row.kind === 'empty') {
       return `<li class="kids__empty" style="--depth:${row.depth}">这个文件夹是空的</li>`
     }
-    return row.node.url ? archiveBookmarkRow(row) : archiveFolderRow(row)
+    return row.node.url ? archiveBookmarkRow(row, pickCls) : archiveFolderRow(row, pickCls)
   }
 
   /**
@@ -498,7 +674,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
    * 而小一号的字与一行的限制能把绝大多数网址完整装下。真的过长时仍会省略，
    * 那时 `title` 里还有完整的一份。
    */
-  function archiveBookmarkRow(row: ArchiveNodeRow): string {
+  function archiveBookmarkRow(row: ArchiveNodeRow, pickCls = ''): string {
     const bookmark = row.node
     // 三样东西每行都要带上：所在层（拖拽算插到哪一层的第几格）、层内下标（同一件事，
     // 但不必再去 DOM 里数兄弟）、缩进（扁平之后层级只能这样表达）。
@@ -520,7 +696,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
       // 两条横线用**真实元素**而不是伪元素：`::after` 永远排在所有子元素之后（这是规范定的），
       // 而按钮必须在这条线**右边**——用伪元素就只能得到「线在按钮右边」那种坏排布。
       return `
-        <li class="marker marker--${kind}" draggable="true" data-drop-row="separator"
+        <li class="marker marker--${kind}${pickCls}" draggable="true" data-drop-row="separator"
             ${boxAttrs} ${nodeAttr} data-drag-separator="${escapeHtml(bookmark.id)}">
           ${boxSlot(undefined, row.depth, false)}
           ${
@@ -561,7 +737,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     const host = hostnameOf(url) ?? url
 
     return `
-      <li class="item leaf" data-row data-drop-row="bookmark" draggable="true"
+      <li class="item leaf${pickCls}" data-row data-drop-row="bookmark" draggable="true"
           ${boxAttrs} ${nodeAttr} data-drag-bookmark="${escapeHtml(bookmark.id)}"
           data-bookmark-url="${escapeHtml(url)}">
         ${boxSlot(bookmark.id, row.depth, false)}
@@ -595,7 +771,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
    *
    * 那两个计数仍是**直属**的，没有因为能展开就改成递归——口径与「打开（N）」、勾选框保持一致（见下）。
    */
-  function archiveFolderRow(row: ArchiveNodeRow): string {
+  function archiveFolderRow(row: ArchiveNodeRow, pickCls = ''): string {
     const folder = row.node
     // 两个计数都保持**直属**，而且只算真书签（分隔线不是书签，算进去会与文件管理器的直觉不符）。
     //
@@ -636,7 +812,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
       : `<span class="tree__actions">${enterButton}${editButtons}</span>`
 
     return `
-      <li class="item group__head${expanded ? ' is-expanded' : ''}" data-row data-drop-row="folder"
+      <li class="item group__head${expanded ? ' is-expanded' : ''}${pickCls}" data-row data-drop-row="folder"
           data-parent-id="${escapeHtml(row.parentId)}" data-sibling-index="${row.siblingIndex}"
           style="--depth:${row.depth}" data-node-id="${escapeHtml(folder.id)}"
           data-drop-folder="${escapeHtml(folder.id)}" data-enter-folder="${escapeHtml(folder.id)}">
@@ -814,11 +990,13 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     if (now - lastNavigationAt < NAVIGATION_GUARD_MS) return
     lastNavigationAt = now
 
-    // 换层时把行内编辑状态与展开状态都丢掉：那些行已经不在眼前了。
+    // 换层时把行内编辑状态、展开状态与多选都丢掉：那些行已经不在眼前了。
     // 展开状态**不跟着走**是为了不让它越攒越多——一个层的展开与否只对那一层的浏览有意义。
     renaming = undefined
     pendingDeleteId = undefined
     expandedIds.clear()
+    // 多选同理：那是「这一层里的哪几条」，换了一层就不成立了。
+    clearPick()
     viewFolderId = folderId
     // 换层之后从头看：上一次停在中途的位置对新的一层没有意义。
     archiveBox.scrollTop = 0
@@ -882,6 +1060,8 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     // 展开集只保留还看得见的那些：删掉一个文件夹之后再刷新，它的 id 留在集合里没害处，
     // 但集合没理由越攒越大。
     for (const id of [...expandedIds]) if (!nodeIndex.has(id)) expandedIds.delete(id)
+    // 多选也剔一遍：被搬走 / 被删掉的那几条不该继续亮着（它们已经不在这里了）。
+    for (const id of [...pickedIds]) if (!nodeIndex.has(id)) pickedIds.delete(id)
 
     /*
      * 刚存下的分组默认展开，而且**连它的祖先一起展开**。
@@ -1162,7 +1342,10 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
       return
     }
 
-    // 剩下的情况就是「点在行上」：切换这一行的勾选。按钮与输入框在上面已经拦住了。
+    // 剩下的情况就是「点在行上」：
+    //   有勾选框那一档（窗口档的右栏）—— 替用户点那个勾选框；
+    //   没有勾选框那一档（两栏都是收藏夹）—— 多选（Ctrl / Shift / 单击）。
+    if (handlePickClick(event)) return
     toggleRowFromClick(archiveList, event)
   })
 
@@ -1468,11 +1651,46 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   /** 本栏全选框那一行的容器（面板往里面塞刷新按钮）。 */
   const actionsHost = q<HTMLDivElement>(root, id('all-host'))
 
+  /** 这一条现在挂在哪一层（见 `ArchivePane.parentOf`）。 */
+  function parentOf(nodeId: string): string | undefined {
+    return parentById.get(nodeId)
+  }
+
+  /**
+   * 拖动这一行时应该带走哪些 id。
+   *
+   * 返回 `undefined` 表示「就拖这一行」（走单条那条路）；返回一份 id 列表表示这是一次**多选拖动**。
+   * 条件是：被拖的行在选中集合里，而选中集合规约之后**不止一条**（只有一条时与单拖等价，
+   * 没必要让载荷变成一个数组的形式）。
+   */
+  function dragIdsOf(row: HTMLElement): string[] | undefined {
+    const id = row.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId
+    if (id === undefined || !pickedIds.has(id)) return undefined
+    const ids = topLevelPicked()
+    if (ids.length < 2) return undefined
+    // 整段一起变淡（拖动时才看得出这一批有哪几条）。
+    markPickedDragging()
+    return ids
+  }
+
+  /**
+   * 本栏现在选中的条目（规约过的顶层项）。
+   *
+   * 面板用它把「这一批」写进拖拽载荷（`{kind: 'selection', ids}`）。
+   */
+  function selectionIds(): string[] {
+    return topLevelPicked()
+  }
+
   return {
     list: archiveList,
     actionsHost,
     openRootButton,
     isWritable: canWrite,
+    parentOf,
+    dragIdsOf,
+    selectionIds,
+    clearPick,
     currentFolderId: () => viewFolderId,
     currentFolderTitle: () => viewPath.at(-1)?.title ?? '',
     keptCount: archiveKeptCount,

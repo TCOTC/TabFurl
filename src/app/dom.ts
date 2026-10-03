@@ -151,6 +151,11 @@ export function createSelectAll(
  *
  * 用它而不是 `text/plain` 区分「本项目内部的拖动」与「从网页拖来的链接」：
  * 后者只带 `text/uri-list`，处理方式不同（按网址存成书签，而不是按键去找节点）。
+ *
+ * `selection` 是**一次拖好几条**（Ctrl / Shift 点出来的一批收藏夹条目）。它只可能出现在
+ * 收藏夹栏里（那一档没有勾选框，所以「选了几条」这件事只由多选表达，见 `ArchivePane`）。
+ * 载荷里的 id 是**规约过的顶层项**：被选中的文件夹的后代不会再单列一份，
+ * 否则同一个文件夹会被搬两次（子树已经跟着走了）。
  */
 export type DragPayload =
   | {kind: 'tab'; tabId: number}
@@ -158,6 +163,7 @@ export type DragPayload =
   | {kind: 'bookmark'; id: string}
   | {kind: 'folder'; id: string}
   | {kind: 'separator'; id: string}
+  | {kind: 'selection'; ids: string[]}
 
 /** 一行内部的落点。上缘 = 插到前面，下缘 = 插到后面，中间 = **进入**。 */
 export type DropSpot = 'before' | 'into' | 'after'

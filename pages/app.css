@@ -529,6 +529,59 @@
 }
 
 /*
+ * 多选（Ctrl / Shift 点选，只在「两栏都是收藏夹」那一档用）。
+ *
+ * 一**段**连续的行共用一个框：上下边只画在段的首尾（`.is-picked-start` / `.is-picked-end`），
+ * 左右边每一行都画，背景把整段铺满——合起来看着就是一个贯穿的矩形。
+ *
+ * 为什么不摆一个绝对定位的框：行本来就是等高的扁平列表，逐行拼在视觉上等价，
+ * 而**虚拟滚动下不用关心视口裁剪**（渲染哪几行就画哪几行的边）。
+ *
+ * 也就因此**不会嵌套**：选中一个展开的文件夹时，它的子项已经被归到父那一段里
+ *（见 `pickOwnerOf`），所以它们不会再各画一个框。
+ *
+ * 用 `box-shadow` 而不是 `border`：`border` 会把行撑高（行高是算出来的定值，
+ * 一分一毫都不能动），而盒阴影不参与布局。四条规则是因为 `box-shadow` 整体覆盖，
+ * 要按「有没有上/下边」拼出四种组合。
+ */
+.list--archive > li.is-picked {
+  background: var(--accent-soft);
+  box-shadow:
+    inset 2px 0 0 var(--accent),
+    inset -2px 0 0 var(--accent);
+}
+
+.list--archive > li.is-picked.is-picked-start {
+  box-shadow:
+    inset 0 2px 0 var(--accent),
+    inset 2px 0 0 var(--accent),
+    inset -2px 0 0 var(--accent);
+}
+
+.list--archive > li.is-picked.is-picked-end {
+  box-shadow:
+    inset 2px 0 0 var(--accent),
+    inset -2px 0 0 var(--accent),
+    inset 0 -2px 0 var(--accent);
+}
+
+.list--archive > li.is-picked.is-picked-start.is-picked-end {
+  box-shadow:
+    inset 0 2px 0 var(--accent),
+    inset 2px 0 0 var(--accent),
+    inset -2px 0 0 var(--accent),
+    inset 0 -2px 0 var(--accent);
+}
+
+/*
+ * 能点选的那一档给个手型：不然（尤其窄栏里）没人知道这些行可以点。
+ * 只加在行上，行内按钮自己还有 `cursor: pointer`。
+ */
+.list--archive.is-picking > li[data-node-id] {
+  cursor: pointer;
+}
+
+/*
  * 展开了一个空文件夹。
  *
  * 不给这一行的话，点开之后下面什么都没出现，看着像「点了没反应」；
