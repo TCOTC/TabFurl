@@ -62,7 +62,9 @@ pnpm icons          # 重新生成占位图标
 4. **命名规则只在 `shared/naming.ts` 里实现**：界面层不得自己拼字符串。规则见 `docs/design.md`。
 5. **依赖方向单向，模块之间不互相 import**：`pages/` → `src/app/` → `src/shared/`。`shared/` 不得 import 任何界面模块；
    `src/app/` 里只有 `TransferPanel` 一个界面模块，它不 import `DefaultFolderPicker`，两者只通过 `dom.ts` 的 `AppEvents` 通信（谁该刷新由 `App.ts` 决定）。
-   `DefaultFolderPicker` 不是面板：它不读 `AppEvents`，而是**触发** `settingsChanged`（选中即落盘），由 `App.ts` 挂在工具栏。
+   `DefaultFolderPicker` 不是面板：它不读 `AppEvents`，而是**触发** `settingsChanged`（选中即落盘）。
+   它挂在**右栏表头**里，而那个位置是 `TransferPanel` 留出来的一格——`TransferPanel` 导出
+   `FOLDER_PICK_HOST_ID`，`App.ts` 把选择器 append 进去。面板只提供位置、不知道挂进来的会是什么，两边仍然互不 import。
 6. **`bookmarks` API 的 id 是设备本地的**：同一账号在另一台设备上 id 不同。任何持久化数据都不要以书签 id 作为跨设备稳定的标识；id 只允许存在本地设置里（现在只有 `defaultFolderId`），且必须能重建。
 7. **写入书签前先过滤内部页面**（`chrome://`、`chrome-extension://`、`devtools://` 等），用 `isInternalUrl()`。
 8. **同名文件夹允许共存**：建文件夹**前不要**去重、不要合并、也不要追加 ` (2)` 序号（`dedupeName` 已删）。
@@ -82,10 +84,14 @@ pnpm icons          # 重新生成占位图标
     一旦界面自己走一遍树，顺序或过滤口径就会与写入/还原脱钩——这是第 11 条那一对函数新增消费方时最容易出的错。
 13. **默认展示文件夹由用户在书签栏里指定，扩展不建根文件夹**：候选**只**来自 `getBookmarksBarId()`（认 id `1`，认不出就报错），
     **绝不退化为「其他书签」**，也不要加「自动创建文件夹」这类行为。
-    它由 `src/app/DefaultFolderPicker.ts` 提供（`listDefaultFolderCandidates()`），**挂在工具栏（不在任何一栏里）**，选中即落盘。理由见 `docs/design.md` 三。
-14. **还原去向是按钮，不是存起来的偏好**：**不要把它加回 `Settings`**，也不要为了省一个按钮而合并它们。
-    「只开标签页」固定开新窗口：它与「还原到新窗口」是同一件事的轻重两档，都不打断正在用的窗口。
-    阅读页（`pages/folder.ts`）同样给出这两个按钮。理由见 `docs/design.md` 五。
+    它由 `src/app/DefaultFolderPicker.ts` 提供（`listDefaultFolderCandidates()`），**挂在右栏表头**（那一栏的起点就由它决定），选中即落盘。
+    **没有「重新读取书签栏」按钮**：候选在下拉框**获得焦点**时重建（点了就能看到刚新建的文件夹）。
+    **宽度跟着选中的那条路径量**（隐藏尺子 + `SELECT_CHROME_PX`），但有 `MAX_SELECT_PX = 320` 的上限——
+    实测一条 82 字的路径要 528px，不封顶会把表头顶穿、整页多出一条横向滚动条；超出的部分由原生下拉框裁掉，完整路径写在 `title` 上。
+    理由见 `docs/design.md` 三。
+14. **还原去向是按钮，建不建分组是复选框**：去向（当前窗口 / 新窗口）属于「这一次要开到哪里」，
+    **不要把它加回 `Settings`**；而「建不建分组」是另一个维度，用一个复选框（`#no-group-check`）表达，
+    所以一共只有两个按钮而不是三个。阅读页（`pages/folder.ts`）同样只给去向两个按钮。理由见 `docs/design.md` 五。
 15. **勾选用「排除集」而不是「选中集」**：默认什么都不排除，界面上才不会在每次重渲染后把用户没碰过的项弄丢。标签用 `TabSnapshot.tabId`（标签存活期间不变），书签用书签 id；**不要用 `TabSnapshot.index`**，它会被别的标签关闭而整体前移。
     两侧的**默认值相反，是刻意的**：保存侧默认全选（语义就是「把当前窗口收起来」）；收藏夹侧默认一个都不勾（还原是「要打开哪些」，默认全开太危险，而且刚存完的不该被下一次还原顺手打开）。
     收藏夹侧的「默认不勾」仍用排除集实现：多维护一份「见过的书签 id」（`knownBookmarks`），没见过的默认算排除。
@@ -104,6 +110,9 @@ pnpm icons          # 重新生成占位图标
 20. **分隔线是记号，不是书签**：判定 `isSeparatorUrl()` 与标题清洗 `separatorTitle()` 都在 `shared/urls.ts`，两处界面都把它画成一条横线，
     **不计入任何枚数、没有勾选框、还原时跳过**，也不算 `skipped`。
     工具栏的「＋ 分隔线」就是往当前位置插一枚占位书签（`SEPARATOR_URL`），建完进入改名状态，标题可以留空。
+    它也有行内「修改 / 删除」——它毕竟是一枚书签，改名与删除走的是与书签同一套处理器。
+    两条横线用**真实元素**（`.divider__rule`）而**不是伪元素**：`::after` 永远排在所有子元素之后（规范如此），
+    用伪元素就没办法把按钮放在线的右边。标题为空时右侧那条线不画（`:empty + .divider__rule`）。
     **新增任何「数标签」的地方都必须走 `restorableBookmarks()`**，否则枚数会在分隔线上对不上。
     书签树那一侧同理：**判断「是不是书签」必须用 `isRealBookmark()` / `realBookmarks()`（`shared/bookmarks.ts`），不能用「有没有 url」**。
     这两件事必须分开：渲染要画分隔线，计数与收集 id 要跳过它——用同一个写法就只能对一头。
@@ -188,13 +197,18 @@ pnpm icons          # 重新生成占位图标
     （框内顶部的面包屑 + 按钮组，`position: sticky` 贴着框顶，滚到一半也不会消失）。
     把静态内容直接写进那个 `ul` 的 HTML 里，第一次渲染就会被冲掉。
     左栏同样是 `div.box > ul.list`，两栏结构一致（`.box` 的规则才不用分叉）。
-28. **两处「对齐」与两处「不抖动」都是算出来的，不是凑出来的**：
+28. **两处「对齐」与四处「不抖动」都是算出来的，不是凑出来的**：
     - 列表**外面**的顶层全选框要与列表**里面**的勾选框对齐，差的是列表框那一道描边。
       所以 `--item-pad-x`（行内边距）与 `--border-width`（描边宽）都在 `base.css` 里定义，
       `.select-all` 的左边距写 `calc(var(--item-pad-x) + var(--border-width))`。
       实测不改就是差 1px（24 vs 25）——肉眼刚好能看出「没对齐」。
-    - 中间那列几个按钮等宽靠 `align-items: stretch` + grid 的 `auto` 轨道取 max-content，
-      **不要写死 `min-width`**：改文案就会跑偏。
+    - 中间那列几个按钮等宽靠 `align-items: stretch` + grid 的 `auto` 轨道取 max-content；
+      宽度下限靠 `--move-btn-min`（见下一条），两者缺一不可。
+    - **会出现 / 消失的东西要提前占位，不能用 `display: none`**。两处实测：
+      「撤销上次保存」没有可撤销的东西时用 `visibility: hidden`（`.is-slot-hidden`，不进布局也不接键盘焦点），
+      底部的状态行用 `min-height: 1lh`——否则一个操作之后它们多出一行，就会把上面两栏的高度抽走一点，
+      而中间那列是 `justify-content: center`，于是那三个按钮上下跳一下（实测正好是 9px，即状态行高的一半）。
+      全程按钮位置 355 / 412 / 469 不动就是验收标准。
     - 按钮里的计数**不在括号里预留宽度**（把数字包进定宽盒子会把一位数推到盒子右侧，看着是 `打开 (  3)`），
       而是给按钮一个 `min-width`（`base.css` 的 `--move-btn-min`，只需装得下三位数的最长文案）。
       实测四个按钮在计数 0 → 284 期间恒为 96px。括号用**半角并留一个空格**（`存过去 (3)`）：

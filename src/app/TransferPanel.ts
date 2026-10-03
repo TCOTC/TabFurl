@@ -50,7 +50,7 @@ type DragPayload =
   | {kind: 'bookmark'; id: string}
   | {kind: 'folder'; id: string}
 
-type RestoreKind = 'newWindow' | 'currentWindow' | 'onlyTabs'
+type RestoreKind = 'newWindow' | 'currentWindow'
 
 /**
  * 一行内部的落点。上缘 = 插到前面，下缘 = 插到后面，中间 = **进入**（只对文件夹行与分组行有意义）。
@@ -110,6 +110,16 @@ const PLUS_ICON = `
   </svg>
 `
 
+/**
+ * 默认展示文件夹选择器的挂载点 id。
+ *
+ * `App` 用它把选择器放进右栏表头，而 `TransferPanel` 只管留出这个位置——
+ * 这样两个界面模块仍然互不 import（面板不知道挂进来的会是什么）。
+ *
+ * 位置必须在 `TEMPLATE` **之前**：模板字面量在求值时就会读它。
+ */
+export const FOLDER_PICK_HOST_ID = 'folder-pick-host'
+
 const TEMPLATE = `
   <div class="split">
     <section class="col">
@@ -137,12 +147,30 @@ const TEMPLATE = `
         <span class="move__icon">${PLUS_ICON}</span>
         <span id="open-window-label">新窗口</span>
       </button>
-      <button type="button" class="btn btn--ghost btn--sm" id="undo-btn" hidden>撤销上次保存</button>
+      <!--
+        「不建分组」作用于上面两个打开按钮（只开标签页、不建标签分组）。
+        它是一个**修饰**而不是一个入口：分成两个按钮就会出现「哪两个是同一件事」的疑问，
+        而它本来就可以用在当前窗口与新窗口两种情况上。
+      -->
+      <label class="check" id="no-group-host">
+        <input type="checkbox" id="no-group-check" />
+        <span>不建分组</span>
+      </label>
+      <!--
+        撤销按钮**始终占位**（没有可撤销的东西时用 visibility 藏起来，而不是 display: none）：
+        一出现就把上面三个按钮顶上去，看着像界面跳了一下。
+      -->
+      <button type="button" class="btn btn--ghost btn--sm" id="undo-btn" disabled>撤销上次保存</button>
     </div>
 
     <section class="col">
       <header class="col__head">
         <h2 class="col__title">收藏夹 <span class="badge" id="archive-count">0</span></h2>
+        <!--
+          默认展示文件夹选择器由 App 挂进这个位置（见导出常量 FOLDER_PICK_HOST_ID）：
+          面板只提供位置，不知道该挂什么——它要是自己 import 选择器，两个界面模块就栓到一起了。
+        -->
+        <div class="col__head-slot" id="${FOLDER_PICK_HOST_ID}"></div>
       </header>
       <div class="row row--compact" id="archive-all-host"></div>
       <div class="box" data-drop-pane="archive">
@@ -173,8 +201,11 @@ const TEMPLATE = `
     </section>
   </div>
 
-  <div class="row">
-    <button type="button" class="btn btn--ghost btn--sm" id="open-tabs-btn" disabled>只开标签页（不建分组）</button>
+  <!--
+    状态行**始终占一行高**（见 .status-bar）：不然一次操作后它忽然多出一行文字，
+    就会把上面那两栏的高度抽走一点，中间那几个按钮跟着跳一下。
+  -->
+  <div class="row status-bar">
     <span class="status" id="status" hidden></span>
   </div>
 `
@@ -206,10 +237,10 @@ export function createTransferPanel(events: AppEvents): Panel {
   const openWindowButton = q<HTMLButtonElement>(element, '#open-window-btn')
   const openWindowLabel = q<HTMLSpanElement>(element, '#open-window-label')
   const undoButton = q<HTMLButtonElement>(element, '#undo-btn')
+  const noGroupCheck = q<HTMLInputElement>(element, '#no-group-check')
   const newFolderButton = q<HTMLButtonElement>(element, '#new-folder-btn')
   const newSeparatorButton = q<HTMLButtonElement>(element, '#new-separator-btn')
   const openRootButton = q<HTMLButtonElement>(element, '#open-root-btn')
-  const openTabsButton = q<HTMLButtonElement>(element, '#open-tabs-btn')
   const status = q<HTMLSpanElement>(element, '#status')
 
   const windowSelectAll = createSelectAll(q<HTMLDivElement>(element, '#window-all-host'), {
@@ -377,10 +408,9 @@ export function createTransferPanel(events: AppEvents): Panel {
   // ———————————————— 右栏 ————————————————
 
   /**
-   * 一条书签行。分隔线占位书签也画成一条横线。
+   * 一条书签行。分隔线占位书签也画成一条横线，并且同样给「修改 / 删除」两个按钮。
    *
-   * 两种行都没有勾选框：书签有（它是「要打开哪些」的一枚），分隔线没有（它不是书签）。
-   * 分隔线在编辑中会临时变成一个输入框。
+   * 分隔线没有勾选框（它不是书签，见 `isRealBookmark`），书签有——它是「要打开哪些」的一枚。
    *
    * 网址**完整显示**（不截成主机名）：收藏夹条目本来就靠网址区分同名页面，
    * 而小一号的字与一行的限制能把绝大多数网址完整装下。真的过长时仍会省略，
@@ -388,19 +418,35 @@ export function createTransferPanel(events: AppEvents): Panel {
    */
   function archiveBookmarkRow(bookmark: BookmarkNode): string {
     if (isSeparatorUrl(bookmark.url)) {
-      if (renaming?.id === bookmark.id) {
-        return `
-          <li class="divider divider--editing">
-            <input type="text" class="input input--rename" data-rename-input="${escapeHtml(bookmark.id)}"
-                   value="${escapeHtml(separatorTitle(bookmark.title))}"
-                   placeholder="分隔线标题（可留空）" aria-label="分隔线标题" />
-          </li>
-        `
-      }
-      const title = separatorTitle(bookmark.title)
-      return title
-        ? `<li class="divider"><span>${escapeHtml(title)}</span></li>`
-        : '<li class="divider divider--plain"></li>'
+      const isRenaming = renaming?.id === bookmark.id
+      // 两条横线用**真实元素**而不是伪元素：`::after` 永远排在所有子元素之后（这是规范定的），
+      // 而按钮必须在这条线**右边**——用伪元素就只能得到「线在按钮右边」那种坏排布。
+      return `
+        <li class="divider" data-drop-row="separator">
+          <span class="divider__rule" aria-hidden="true"></span>
+          ${
+            isRenaming
+              ? `<input type="text" class="input input--rename" data-rename-input="${escapeHtml(bookmark.id)}"
+                        value="${escapeHtml(separatorTitle(bookmark.title))}"
+                        placeholder="分隔线标题（可留空）" aria-label="分隔线标题" />`
+              : `<span class="divider__title">${escapeHtml(separatorTitle(bookmark.title))}</span>`
+          }
+          <span class="divider__rule" aria-hidden="true"></span>
+          ${
+            isRenaming
+              ? '<span class="item__meta">回车保存，Esc 取消</span>'
+              : `<span class="tree__actions">
+                   <button type="button" class="btn btn--ghost btn--sm" data-rename="${escapeHtml(bookmark.id)}">修改</button>
+                   ${
+                     pendingDeleteId === bookmark.id
+                       ? `<button type="button" class="btn btn--danger btn--sm" data-confirm-delete="${escapeHtml(bookmark.id)}">确认删除</button>
+                          <button type="button" class="btn btn--ghost btn--sm" data-cancel-delete="">取消</button>`
+                       : `<button type="button" class="btn btn--ghost btn--sm" data-delete="${escapeHtml(bookmark.id)}">删除</button>`
+                   }
+                 </span>`
+          }
+        </li>
+      `
     }
 
     const url = bookmark.url ?? ''
@@ -622,9 +668,10 @@ export function createTransferPanel(events: AppEvents): Panel {
     saveButton.disabled = busy || keptTabs === 0 || !canWrite()
     openButton.disabled = busy || keptBookmarks === 0
     openWindowButton.disabled = busy || keptBookmarks === 0
-    openTabsButton.disabled = busy || keptBookmarks === 0
-    undoButton.hidden = !lastWrite
-    undoButton.disabled = busy
+    // 撤销按钮**始终占位**：没有可撤销的东西时只是藏起来（`visibility` 不进布局也不接键盘焦点），
+    // 这样它出现 / 消失都不会把上面三个按钮上下推一下。
+    undoButton.classList.toggle('is-slot-hidden', !lastWrite)
+    undoButton.disabled = busy || !lastWrite
     newFolderButton.disabled = busy || !canWrite()
     newSeparatorButton.disabled = busy || !canWrite()
     openRootButton.hidden = !viewFolderId
@@ -745,6 +792,9 @@ export function createTransferPanel(events: AppEvents): Panel {
    * 直接复用 `restoreFolder(当前层, …)`：当前层的直接子级就是还原计划要的那一层，
    * 而排除集已经表达了「哪些不要」——所以这里不需要自己拼装标签与分组。
    * 排除集是**跟随展示的层**的：换一层就自然换成那一层的选择，不会把别处的勾选悄悄带过来。
+   *
+   * 「建不建分组」不在这里决定，而是读上面那个「不建分组」复选框：
+   * 它与「开到哪里」是两个独立维度，所以不做成两个按钮。
    */
   async function openSelection(kind: RestoreKind): Promise<void> {
     if (busy || !viewFolderId) return
@@ -752,10 +802,11 @@ export function createTransferPanel(events: AppEvents): Panel {
     updateButtons()
     setStatus(status, '正在打开…', 'ok')
 
-    const options: RestoreOptions =
-      kind === 'onlyTabs'
-        ? {target: 'newWindow', groupTabs: false, excludeBookmarkIds: archiveExcluded}
-        : {target: kind, excludeBookmarkIds: archiveExcluded}
+    const options: RestoreOptions = {
+      target: kind,
+      groupTabs: !noGroupCheck.checked,
+      excludeBookmarkIds: archiveExcluded
+    }
 
     try {
       await restoreFolder(viewFolderId, options)
@@ -1467,11 +1518,11 @@ export function createTransferPanel(events: AppEvents): Panel {
     if (canWrite()) void writeInto(viewFolderId, keptWindowChildren())
   })
 
-  // 三个打开入口按「这一次要开到哪里」分：当前窗口 / 新窗口 / 新窗口但不建分组。
+  // 两个打开入口按「这一次要开到哪里」分：当前窗口 / 新窗口。
+  // 「建不建分组」是另一个维度，由上面那个复选框说了算（见 openSelection）。
   // 它们与拖拽共用 restoreFolder，口径不会分叉。
   openButton.addEventListener('click', () => void openSelection('currentWindow'))
   openWindowButton.addEventListener('click', () => void openSelection('newWindow'))
-  openTabsButton.addEventListener('click', () => void openSelection('onlyTabs'))
   undoButton.addEventListener('click', () => void undo())
 
   // 阅读页开的就是当前展示的这一层，这样「看这一层的全貌」与「打开这一层」是同一处。

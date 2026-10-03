@@ -1,5 +1,5 @@
 /*
- * 主界面：工具栏一行是默认展示文件夹，下面「保存 / 打开」两栏。
+ * 主界面：「当前窗口 ⇄ 收藏夹」两栏，默认展示文件夹选择器在右栏表头里。
  *
  * 居中的外壳、宽度、四周留白与字号/间距尺度都在 base.css 的 `.app` 里（两个页面共用），
  * 这里只写这一页特有的部分。
@@ -13,24 +13,29 @@
   min-height: 0;
 }
 
-.topbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-4);
-}
-
+/*
+ * 默认展示文件夹选择器（挂在右栏表头里）。
+ *
+ * 宽度**不由 CSS 定**，而是 `DefaultFolderPicker` 量出选中那条路径的文字宽度后写上去的——
+ * 候选是完整路径，固定宽度要么截掉长路径、要么给短路径留一大片空白。
+ *
+ * 这里的 `overflow: hidden` 是兜底：极长路径 + 很窄的窗口下，下拉框可能比这一栏还宽
+ * （它自己有 320px 的上限，但窗口可以更窄），裁掉而不是让整页多出一条横向滚动条。
+ */
 .folder-pick {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .folder-pick__field {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .folder-pick__label {
@@ -40,17 +45,27 @@
   white-space: nowrap;
 }
 
-/* 下拉框跟着内容走，不撑满一行：顶栏只有一个控件，宽度写死才稳定。 */
-.input--sm {
-  width: 100%;
-  max-width: 260px;
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--text-xs);
-}
-
-/* 选择器出错时的红字。正常状态下整块 UI 只有一个下拉框与一个刷新按钮。 */
 .folder-pick .status {
   max-width: 320px;
+}
+
+/*
+ * 量文字宽度的尺子。
+ *
+ * 与下拉框同一字体、绝对定位到看不到的地方：不能用 `display: none`（那样量不到宽度）。
+ */
+.folder-pick__ruler {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  font-size: var(--text-xs);
+  white-space: pre;
+}
+
+.input--sm {
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
 }
 
 /* 内联 SVG 图标：字形做图标时各平台画得不一样，所以自己画，尺寸也由自己定。 */
@@ -119,6 +134,28 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/*
+ * 右栏表头里给默认展示文件夹选择器留的位置，推到最右。
+ *
+ * 选择器属于这一栏（它决定右栏从哪里开始），所以紧跟在「收藏夹」标题右侧，
+ * 而不是放在页面顶栏上——那样离它要影响的那一栏太远。
+ * `:empty` 时不占位：`App` 没挂东西（或挂载失败）时表头不会被撑出一道空白。
+ *
+ * `overflow: hidden` 与 `min-width: 0` 一起用：长路径把选择器撑宽时裁掉而不是顶穿表头。
+ */
+.col__head-slot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+}
+
+.col__head-slot:empty {
+  display: none;
 }
 
 /*
@@ -293,32 +330,39 @@
   width: auto;
 }
 
-/* 分隔线是记号，不是书签：没有勾选框，画成一条横线。 */
+/*
+ * 分隔线是记号，不是书签：没有勾选框，画成一条横线，右侧带「修改 / 删除」。
+ *
+ * 两条横线是**真实元素**（`.divider__rule`）而不是伪元素：`::after` 永远排在所有子元素之后，
+ * 用伪元素就没办法把按钮放在线的右边。
+ */
 .divider {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   padding: var(--space-2) var(--item-pad-x);
   color: var(--text-muted);
   font-size: var(--text-xs);
   font-weight: 600;
 }
 
-.divider::before,
-.divider::after {
-  content: '';
+.divider__rule {
   flex: 1;
   height: 1px;
   background: var(--border-strong);
 }
 
-.divider--plain::after {
+/* 无标题时就只剩一条通线：右侧那条不画（否则两段线之间会顶着一个空格）。 */
+.divider__title:empty {
+  display: none;
+}
+
+.divider__title:empty + .divider__rule {
   display: none;
 }
 
 /* 编辑标题时把两条线收起来，否则输入框两边各挂一截线，看着像坏了。 */
-.divider--editing::before,
-.divider--editing::after {
+.divider:has(.input--rename) .divider__rule {
   display: none;
 }
 
@@ -328,7 +372,7 @@
  * 中间那列：按钮等宽。
  *
  * `align-items: stretch` 让每个按钮的宽度都等于这一列的宽度，而这一列的宽度
- * （grid 里的 `auto` 轨道）取的是最宽那个按钮的 max-content——于是四个按钮天然一样宽。
+ * （grid 里的 `auto` 轨道）取的是最宽那个按钮的 max-content——于是几个按钮天然一样宽。
  *
  * 但光靠这个还不够：按钮文字里带着计数（`存过去 (123)`），位数一变 max-content 就变，
  * 整列就跟着抖动。所以 `--move-btn-min` 再给一个「装得下三位数」的下限（见 base.css）。
@@ -339,6 +383,31 @@
   align-items: stretch;
   justify-content: center;
   gap: var(--space-3);
+}
+
+/*
+ * 「不建分组」复选框与撤销按钮都居中（它们是两个按钮之外的±修饰，不跟着按钮拉满宽）。
+ */
+.check {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.check:hover {
+  color: var(--text);
+}
+
+/*
+ * 「撤销上次保存」没有东西可撤销时只是藏起来（`visibility` 不进布局，也不接键盘焦点）。
+ * 用 `display: none` 会让上面三个按钮上下跳一下。
+ */
+.is-slot-hidden {
+  visibility: hidden;
 }
 
 /* 方向按钮把箭头放在文字上方：它表达的是「往哪边送」，箭头要够显眼。 */
@@ -375,6 +444,20 @@
   display: flex;
   flex: 0 0 auto;
   gap: var(--space-1);
+}
+
+/*
+ * 底部状态行。
+ *
+ * `min-height: 1lh`（一行行高）把位置先占住：状态文字出现或消失时这一行的高度不变，
+ * 上面两栏也就不会被抽走 / 还回一点高度（实测差 9px，正好是这一行高的一半，
+ * 中间那列是居中的，所以看着就是按钮跳了一下）。
+ *
+ * `lh` 单位 Chrome 114 起就有，正好是本项目的下限。字号取副文案那一档，与 `.status` 一致。
+ */
+.status-bar {
+  font-size: var(--text-sm);
+  min-height: 1lh;
 }
 
 /* ———————————————— 拖拽 ———————————————— */

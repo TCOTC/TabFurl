@@ -1,9 +1,9 @@
 import {createDefaultFolderPicker} from './DefaultFolderPicker'
-import {createTransferPanel} from './TransferPanel'
+import {FOLDER_PICK_HOST_ID, createTransferPanel} from './TransferPanel'
 import {q, type AppEvents, type Panel} from './dom'
 
 /**
- * 主界面：工具栏一行是默认展示文件夹，下面是「保存 / 打开」两栏。
+ * 主界面：两栏（当前窗口 ↔ 收藏夹），默认展示文件夹选择器在右栏表头里。
  *
  * **没有标签页切换**：保存与打开是同一个东西的两侧（活会话 ↔ 已落盘的会话），
  * 并排摆在一起才能一眼看清「存到哪、从哪取」。原来分成两个 Tab 时，
@@ -14,7 +14,6 @@ const SHELL_TEMPLATE = `
     <h1 class="app__title">TabFurl</h1>
     <p class="app__subtitle">窗口 ⇄ 收藏文件夹</p>
   </header>
-  <div class="topbar"></div>
 `
 
 export function App(): void {
@@ -27,7 +26,6 @@ export function App(): void {
   shell.innerHTML = SHELL_TEMPLATE
   host.replaceChildren(shell)
 
-  const topbar = q<HTMLDivElement>(shell, '.topbar')
   const panelsHost = document.createElement('div')
   panelsHost.className = 'panels'
   shell.append(panelsHost)
@@ -35,7 +33,7 @@ export function App(): void {
   /**
    * 面板之间不互相引用，只认这两个事件；具体刷新谁由这里决定。
    *
-   * 这里捕获的是 `panel` / `rootPicker` 这两个变量本身，而它们是在下面才建好的——
+   * 这里捕获的是 `panel` / `folderPicker` 这两个变量本身，而它们是在下面才建好的——
    * 回调都在用户操作之后才执行，所以读到的必然是填好的值。
    */
   const events: AppEvents = {
@@ -51,9 +49,10 @@ export function App(): void {
   const panel: Panel = createTransferPanel(events)
   panelsHost.append(panel.element)
 
-  // 默认展示文件夹不属于任何一栏，挂在外壳里：它决定右栏从哪里开始。
   const folderPicker = createDefaultFolderPicker(events)
-  topbar.append(folderPicker.element)
+  // 选择器挂在**右栏表头**里（面板只提供那个位置）：它决定的是右栏从哪里开始，
+  // 放在页面顶栏上离它要影响的那一栏太远。
+  q<HTMLElement>(panel.element, `#${FOLDER_PICK_HOST_ID}`).append(folderPicker.element)
 
   void folderPicker.refresh()
   void panel.refresh()
