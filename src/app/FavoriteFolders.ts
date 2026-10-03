@@ -14,78 +14,196 @@ import {STAR_ICON, plusIcon} from './icons'
  */
 const CHIP_DRAG_TYPE = 'application/x-tabfurl-favorite'
 
-const TEMPLATE = `
-  <div class="favs" id="fav-list" role="list" aria-label="收藏的文件夹"></div>
-  <!--
-    两个**只有图标**的按钮：文案写在 title / aria-label 上。
-    这一行是「常去的那几层」的快捷栏，chip 才是主角；两个带文字的按钮（尤其「＋ 添加收藏…」）
-    加起来能占掉半行，把 chip 挤到看不见——而它们一个是「收藏当前层」、一个是「从书签栏挑」，
-    悬停一下就知道，不值得常驻半行文字。
-  -->
-  <button type="button" class="btn btn--ghost btn--icon" id="fav-add-current"
-          title="收藏右栏当前这一层" aria-label="收藏右栏当前这一层">${STAR_ICON}</button>
-  <button type="button" class="btn btn--ghost btn--icon" id="fav-add-pick"
-          title="从书签栏里挑一层收藏" aria-label="从书签栏里挑一层收藏">${plusIcon()}</button>
-  <p class="status" id="fav-status" hidden></p>
-`
+/** 一块 chip 栏属于哪一栏。它决定「收藏这一层」读谁、跳转发给谁。 */
+export type PaneSide = 'left' | 'right'
 
-export interface FavoriteFolders {
-  readonly element: HTMLElement
-  refresh(): Promise<void>
+/** 一个收藏。只有 id 是存储里的，标题与路径每次现读（书签可以改名、可以被挪走）。 */
+export interface FavoriteEntry {
+  id: string
+  title: string
+  path: string
 }
 
 /**
- * 收藏文件夹 chip 栏。
+ * 收藏文件夹的**状态**：哪几层、什么顺序。
  *
- * 它取代了早期的「默认展示文件夹」下拉框。那个下拉框只有一个值，而用户真正会来回走动的
- * 其实就那么几层——要的是**一键跳过去的小清单**，不是每次都在几百个文件夹里重新找一遍。
- * 它还有个副作用：暗示「只能在这一个文件夹里写」，而右栏明明可以自由导航。
- * chip 只是书签（快捷方式），不是边界。
+ * 它是个**独立于界面**的东西，因为 F7 之后两栏各有一条 chip 栏，而它们说的是同一件事
+ * （同一份收藏、同一个顺序）——只是各自标出「我正站在哪」而已。
+ * 所以状态只能有一份：两个视图各存一份的话，在一边排序、另一边不动，两边就会开始说不同的话。
  *
- * 四条约定：
- * - **顺序就是数组顺序，且第一个是打开界面时的落点**，所以顺序有意义，支持拖拽排序。
- * - **加收藏有两个入口，都是只有图标的按钮**：☆（拿右栏当前层）与 ＋（打开可搜索的选择器，
- *   从书签栏里挑一层）。两条路都走同一个 `add()`，不会各写一份去重与落盘逻辑。
- * - **一个收藏都不可用时右栏自己退回书签栏**（那是 `TransferPanel` 的事），
- *   这里只负责让「一条 chip 都没有」看起来不像坏了——栏里留一句说明。
- * - **只能收藏书签栏里的层**：扩展不往「其他书签」里写东西，收藏也不该破这个例。
- *
- * 它不 import 面板、也不读面板状态：需要「用户正站在哪」时通过 `currentFolderId` **现问一次**
- * （在点按钮的那一刻问，所以永远不过期）；要跳转就发 `AppEvents.folderChosen`，由 `App` 转给面板。
+ * 它不碰 DOM，只负责读写存储并**叫一声**（`subscribe`），重画交给视图。
  */
-export function createFavoriteFolders(
-  events: AppEvents,
-  currentFolderId: () => string
-): FavoriteFolders {
-  const element = document.createElement('div')
-  element.className = 'favs-bar'
-  element.innerHTML = TEMPLATE
+export interface FavoriteStore {
+  /** 当前收藏（已按顺序）。 */
+  entries(): readonly FavoriteEntry[]
+  /** 已收藏的 id 集合，给选择器标「已收藏」用。 */
+  favorited(): ReadonlySet<string>
+  /** 上一次读数据失败的原因（例如认不出书签栏）。两块视图都要把它显示出来。 */
+  loadError(): string | undefined
+  /** 重读存储、自愈失效项、通知视图。 */
+  load(): Promise<void>
+  /** 加一个收藏。失败时抛出（消息直接可展示）。 */
+  add(folderId: string): Promise<void>
+  /** 取消收藏。 */
+  remove(folderId: string): Promise<void>
+  /** 按新顺序落盘（拖动排序的落点）。 */
+  reorder(ids: readonly string[]): Promise<void>
+  /** 状态变了就叫一声；两块视图各自重画。 */
+  subscribe(listener: () => void): void
+}
 
-  const list = q<HTMLDivElement>(element, '#fav-list')
-  const starButton = q<HTMLButtonElement>(element, '#fav-add-current')
-  const plusButton = q<HTMLButtonElement>(element, '#fav-add-pick')
-  const status = q<HTMLParagraphElement>(element, '#fav-status')
+/**
+ * 建那份唯一的收藏状态。
+ *
+ * 四条约定（它们是从「默认展示文件夹」那个下拉框换过来的理由，见 docs/design.md）：
+ * - **顺序就是数组顺序，且第一个是打开界面时的落点**，所以顺序有意义，支持拖拽排序。
+ * - **加收藏有两个入口**：☆（拿本栏当前层）与 ＋（打开可搜索的选择器，从书签栏里挑一层）。
+ *   两条路都走同一个 `add()`，不会各写一份去重与落盘逻辑。
+ * - **只能收藏书签栏里的层**：扩展不往「其他书签」里写东西，收藏也不该破这个例。
+ * - **一个收藏都不可用时面板自己退回书签栏**（那是 `TransferPanel` 的事），
+ *   这里只负责让「一条 chip 都没有」看起来不像坏了——栏里留一句说明。
+ */
+export function createFavoriteStore(events: AppEvents): FavoriteStore {
+  let entries: FavoriteEntry[] = []
+  let favorited = new Set<string>()
+  let loadError: string | undefined
+  const listeners: (() => void)[] = []
+
+  function notify(): void {
+    for (const listener of listeners) listener()
+  }
 
   /**
-   * 上一次读到的收藏，供选择器标记「已收藏」。
+   * 存储里的 id，顺手把已经失效的剔掉。
    *
-   * 它**必须在选择器之前声明**：`isFavorited` 是个闭包，虽然要到「打开面板」时才会被调用，
-   * 但把被读的变量写在读者后面，读代码的人得先往下翻再翻回来。
+   * 书签 id 是设备本地的：同步到另一台设备、或用户手动删掉文件夹之后，设置里那份就可能指向
+   * 不存在的东西。这里做一次自愈——读得出路径的留下，读不出的丢掉，并且**只在真的丢掉时**
+   * 才落盘（否则每次刷新都要写一次存储）。
    */
-  let favorited = new Set<string>()
+  async function liveIds(): Promise<string[]> {
+    const stored = (await loadSettings()).favoriteFolderIds
+    const alive: string[] = []
+    for (const id of stored) {
+      if ((await getNodePath(id)).length > 0) alive.push(id)
+    }
+    if (alive.length !== stored.length) await updateSettings({favoriteFolderIds: alive})
+    return alive
+  }
+
+  async function load(): Promise<void> {
+    try {
+      const ids = await liveIds()
+      const next: FavoriteEntry[] = []
+      for (const id of ids) {
+        const path = await getNodePath(id)
+        next.push({
+          id,
+          title: path.at(-1)?.title ?? '',
+          path: path.map((node) => node.title).join(' / ')
+        })
+      }
+      entries = next
+      favorited = new Set(next.map((entry) => entry.id))
+      loadError = undefined
+    } catch (error) {
+      // 认不出书签栏时选择器也拉不到候选，把原因写出来，而不是留一堆空控件让人猜。
+      entries = []
+      favorited = new Set()
+      loadError = errorText(error)
+    }
+    notify()
+  }
+
+  return {
+    entries: () => entries,
+    favorited: () => favorited,
+    loadError: () => loadError,
+    load,
+    async add(folderId) {
+      const stored = (await loadSettings()).favoriteFolderIds
+      if (stored.includes(folderId)) throw new Error('已经在收藏里了。')
+      await updateSettings({favoriteFolderIds: [...stored, folderId]})
+      await events.favoritesChanged()
+    },
+    async remove(folderId) {
+      const stored = (await loadSettings()).favoriteFolderIds
+      await updateSettings({favoriteFolderIds: stored.filter((id) => id !== folderId)})
+      await events.favoritesChanged()
+    },
+    async reorder(ids) {
+      await updateSettings({favoriteFolderIds: [...ids]})
+      await events.favoritesChanged()
+    },
+    subscribe(listener) {
+      listeners.push(listener)
+    }
+  }
+}
+
+/**
+ * 一条 chip 栏。
+ *
+ * 它是「常去的那几层」的快捷栏，取代了早期的「默认展示文件夹」下拉框——那个下拉框只有一个值，
+ * 而用户真正会来回走动的其实就那么几层。它还有个副作用：暗示「只能在这一个文件夹里写」，
+ * 而收藏只是**快捷方式**，不是边界。
+ *
+ * 两栏各有一条（F7），但它们渲染的是 `store` 里那**同一份数据**——在这一条上排序，
+ * 另一条跟着变。各自不同的只有「我这一栏正站在哪」（`currentFolderId`），
+ * 它用来决定 ☆ 收藏的是哪一层、以及点 chip 该跳哪一栏。
+ *
+ * 两条路（☆ 与 ＋）都走 `store.add()`，去重与落盘只有一份实现。
+ */
+export interface FavoriteBar {
+  readonly element: HTMLElement
+}
+
+export function createFavoriteBar(
+  store: FavoriteStore,
+  events: AppEvents,
+  side: PaneSide,
+  currentFolderId: () => string
+): FavoriteBar {
+  const element = document.createElement('div')
+  element.className = 'favs-bar'
+
+  // 两栏各有一条，而它们住在同一份 DOM 里：id 得分开，否则 `getElementById` 与
+  // 无障碍引用（`aria-*` 指向 id）都会指向先出现的那一条。
+  const id = (suffix: string): string => `${side === 'left' ? 'left-fav' : 'fav'}-${suffix}`
+  element.innerHTML = `
+    <div class="favs" id="${id('list')}" role="list" aria-label="收藏的文件夹"></div>
+    <!--
+      两个**只有图标**的按钮：文案写在 title / aria-label 上。
+      这一行是「常去的那几层」的快捷栏，chip 才是主角；两个带文字的按钮（尤其「＋ 添加收藏…」）
+      加起来能占掉半行，把 chip 挤到看不见——而它们一个是「收藏本栏这一层」、一个是「从书签栏挑」，
+      悬停一下就知道，不值得常驻半行文字。
+    -->
+    <button type="button" class="btn btn--ghost btn--icon" id="${id('add-current')}"
+            title="收藏本栏当前这一层" aria-label="收藏本栏当前这一层">${STAR_ICON}</button>
+    <button type="button" class="btn btn--ghost btn--icon" id="${id('add-pick')}"
+            title="从书签栏里挑一层收藏" aria-label="从书签栏里挑一层收藏">${plusIcon()}</button>
+    <p class="status" id="${id('status')}" hidden></p>
+  `
+
+  const list = q<HTMLDivElement>(element, `#${id('list')}`)
+  const starButton = q<HTMLButtonElement>(element, `#${id('add-current')}`)
+  const plusButton = q<HTMLButtonElement>(element, `#${id('add-pick')}`)
+  const status = q<HTMLParagraphElement>(element, `#${id('status')}`)
 
   /**
    * 选择器是**独立组件**（`FolderPicker.ts`）：它有自己的搜索词与高亮项状态，
    * 还要能遮住下面的列表，所以不塞在这一行里，只把它的元素挂进来。
    */
   const picker: FolderPicker = createFolderPicker({
-    isFavorited: (id) => favorited.has(id),
-    onPick: (id) => void add(id)
+    // 两条 chip 栏各有一个选择器，而它们住在同一份 DOM 里：id 得分开
+    // （重复 id 会让 `aria-controls` 指到先出现的那一个）。
+    idPrefix: side === 'left' ? 'left-fav' : 'fav',
+    isFavorited: (folderId) => store.favorited().has(folderId),
+    onPick: (folderId) => void add(folderId)
   })
   element.append(picker.element)
 
   /**
-   * chip 栏上一次的签名。
+   * 这一条 chip 栏上一次的签名。
    *
    * 初值是 `undefined`（还没渲染过），**不能是空串**：一个收藏都没有的时候签名同样是空串，
    * 两者一撞，「第一次就该画出空态提示」这一步会被当成「内容没变」跳过。
@@ -106,45 +224,19 @@ export function createFavoriteFolders(
     }
   }
 
-  /**
-   * 当前收藏的 id，顺手把已经失效的剔掉。
-   *
-   * 书签 id 是设备本地的：同步到另一台设备、或用户手动删掉文件夹之后，设置里那份就可能指向
-   * 不存在的东西。这里做一次自愈——读得出路径的留下，读不出的丢掉，并且**只在真的丢掉时**
-   * 才落盘（否则每次刷新都要写一次存储）。
-   */
-  async function liveIds(): Promise<string[]> {
-    const stored = (await loadSettings()).favoriteFolderIds
-    const alive: string[] = []
-    for (const id of stored) {
-      if ((await getNodePath(id)).length > 0) alive.push(id)
-    }
-    if (alive.length !== stored.length) await updateSettings({favoriteFolderIds: alive})
-    return alive
-  }
-
-  /** 两个入口共用的加收藏：去重、落盘、通知面板都在这里。 */
   async function add(folderId: string): Promise<void> {
-    const stored = (await loadSettings()).favoriteFolderIds
-    if (stored.includes(folderId)) {
-      setStatus(status, '已经在收藏里了。', 'error')
-      return
-    }
     try {
-      await updateSettings({favoriteFolderIds: [...stored, folderId]})
+      await store.add(folderId)
       setStatus(status, '已加入收藏。', 'ok')
-      await events.favoritesChanged()
     } catch (error) {
-      setStatus(status, `收藏失败：${errorText(error)}`, 'error')
+      setStatus(status, errorText(error), 'error')
     }
   }
 
   async function remove(folderId: string): Promise<void> {
-    const stored = (await loadSettings()).favoriteFolderIds
     try {
-      await updateSettings({favoriteFolderIds: stored.filter((id) => id !== folderId)})
+      await store.remove(folderId)
       setStatus(status, '已取消收藏。', 'ok')
-      await events.favoritesChanged()
     } catch (error) {
       setStatus(status, `取消失败：${errorText(error)}`, 'error')
     }
@@ -154,7 +246,7 @@ export function createFavoriteFolders(
   async function addCurrent(): Promise<void> {
     const folderId = currentFolderId()
     if (!folderId) {
-      setStatus(status, '右栏还没落到任何一层。', 'error')
+      setStatus(status, '这一栏还没落到任何一层。', 'error')
       return
     }
     const path = await getNodePath(folderId)
@@ -175,14 +267,14 @@ export function createFavoriteFolders(
     await add(folderId)
   }
 
-  function renderChips(entries: readonly {id: string; title: string; path: string}[]): void {
+  function renderChips(entries: readonly FavoriteEntry[]): void {
     const signature = entries.map((entry) => `${entry.id}\u0000${entry.title}`).join('\u0001')
     if (signature === lastChips) return
     lastChips = signature
     lastOrder = entries.map((entry) => entry.id).join('\u0000')
 
     if (entries.length === 0) {
-      // 提示要短：它与两个入口同行，而右栏在窄窗口下只有四百来像素，
+      // 提示要短：它与两个入口同行，而一栏在窄窗口下只有四百来像素，
       // 一句话写满就会换行、把整条栏抬高（实测写「…用右边两个入口加一个」时会变成两行）。
       list.innerHTML = '<span class="favs__empty">还没有收藏。</span>'
       return
@@ -201,6 +293,13 @@ export function createFavoriteFolders(
       .join('')
   }
 
+  /** 从状态里重画这一条（状态变了、或拖动落盘之后）。 */
+  function render(): void {
+    const failure = store.loadError()
+    renderChips(store.entries())
+    if (failure) setStatus(status, failure, 'error')
+  }
+
   /**
    * 把 chip 栏当前顺序落盘。
    *
@@ -208,6 +307,7 @@ export function createFavoriteFolders(
    * 新位置（见 `dragover`），所以 DOM 就是用户看到的东西，读它不会与视觉分叉。
    *
    * 与已渲染的顺序一样就不写存储（每次拖动结束都写一次，会让设置变更事件白跑一趟）。
+   * 落盘之后 `store` 会通知**两条**视图重画，所以另一边也会跟着换顺序。
    */
   async function persistOrder(): Promise<void> {
     const ids = [...list.querySelectorAll<HTMLElement>('[data-chip]')].map(
@@ -215,37 +315,17 @@ export function createFavoriteFolders(
     )
     if (ids.length === 0 || ids.join('\u0000') === lastOrder) return
     try {
-      await updateSettings({favoriteFolderIds: ids})
-      await events.favoritesChanged()
+      await store.reorder(ids)
     } catch (error) {
       setStatus(status, `保存顺序失败：${errorText(error)}`, 'error')
     }
   }
 
-  async function refresh(): Promise<void> {
+  store.subscribe(() => {
+    // 重画之前先清掉上一句提示（拖动排序这类动作的消息归自己管，状态这边的错误会重新写）。
     setStatus(status, '', 'ok')
-    try {
-      const ids = await liveIds()
-      const entries: {id: string; title: string; path: string}[] = []
-      for (const id of ids) {
-        const path = await getNodePath(id)
-        entries.push({
-          id,
-          title: path.at(-1)?.title ?? '',
-          path: path.map((node) => node.title).join(' / ')
-        })
-      }
-      renderChips(entries)
-      favorited = new Set(entries.map((entry) => entry.id))
-    } catch (error) {
-      // 认不出书签栏时选择器也拉不到候选，把原因写出来，而不是留一堆空控件让人猜。
-      lastChips = undefined
-      lastOrder = undefined
-      favorited = new Set()
-      list.innerHTML = ''
-      setStatus(status, errorText(error), 'error')
-    }
-  }
+    render()
+  })
 
   // ———————————————— 交互 ————————————————
 
@@ -260,12 +340,13 @@ export function createFavoriteFolders(
 
     const goButton = target.closest<HTMLButtonElement>('[data-goto-chip]')
     if (goButton?.dataset.gotoChip) {
-      void events.folderChosen(goButton.dataset.gotoChip)
+      // 「跳过去」是**意图**：跳哪一栏由 `App` 转给面板（导航归面板所有）。
+      void events.folderChosen(goButton.dataset.gotoChip, side)
       return
     }
 
-    if (target.closest('#fav-add-current')) void addCurrent()
-    if (target.closest('#fav-add-pick')) void picker.toggle(plusButton)
+    if (target.closest(`#${id('add-current')}`)) void addCurrent()
+    if (target.closest(`#${id('add-pick')}`)) void picker.toggle(plusButton)
   })
 
   list.addEventListener('dragstart', (event) => {
@@ -302,5 +383,5 @@ export function createFavoriteFolders(
     void persistOrder()
   })
 
-  return {element, refresh}
+  return {element}
 }

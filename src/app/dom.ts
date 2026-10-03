@@ -16,11 +16,18 @@ export interface Panel {
 export interface AppEvents {
   /** 收藏夹树变了：保存、撤销、删除、改名。 */
   archiveChanged(): Promise<void>
-  /** 用户点了某个收藏文件夹：让右栏跳到那一层。导航归面板所有，外部只发意图。 */
-  folderChosen(folderId: string): Promise<void>
+  /**
+   * 用户点了某个收藏文件夹：让那一栏跳到那一层。导航归面板所有，外部只发意图。
+   *
+   * **必须带上哪一栏**：F7 之后两栏都是可导航的收藏夹，同一个意图在两栏里落地的地方不一样。
+   */
+  folderChosen(folderId: string, side: PaneSide): Promise<void>
   /** 收藏列表本身变了（增、删、排序），面板可能要重算落点。 */
   favoritesChanged(): Promise<void>
 }
+
+/** 主界面左右两栏。 */
+export type PaneSide = 'left' | 'right'
 
 export type StatusKind = 'ok' | 'error'
 

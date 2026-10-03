@@ -1,12 +1,17 @@
-import {createFavoriteFolders} from './FavoriteFolders'
-import {FAVORITE_HOST_ID, createTransferPanel, type TransferPanel} from './TransferPanel'
+import {createFavoriteBar, createFavoriteStore} from './FavoriteFolders'
+import {
+  FAVORITE_HOST_ID,
+  LEFT_FAVORITE_HOST_ID,
+  createTransferPanel,
+  type TransferPanel
+} from './TransferPanel'
 import {q, type AppEvents} from './dom'
 
 /**
- * 主界面：两栏（当前窗口 ↔ 收藏夹），收藏文件夹的 chip 栏在右栏表头下面一行。
+ * 主界面：两栏（窗口 / 收藏夹 ⇄ 收藏夹），两条 chip 栏分别挂在两栏表头上。
  *
  * **页面里没有标题块**：`TabFurl / 窗口 ⇄ 收藏文件夹` 那两行占掉几十像素，
- * 而这个界面本身已经说明了它是谁（左侧是当前窗口、右侧是收藏夹）。
+ * 而这个界面本身已经说明了它是谁（左栏是窗口或另一个收藏夹、右栏是收藏夹）。
  * 名字改放在**标签页标题**上（`document.title`），切标签页时看得到就够了。
  *
  * **没有标签页切换**：保存与打开是同一个东西的两侧（活会话 ↔ 已落盘的会话），
@@ -33,19 +38,22 @@ export function App(): void {
   /**
    * 面板之间不互相引用，只认这几个事件；具体刷新谁、跳哪里由这里决定。
    *
-   * 这里捕获的是 `panel` / `favorites` 这两个变量本身，而它们是在下面才建好的——
-   * 回调都在用户操作之后才执行，所以读到的必然是填好的值。
+   * 这里捕获的是 `panel` 这个变量本身，而它是在下面才建好的——回调都在用户操作之后才执行，
+   * 所以读到的必然是填好的值。
    */
   const events: AppEvents = {
     archiveChanged: async () => {
       await panel.refresh()
     },
-    folderChosen: async (folderId) => {
-      await panel.navigateTo(folderId)
+    folderChosen: async (folderId, side) => {
+      // 点哪一栏的 chip 就跳哪一栏：同一个「跳到这一层」的意图，有两个落点。
+      if (side === 'left') await panel.navigateToLeft(folderId)
+      else await panel.navigateTo(folderId)
     },
     favoritesChanged: async () => {
-      await favorites.refresh()
-      // 收藏变了可能意味着「起点」变了（第一个收藏就是落点），所以面板也要重算一次。
+      // 收藏变了可能意味着「起点」变了（第一个收藏就是落点），所以两边都要重算一次：
+      // 状态那边读存储并通知两块视图，面板那边重新决定落在哪一层。
+      await favorites.load()
       await panel.refresh()
     }
   }
@@ -53,11 +61,22 @@ export function App(): void {
   const panel: TransferPanel = createTransferPanel(events)
   panelsHost.append(panel.element)
 
-  // chip 栏挂在**右栏表头下面**（由面板留出这个位置）：它决定的是右栏从哪里开始。
-  // 「收藏这一层」要知道用户正站在哪，所以这里把一个取值函数递进去——它不反过来读面板的状态。
-  const favorites = createFavoriteFolders(events, () => panel.currentFolderId())
-  q<HTMLElement>(panel.element, `#${FAVORITE_HOST_ID}`).append(favorites.element)
+  /**
+   * 收藏文件夹的 chip 栏：**一份状态、两块视图**。
+   *
+   * 两栏各有一条（左栏那条只在它看着收藏夹时露面），但说的是同一份收藏、同一个顺序——
+   * 在一条上排序，另一条跟着变。各自不同的只有「我这一栏正站在哪」，
+   * 所以这里把两个取值函数分别递进去（那是**查询**，不是事件）。
+   *
+   * 状态那份东西不碰 DOM，只负责读写存储并叫一声；重画交给视图。
+   * 两条视图因此不需要互相认识，也不需要知道对方存在。
+   */
+  const favorites = createFavoriteStore(events)
+  const rightBar = createFavoriteBar(favorites, events, 'right', () => panel.currentFolderId())
+  const leftBar = createFavoriteBar(favorites, events, 'left', () => panel.leftFolderId())
+  q<HTMLElement>(panel.element, `#${FAVORITE_HOST_ID}`).append(rightBar.element)
+  q<HTMLElement>(panel.element, `#${LEFT_FAVORITE_HOST_ID}`).append(leftBar.element)
 
-  void favorites.refresh()
+  void favorites.load()
   void panel.refresh()
 }

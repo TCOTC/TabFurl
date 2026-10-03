@@ -12,13 +12,13 @@ import {FOLDER_ICON} from './icons'
  */
 const MAX_ROWS = 200
 
-const TEMPLATE = `
-  <div class="picker" id="folder-picker" hidden>
-    <input type="search" class="input input--sm picker__search" id="folder-picker-search"
+const TEMPLATE = (prefix: string): string => `
+  <div class="picker" id="${prefix}-folder-picker" hidden>
+    <input type="search" class="input input--sm picker__search" id="${prefix}-folder-picker-search"
            placeholder="搜索文件夹…" autocomplete="off" spellcheck="false"
-           aria-label="搜索文件夹" aria-controls="folder-picker-list" />
-    <ul class="picker__list" id="folder-picker-list"></ul>
-    <p class="picker__note" id="folder-picker-note" hidden></p>
+           aria-label="搜索文件夹" aria-controls="${prefix}-folder-picker-list" />
+    <ul class="picker__list" id="${prefix}-folder-picker-list"></ul>
+    <p class="picker__note" id="${prefix}-folder-picker-note" hidden></p>
   </div>
 `
 
@@ -56,6 +56,8 @@ export interface FolderPicker {
  *   收到一句「已经在收藏里了」。
  */
 export function createFolderPicker(options: {
+  /** id 前缀：两条 chip 栏各有一个选择器，而它们住在同一份 DOM 里。 */
+  idPrefix: string
   /** 已经收藏过的层。 */
   isFavorited(id: string): boolean
   /** 用户选中了一层。 */
@@ -63,12 +65,12 @@ export function createFolderPicker(options: {
 }): FolderPicker {
   const element = document.createElement('div')
   element.className = 'picker-host'
-  element.innerHTML = TEMPLATE
+  element.innerHTML = TEMPLATE(options.idPrefix)
 
-  const panel = q<HTMLElement>(element, '#folder-picker')
-  const search = q<HTMLInputElement>(element, '#folder-picker-search')
-  const list = q<HTMLUListElement>(element, '#folder-picker-list')
-  const note = q<HTMLParagraphElement>(element, '#folder-picker-note')
+  const panel = q<HTMLElement>(element, `#${options.idPrefix}-folder-picker`)
+  const search = q<HTMLInputElement>(element, `#${options.idPrefix}-folder-picker-search`)
+  const list = q<HTMLUListElement>(element, `#${options.idPrefix}-folder-picker-list`)
+  const note = q<HTMLParagraphElement>(element, `#${options.idPrefix}-folder-picker-note`)
 
   let entries: Entry[] = []
   let rows: HTMLButtonElement[] = []

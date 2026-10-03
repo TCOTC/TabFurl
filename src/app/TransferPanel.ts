@@ -270,10 +270,14 @@ ${archiveColumnMarkup('archive')}
  * - 没有会话层：每次保存都是往当前展示的那一层里**追加**，不做去重，同名文件夹也不合并。
  */
 export interface TransferPanel extends Panel {
-  /** 跳到某一层。收藏文件夹 chip 用它——导航归面板，外部只发意图。 */
+  /** 跳到某一层。右栏的 chip 栏用它——导航归面板，外部只发意图。 */
   navigateTo(folderId: string): Promise<void>
-  /** 用户正站在哪一层（空串表示还没落到任何一层）。「收藏这一层」现问一次它。 */
+  /** 跳到左栏那一层（左栏的 chip 栏用它）。必要时会先把左栏切到收藏夹档。 */
+  navigateToLeft(folderId: string): Promise<void>
+  /** 右栏正站在哪一层（空串表示还没落到任何一层）。 */
   currentFolderId(): string
+  /** 左栏正站在哪一层（只有收藏夹档下才有值）。 */
+  leftFolderId(): string
 }
 export function createTransferPanel(events: AppEvents): TransferPanel {
   const element = createPanelElement('transfer')
@@ -808,6 +812,17 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
     archive.updateButtons()
     leftArchive.updateButtons()
+  }
+
+  /**
+   * 跳到左栏那一层（左栏的 chip 栏点一下就走到这里）。
+   *
+   * 它会**顺手把左栏切到收藏夹档**：点左栏的 chip 只可能发生在那一档下，但把这两件事写在一起，
+   * 就不需要「谁保证调用顺序」这种默契。
+   */
+  async function navigateToLeft(folderId: string): Promise<void> {
+    if (mode !== 'archive') await setMode('archive')
+    await leftArchive.navigateTo(folderId)
   }
 
   /** 只重读左栏。窗口里的标签变了（而收藏夹没动）时用它。 */
@@ -1793,15 +1808,14 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   openWindowButton.addEventListener('click', () => void openSelection('newWindow'))
   undoButton.addEventListener('click', () => void undo())
 
-
-
-
-
-
   return {
     element,
     refresh,
+    // 两栏的导航都暴露出来，但**方向不同**：右栏那个一直有效，
+    // 左栏那个在窗口档下没有意义（它那时装的是标签），所以 `navigateToLeft` 会先切档。
     navigateTo: archive.navigateTo,
-    currentFolderId: () => archive.currentFolderId()
+    navigateToLeft,
+    currentFolderId: () => archive.currentFolderId(),
+    leftFolderId: () => leftArchive.currentFolderId()
   }
 }
