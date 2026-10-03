@@ -68,7 +68,9 @@ export async function snapshotCurrentWindow(): Promise<WindowSnapshot> {
       url: tab.url as string,
       pinned: tab.pinned ?? false,
       index: tab.index,
-      lastAccessed: tab.lastAccessed
+      lastAccessed: tab.lastAccessed,
+      // 懒加载出来的标签就在这个状态：内容被丢掉了、地址还留着，点开才重新加载。
+      discarded: tab.discarded === true
     }
 
     const groupId = tab.groupId

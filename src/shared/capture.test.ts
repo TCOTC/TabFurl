@@ -21,6 +21,8 @@ interface StubTab {
   pinned: boolean
   title: string
   url: string
+  /** 不传就是「已加载」，与 `chrome.tabs.Tab` 一样是可选的。 */
+  discarded?: boolean
 }
 
 interface StubNode {
@@ -89,7 +91,7 @@ const shape = (children: CreatedNode[]) =>
 const plainTab = (
   id: number,
   url: string,
-  extra: {groupId?: number; pinned?: boolean} = {}
+  extra: {groupId?: number; pinned?: boolean; discarded?: boolean} = {}
 ): StubTab => ({
   tabId: id,
   id,
@@ -98,7 +100,8 @@ const plainTab = (
   index: id,
   pinned: extra.pinned ?? false,
   title: url,
-  url
+  url,
+  discarded: extra.discarded ?? false
 })
 
 test('snapshotCurrentWindow 按 groupId 分桶，不按标题合并', async () => {
@@ -120,6 +123,16 @@ test('snapshotCurrentWindow 按 groupId 分桶，不按标题合并', async () =
   assert.equal(snapshot.groups[1].color, 'red')
   assert.equal(snapshot.ungrouped.length, 1)
   assert.equal(snapshot.skipped, 1)
+})
+
+test('卸载状态被带进快照，缺字段时算作已加载', async () => {
+  stubChrome([plainTab(1, 'https://a.com'), plainTab(2, 'https://b.com', {discarded: true})])
+
+  const snapshot = await snapshotCurrentWindow()
+
+  // 左栏据此决定要不要给这一行多一个「加载」按钮，缺字段时不能误判成「已卸载」。
+  assert.equal(snapshot.ungrouped[0].discarded, false)
+  assert.equal(snapshot.ungrouped[1].discarded, true)
 })
 
 test('分组元数据取不到时退化为空标题，不抛错', async () => {

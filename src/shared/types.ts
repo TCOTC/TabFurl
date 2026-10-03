@@ -46,6 +46,13 @@ export interface TabSnapshot {
   /** 标签在窗口内的顺序，仅用于写入顺序与浏览器一致。 */
   index: number
   lastAccessed?: number
+  /**
+   * 网页是否已被 Chrome 卸载（`Tab.discarded`）。
+   *
+   * 只给界面用：左栏的行尾据此多一个「加载」按钮（在后台把这一页读出来，不切过去）。
+   * 不参与写入与还原——书签只认标题与网址，卸载与否不影响存下去的东西。
+   */
+  discarded?: boolean
 }
 
 /** 一个标签分组，以及组内标签。 */
