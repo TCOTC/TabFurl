@@ -3,6 +3,8 @@ import {
   createFolder,
   getNodePath,
   getSubTree,
+  isRealBookmark,
+  realBookmarks,
   removeSubTree,
   renameNode
 } from '../shared/bookmarks'
@@ -311,7 +313,8 @@ export function createTransferPanel(events: AppEvents): Panel {
 
   function archiveFolderRow(folder: BookmarkNode): string {
     const childNodes = folder.children ?? []
-    const bookmarks = childNodes.filter((node) => node.url)
+    // 计数只算真书签，但下面渲染要把分隔线一并画出来（它保持原位）。
+    const bookmarks = realBookmarks(childNodes)
     const open = expanded.has(folder.id)
     const isRenaming = renaming?.id === folder.id
 
@@ -384,14 +387,23 @@ export function createTransferPanel(events: AppEvents): Panel {
     syncArchiveStates()
   }
 
-  /** 右栏某个文件夹下的书签 id。 */
+  /** 右栏某个文件夹下的「会被打开」的书签 id。分隔线不在内：它没有勾选框，也不参与计数。 */
   function folderBookmarkIds(folder: BookmarkNode): string[] {
-    return (folder.children ?? []).filter((node) => node.url).map((node) => node.id)
+    return realBookmarks(folder.children ?? []).map((bookmark) => bookmark.id)
   }
 
-  /** 存档里全部可打开的书签 id（含散装与分组内的）。 */
+  /**
+   * 存档里全部可打开的书签 id（含散装与分组内的）。
+   *
+   * **必须与 `restoreFolder` 的口径一致**：它跳过分隔线，所以这份名单也不能含分隔线。
+   * 否则「打开（N）」会多算，而且全选框按这份名单算总数，一旦总数里混进了永远勾不上的项，
+   * 它就会永远停在「部分选择」——点了全选也回不到「全不选」。
+   */
   function archiveBookmarkIds(): string[] {
-    return archiveChildren.flatMap((child) => (child.url ? [child.id] : folderBookmarkIds(child)))
+    return archiveChildren.flatMap((child) => {
+      if (!child.url) return folderBookmarkIds(child)
+      return isRealBookmark(child) ? [child.id] : []
+    })
   }
 
   function archiveKeptCount(): number {

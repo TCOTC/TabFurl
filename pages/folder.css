@@ -4,24 +4,13 @@
  * 它就是一篇要顺着往下读的文档，页面滚动才对。
  */
 
-.section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.section__head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
-}
-
-.section__title {
-  margin: 0;
-  font-size: var(--text-md);
-  font-weight: 600;
-}
-
+/*
+ * 当前的子级网格。三类子级（文件夹、书签、分隔线）都在这里面，**顺序即书签树里的顺序**。
+ *
+ * 这里**不要**按类型拆成「子文件夹」「未归入子文件夹」两段：一拆，分隔线就跟着散装书签
+ * 被推到列表末尾，而用户放这些线就是为了把相邻的几组文件夹隔开（见 docs/design.md）。
+ * 分隔线靠 `grid-column: 1 / -1` 横跨整行，于是它落在哪几行之间与树里的位置一致。
+ */
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));

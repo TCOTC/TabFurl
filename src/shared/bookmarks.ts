@@ -1,8 +1,26 @@
 import type {BookmarkNode, FolderOption} from './types'
-import {isInternalUrl} from './urls'
+import {isInternalUrl, isSeparatorUrl} from './urls'
 
 /** Chrome 内置文件夹「书签栏」的固定 id。 */
 const BOOKMARKS_BAR_ID = '1'
+
+/**
+ * 节点是不是一枚**真书签**。
+ *
+ * 分隔线（`isSeparatorUrl`）是书签树里的组织记号，不是书签：它不计入任何枚数、没有勾选框、
+ * 还原时跳过，也不参与「打开（N）」的计数。所以「有没有 url」**不能**当作「是不是书签」用——
+ * 以前就是这么写的，于是分隔线被算进了书签数，而界面又把它画成一条线，两边的口径就对不上了。
+ *
+ * 凡是数书签或取书签 id 的地方都必须过这一层。
+ */
+export function isRealBookmark(node: BookmarkNode): boolean {
+  return Boolean(node.url) && !isSeparatorUrl(node.url)
+}
+
+/** `isRealBookmark` 的数组版，省去每个调用点各写一遍 `filter`。 */
+export function realBookmarks(nodes: readonly BookmarkNode[]): BookmarkNode[] {
+  return nodes.filter(isRealBookmark)
+}
 
 function toNode(node: chrome.bookmarks.BookmarkTreeNode): BookmarkNode {
   return {
@@ -117,9 +135,9 @@ export async function getNodePath(id: string): Promise<{id: string; title: strin
   return nodes
 }
 
-/** 统计一个文件夹下的全部可收藏书签（递归，跳过内部页面）。 */
+/** 统计一个文件夹下的全部可收藏书签（递归，跳过内部页面与分隔线）。 */
 function countBookmarks(node: BookmarkNode): number {
-  if (node.url) return isInternalUrl(node.url) ? 0 : 1
+  if (node.url) return isRealBookmark(node) && !isInternalUrl(node.url) ? 1 : 0
   return (node.children ?? []).reduce((total, child) => total + countBookmarks(child), 0)
 }
 
@@ -129,7 +147,7 @@ function describeFolder(node: BookmarkNode, path: string[]): FolderOption {
     id: node.id,
     title: node.title,
     path,
-    bookmarkCount: children.filter((child) => Boolean(child.url)).length,
+    bookmarkCount: realBookmarks(children).length,
     totalBookmarkCount: countBookmarks(node),
     folderCount: children.filter((child) => !child.url).length
   }

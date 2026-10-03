@@ -1,4 +1,4 @@
-import {getNodePath, getSubTree} from '../src/shared/bookmarks'
+import {getNodePath, getSubTree, realBookmarks} from '../src/shared/bookmarks'
 import {restoreFolder} from '../src/shared/restore'
 import {escapeHtml, faviconMarkup} from '../src/shared/tile'
 import type {BookmarkNode, RestoreOptions} from '../src/shared/types'
@@ -67,24 +67,18 @@ function separatorMarkup(node: BookmarkNode): string {
   `
 }
 
-/** 是书签就画卡片，是分隔线就画横线；顺序即书签树里的顺序。 */
+/**
+ * 一个子级画成什么，**顺序即书签树里的顺序**。
+ *
+ * 三类子级共处同一个网格：文件夹是卡片、书签是卡片、分隔线是横跨整行的一条线。
+ * 让线当网格项（而不是另起一段）才能在**原位**把它画出来——它插在哪几个子级之间，页面上就在哪里。
+ *
+ * 早期版本把「子文件夹」与「未归入文件夹的书签」拆成两段渲染，于是所有分隔线都被推到列表末尾，
+ * 而用户放这些线的目的恰恰是把相邻的几组文件夹隔开，位置一丢，线就变成了纯装饰。
+ */
 function entryMarkup(node: BookmarkNode): string {
+  if (!node.url) return subfolderCardMarkup(node)
   return isSeparatorUrl(node.url) ? separatorMarkup(node) : bookmarkMarkup(node)
-}
-
-function sectionMarkup(title: string, nodes: readonly BookmarkNode[]): string {
-  if (nodes.length === 0) return ''
-  // 胸章只数真书签：分隔线不是书签，算进去会与下面的「N 个书签」对不上。
-  const count = nodes.filter((node) => !isSeparatorUrl(node.url)).length
-  return `
-    <section class="section">
-      <div class="section__head">
-        <h2 class="section__title">${escapeHtml(title)}</h2>
-        <span class="badge">${count}</span>
-      </div>
-      <div class="grid">${nodes.map(entryMarkup).join('')}</div>
-    </section>
-  `
 }
 
 function folderHref(folderId: string): string {
@@ -92,16 +86,15 @@ function folderHref(folderId: string): string {
 }
 
 function subfolderCardMarkup(folder: BookmarkNode): string {
-  const bookmarks = (folder.children ?? []).filter(
-    (child) => child.url && !isSeparatorUrl(child.url)
-  )
-  const folderCount = (folder.children ?? []).filter((child) => !child.url).length
+  const children = folder.children ?? []
+  const bookmarkCount = realBookmarks(children).length
+  const folderCount = children.filter((child) => !child.url).length
   return `
     <a class="item bookmark" href="${escapeHtml(folderHref(folder.id))}">
       <span class="folder-tile" aria-hidden="true">${FOLDER_ICON}</span>
       <span class="item__main">
         <span class="item__title">${escapeHtml(folder.title)}</span>
-        <span class="item__meta">${bookmarks.length} 个书签${
+        <span class="item__meta">${bookmarkCount} 个书签${
           folderCount > 0 ? ` · ${folderCount} 个子文件夹` : ''
         }</span>
       </span>
@@ -127,13 +120,11 @@ async function render(): Promise<void> {
   }
 
   const children = folder.children ?? []
-  // 分隔线留在这个列表里，好让它在原位被画出来（见 `entryMarkup`）。
-  const looseBookmarks = children.filter((child) => child.url)
   const subFolders = children.filter((child) => !child.url)
-  const countBookmarks = (nodes: readonly BookmarkNode[]): number =>
-    nodes.filter((node) => node.url && !isSeparatorUrl(node.url)).length
-  const totalBookmarks = countBookmarks(looseBookmarks) +
-    subFolders.reduce((sum, sub) => sum + countBookmarks(sub.children ?? []), 0)
+  // 页首的计数不含分隔线：线是记号，不是书签。
+  const totalBookmarks =
+    realBookmarks(children).length +
+    subFolders.reduce((sum, sub) => sum + realBookmarks(sub.children ?? []).length, 0)
 
   // 面包屑：除当前这一层外都可点，点了就打开那一层文件夹。
   // 当前层是这一页自身，做成链接只是噪声，所以留作纯文本。
@@ -143,7 +134,7 @@ async function render(): Promise<void> {
     .map((node) => `<a href="${escapeHtml(folderHref(node.id))}">${escapeHtml(node.title)}</a>`)
     .join('<span> / </span>')
 
-  const isEmpty = subFolders.length === 0 && looseBookmarks.length === 0
+  const isEmpty = children.length === 0
 
   // 当前层的标题也走同一套兜底（`getNodePath` 会给空标题补「书签」）。
   // 书签树的根节点标题就是空串，而它在面包屑里是可点的，所以这里必须一致——
@@ -171,20 +162,10 @@ async function render(): Promise<void> {
       </div>
 
       ${
-        subFolders.length > 0
-          ? `<section class="section">
-               <div class="section__head">
-                 <h2 class="section__title">子文件夹</h2>
-                 <span class="badge">${subFolders.length}</span>
-               </div>
-               <div class="grid">${subFolders.map(subfolderCardMarkup).join('')}</div>
-             </section>`
-          : ''
+        isEmpty
+          ? '<p class="empty">这个文件夹是空的。</p>'
+          : `<div class="grid">${children.map(entryMarkup).join('')}</div>`
       }
-
-      ${sectionMarkup('未归入子文件夹', looseBookmarks)}
-
-      ${isEmpty ? '<p class="empty">这个文件夹是空的。</p>' : ''}
     </main>
   `
 

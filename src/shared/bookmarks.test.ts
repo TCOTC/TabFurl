@@ -1,6 +1,14 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {getBookmarksBarId, getNodePath, listArchiveRootCandidates, listFolders} from './bookmarks'
+import {
+  getBookmarksBarId,
+  getNodePath,
+  isRealBookmark,
+  listArchiveRootCandidates,
+  listFolders,
+  realBookmarks
+} from './bookmarks'
+import {SEPARATOR_URL} from './urls'
 
 interface StubNode {
   id: string
@@ -78,11 +86,14 @@ const TREE: StubNode[] = [
         title: '书签栏',
         children: [
           {id: '10', title: '书签A', url: 'https://a.example'},
+          // 分隔线插在「书签A」与「存档」之间：它不进任何计数，但要保持在这个位置。
+          {id: '15', title: '', url: SEPARATOR_URL},
           {
             id: '11',
             title: '存档',
             children: [
               {id: '12', title: '标签页存档', children: []},
+              {id: '16', title: '── 工作 ──', url: SEPARATOR_URL},
               {id: '13', title: '书签B', url: 'https://b.example'}
             ]
           },
@@ -172,6 +183,41 @@ test('listArchiveRootCandidates 的计数只算直属书签，总数递归到后
   assert.equal(archive.bookmarkCount, 1, '存档直属只有「书签B」')
   assert.equal(archive.folderCount, 1, '标签页存档')
   assert.equal(archive.totalBookmarkCount, 1)
+})
+
+test('分隔线不算书签：计数里看不到它，但它照旧留在书签树里', async () => {
+  stubChrome(TREE)
+  const {folders} = await listArchiveRootCandidates()
+  const [bar, archive] = folders
+
+  // 两个文件夹里各插了一枚分隔线（id 15 / 16），上面的数字与没插时一模一样——
+  // 这正是回归点：若哪天又用「有没有 url」当「是不是书签」，这四个数字就会各多 1。
+  assert.equal(bar.bookmarkCount, 1)
+  assert.equal(bar.totalBookmarkCount, 2)
+  assert.equal(archive.bookmarkCount, 1)
+  assert.equal(archive.totalBookmarkCount, 1)
+})
+
+test('isRealBookmark 把分隔线与真书签分开，folder 两种都不是', () => {
+  assert.equal(isRealBookmark({id: 'x', title: '书签', url: 'https://a.example'}), true)
+  assert.equal(isRealBookmark({id: 'x', title: '', url: SEPARATOR_URL}), false)
+  assert.equal(isRealBookmark({id: 'x', title: '── 工作 ──', url: SEPARATOR_URL}), false)
+  assert.equal(isRealBookmark({id: 'x', title: '文件夹', children: []}), false)
+  assert.equal(isRealBookmark({id: 'x', title: ''}), false)
+})
+
+test('realBookmarks 只留真书签，且保持原顺序', () => {
+  assert.deepEqual(
+    realBookmarks([
+      {id: 'a', title: 'A', url: 'https://a.example'},
+      {id: 's1', title: '', url: SEPARATOR_URL},
+      {id: 'f', title: '文件夹', children: []},
+      {id: 's2', title: '── B ──', url: SEPARATOR_URL},
+      {id: 'b', title: 'B', url: 'https://b.example'}
+    ]).map((node) => node.id),
+    ['a', 'b']
+  )
+  assert.deepEqual(realBookmarks([]), [])
 })
 
 test('listFolders 默认不含根自身（主界面按存档列出会话）', async () => {
