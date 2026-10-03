@@ -35,6 +35,14 @@ export interface TabSnapshot {
   /** 所属标签分组的标题；未分组时为 undefined，分组无标题时为空字符串。 */
   groupTitle?: string
   groupColor?: TabGroupColor
+  /**
+   * 所属标签分组的 id；未分组时为 undefined。
+   *
+   * 与 `groupTitle` 是两件事：标题是给写入书签用的（分组名 → 文件夹名），
+   * 而这个 id 是给 `chrome.tabs.group()` 用的——把标签拖进某个分组必须给出 groupId，
+   * 拿标题去反查是不行的（同名分组合法存在）。
+   */
+  groupId?: number
   /** 标签在窗口内的顺序，仅用于写入顺序与浏览器一致。 */
   index: number
   lastAccessed?: number

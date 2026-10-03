@@ -379,8 +379,13 @@
 }
 
 /*
- * 落点提示：整栏用底色，格子（分组文件夹）用描边——两者的可见范围不同，
- * 用同一种提示会让人分不清「落在这一格里」还是「落在这一栏里」。
+ * 落点提示分三种，因为三种意图要看得出来不一样：
+ *
+ *   `.is-drop-active`（整栏或整格）—— 落到这一栏 / 进入这一格；
+ *   `.is-drop-before` / `.is-drop-after`（一行）—— 插到这一行的前/后。
+ *
+ * 插入线用 `box-shadow` 而不是伪元素：分隔线那一行本来就用 `::before` / `::after` 画横线，
+ * 伪元素会被两边抢（一条线要么被覆盖要么串位置），盒阴影不占伪元素，任何行都能用。
  */
 .box.is-drop-active {
   background: var(--accent-soft);
@@ -389,4 +394,12 @@
 .group.is-drop-active {
   box-shadow: inset 0 0 0 2px var(--accent);
   border-radius: var(--radius-sm);
+}
+
+.is-drop-before {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.is-drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent);
 }

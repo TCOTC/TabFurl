@@ -80,6 +80,8 @@ export async function snapshotCurrentWindow(): Promise<WindowSnapshot> {
     const meta = groupMeta.get(groupId) ?? {title: ''}
     snapshot.groupTitle = meta.title
     snapshot.groupColor = meta.color
+    // groupId 单独留一份：界面把「存成文件夹名」与「拖回这个分组」分开用（见 TabSnapshot）。
+    snapshot.groupId = groupId
 
     // 按 groupId 分桶：不同分组允许同名，不能按标题合并。
     let bucket = bucketByGroupId.get(groupId)

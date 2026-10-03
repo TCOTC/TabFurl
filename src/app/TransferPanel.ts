@@ -15,11 +15,11 @@ import {
   type WindowChild
 } from '../shared/capture'
 import {formatTimestamp, sanitizeFolderName} from '../shared/naming'
-import {openFolderViewers, restoreFolder} from '../shared/restore'
+import {discardCommittedTabs, openFolderViewers, restoreFolder} from '../shared/restore'
 import {loadSettings} from '../shared/settings'
 import {escapeHtml, faviconMarkup} from '../shared/tile'
 import type {BookmarkNode, RestoreOptions, TabSnapshot} from '../shared/types'
-import {SEPARATOR_URL, hostnameOf, isSeparatorUrl, separatorTitle} from '../shared/urls'
+import {SEPARATOR_URL, hostnameOf, isInternalUrl, isSeparatorUrl, separatorTitle} from '../shared/urls'
 import {
   createPanelElement,
   createSelectAll,
@@ -51,6 +51,19 @@ type DragPayload =
   | {kind: 'folder'; id: string}
 
 type RestoreKind = 'newWindow' | 'currentWindow' | 'onlyTabs'
+
+/**
+ * 一行内部的落点。上缘 = 插到前面，下缘 = 插到后面，中间 = **进入**（只对文件夹行与分组行有意义）。
+ */
+type DropSpot = 'before' | 'into' | 'after'
+
+/** 左栏的落点。`end` 表示落在末尾（空白处），那时归组看**最后一行**属于哪个分组。 */
+type WindowDrop =
+  | {kind: 'tab'; anchorIndex: number; after: boolean; groupId?: number}
+  | {kind: 'end'; groupId?: number}
+
+/** 右栏的落点。`into` 进某个子文件夹，`here` 插到当前这一层的某个下标。 */
+type ArchiveDrop = {kind: 'into'; folderId: string} | {kind: 'here'; index: number}
 
 /**
  * 中间按钮上的计数。
@@ -289,13 +302,15 @@ export function createTransferPanel(events: AppEvents): Panel {
   /**
    * 一条标签行。
    *
-   * `data-row` 让「点整行」能找到它该切哪个勾选框（见 `toggleRowFromClick`）——
-   * 它必须落在**包含**勾选框的那一层上，所以分组行上的标记在 `li` 而不是标题区。
+   * 三个 data 属性各有用处：`data-row` 供「点整行切换勾选」找到勾选框；
+   * `data-tab-index` 与 `data-tab-group` 供拖拽算落点（插到哪儿、归哪个组）。
    */
   function tabRowMarkup(tab: TabSnapshot): string {
     const host = hostnameOf(tab.url) ?? tab.url
+    const groupAttr = tab.groupId === undefined ? '' : ` data-tab-group="${tab.groupId}"`
     return `
-      <li class="item leaf" draggable="true" data-row data-drag-tab="${tab.tabId}">
+      <li class="item leaf" draggable="true" data-row data-drop-row="tab"
+          data-tab-index="${tab.index}"${groupAttr} data-drag-tab="${tab.tabId}">
         <input type="checkbox" data-window-tab="${tab.tabId}" />
         ${faviconMarkup(tab.url, FAVICON_BASE)}
         <span class="item__main">
@@ -316,11 +331,13 @@ export function createTransferPanel(events: AppEvents): Panel {
     }
 
     windowList.innerHTML = windowChildren
-      .map((child, index) =>
-        child.kind === 'tab'
-          ? tabRowMarkup(child.tab)
-          : `
-          <li class="group" data-row>
+      .map((child, index) => {
+        if (child.kind === 'tab') return tabRowMarkup(child.tab)
+        // 分组行的 groupId 从组内第一枚标签上取：整组同属一个分组，取一个就够。
+        const bucketGroupId = child.tabs[0]?.groupId
+        const groupAttr = bucketGroupId === undefined ? '' : ` data-group-id="${bucketGroupId}"`
+        return `
+          <li class="group" data-row data-drop-row="group"${groupAttr}>
             <div class="item group__head" draggable="true" data-drag-group="${index}">
               <input type="checkbox" data-window-group="${index}" />
               <span class="item__title">${escapeHtml(child.name)}</span>
@@ -329,7 +346,7 @@ export function createTransferPanel(events: AppEvents): Panel {
             <ul class="kids">${child.tabs.map(tabRowMarkup).join('')}</ul>
           </li>
         `
-      )
+      })
       .join('')
 
     syncWindowStates()
@@ -385,7 +402,7 @@ export function createTransferPanel(events: AppEvents): Panel {
     const url = bookmark.url ?? ''
     const host = hostnameOf(url) ?? url
     return `
-      <li class="item leaf" data-row draggable="true"
+      <li class="item leaf" data-row data-drop-row="bookmark" draggable="true"
           data-drag-bookmark="${escapeHtml(bookmark.id)}"
           data-bookmark-url="${escapeHtml(url)}">
         <input type="checkbox" data-archive-item="${escapeHtml(bookmark.id)}" />
@@ -432,7 +449,7 @@ export function createTransferPanel(events: AppEvents): Panel {
          </span>`
 
     return `
-      <li class="group" data-row data-drop-folder="${escapeHtml(folder.id)}"
+      <li class="group" data-row data-drop-row="folder" data-drop-folder="${escapeHtml(folder.id)}"
           data-enter-folder="${escapeHtml(folder.id)}">
         <div class="item group__head">
           <input type="checkbox" data-archive-item="${escapeHtml(folder.id)}" />
@@ -767,8 +784,10 @@ export function createTransferPanel(events: AppEvents): Panel {
   }
 
   function clearDropMarks(): void {
-    for (const marked of element.querySelectorAll('.is-drop-active, .is-dragging')) {
-      marked.classList.remove('is-drop-active', 'is-dragging')
+    for (const marked of element.querySelectorAll(
+      '.is-drop-active, .is-dragging, .is-drop-before, .is-drop-after'
+    )) {
+      marked.classList.remove('is-drop-active', 'is-dragging', 'is-drop-before', 'is-drop-after')
     }
   }
 
@@ -779,7 +798,8 @@ export function createTransferPanel(events: AppEvents): Panel {
     if (!payload) return
 
     dragging = payload
-    event.dataTransfer.effectAllowed = 'copy'
+    // 栏内是「移动」，跨栏是「复制一份」；两者都值得，所以 effectAllowed 给 copyMove。
+    event.dataTransfer.effectAllowed = 'copyMove'
     event.dataTransfer.setData(DRAG_TYPE, JSON.stringify(payload))
 
     // 有网址时也写一份 `text/uri-list`，这样拖到浏览器别处（书签栏、地址栏）也有意义。
@@ -793,38 +813,148 @@ export function createTransferPanel(events: AppEvents): Panel {
     clearDropMarks()
   })
 
-  /** 拖到哪一格上：文件夹行优先，否则落到整块列表（= 当前展示的这一层）。 */
-  function dropFolderOf(event: DragEvent): string | undefined {
-    return (event.target as HTMLElement).closest<HTMLElement>('[data-drop-folder]')?.dataset
-      .dropFolder
+  /**
+   * 行内落点：上缘 = 插到它前面，下缘 = 插到它后面，中间 = **进入**它。
+   *
+   * 「进入」只对能装东西的行成立（文件夹行、标签分组行）。三分法让一行的三个位置正好对应
+   * 三种意图，不需要另加「拖到这里就进去」的按钮或悬停展开。
+   */
+  function spotIn(row: HTMLElement, clientY: number, canEnter: boolean): DropSpot {
+    const rect = row.getBoundingClientRect()
+    const ratio = rect.height > 0 ? (clientY - rect.top) / rect.height : 0.5
+    if (!canEnter) return ratio < 0.5 ? 'before' : 'after'
+    if (ratio < 0.3) return 'before'
+    if (ratio > 0.7) return 'after'
+    return 'into'
   }
 
+  /** 左栏的落点：插到哪一格、归不归组。落在空白处则返回 `end`（追加到末尾）。 */
+  function windowDropSpot(event: DragEvent): WindowDrop {
+    const target = event.target as HTMLElement
+    const tabRow = target.closest<HTMLElement>('[data-drop-row="tab"]')
+    if (tabRow) {
+      return {
+        kind: 'tab',
+        anchorIndex: Number(tabRow.dataset.tabIndex),
+        after: spotIn(tabRow, event.clientY, false) === 'after',
+        groupId: tabRow.dataset.tabGroup === undefined ? undefined : Number(tabRow.dataset.tabGroup)
+      }
+    }
+
+    const groupRow = target.closest<HTMLElement>('[data-drop-row="group"]')
+    if (groupRow) {
+      const head = groupRow.querySelector<HTMLElement>('.group__head') ?? groupRow
+      const tabs = [...groupRow.querySelectorAll<HTMLElement>('[data-drop-row="tab"]')]
+      const first = tabs[0]
+      const last = tabs.at(-1)
+      if (!first || !last) return {kind: 'end'}
+      const groupId = last.dataset.tabGroup === undefined ? undefined : Number(last.dataset.tabGroup)
+      // 落在组的上/下缘 = 插到整组的前/后（一样带这个组）；中间 = 追加到组尾。
+      const spot = spotIn(head, event.clientY, true)
+      if (spot === 'before') return {kind: 'tab', anchorIndex: Number(first.dataset.tabIndex), after: false, groupId}
+      return {kind: 'tab', anchorIndex: Number(last.dataset.tabIndex), after: true, groupId}
+    }
+
+    return {kind: 'end', groupId: lastWindowRowGroupId()}
+  }
+
+  /** 左栏最后一行属于哪个分组：拖到末尾时用它决定归不归组。 */
+  function lastWindowRowGroupId(): number | undefined {
+    const rows = windowList.querySelectorAll<HTMLElement>('[data-drop-row="tab"]')
+    const value = rows[rows.length - 1]?.dataset.tabGroup
+    return value === undefined ? undefined : Number(value)
+  }
+
+  /** 右栏的落点：进某个文件夹，或插到当前这一层的某个位置。 */
+  function archiveDropSpot(event: DragEvent): ArchiveDrop | undefined {
+    const target = event.target as HTMLElement
+    const row = target.closest<HTMLElement>('[data-drop-row="bookmark"], [data-drop-row="folder"]')
+    if (!row) return undefined
+
+    const index = [...archiveList.children].indexOf(row)
+    const isFolder = row.dataset.dropRow === 'folder'
+    const spot = spotIn(row, event.clientY, isFolder)
+    if (isFolder && spot === 'into') return {kind: 'into', folderId: row.dataset.dropFolder ?? ''}
+    return {kind: 'here', index: spot === 'after' ? index + 1 : index}
+  }
+
+  /**
+   * 一次拖动收不收，只看「拖的是什么」与「落在哪一栏」。
+   *
+   * 两栏其实**都收**内部拖动——栏内是挪、跨栏是存/开——所以这里只挡两件事：
+   * 既不是内部载荷、也没带网址（比如拖了一段文字），以及**写不进书签树根的右栏**。
+   * 剩下的区别只在「落下时做什么」与「提示画成什么样」，见 drop 处理器。
+   *
+   * 提示分三种，因为三种意图要看得出来不一样：
+   *   左栏：插入线（插到某一行前/后），或整组高亮（追加进这个分组）；
+   *   右栏：拖收藏夹条目过来时同上（那是「挪」）；拖标签过来时只有「进这一格 / 进这一层」（那是「存」）。
+   */
   element.addEventListener('dragover', (event) => {
     const pane = (event.target as HTMLElement).closest<HTMLElement>('[data-drop-pane]')
     if (!pane || !event.dataTransfer) return
-    // 书签树的根不接受写入，所以往右栏拖时不给出落点提示。
-    if (pane.dataset.dropPane === 'archive' && !canWrite()) return
 
-    // 收不收这次拖动，只看「拖的是什么」与「落在哪一栏」：
-    //   右栏（收藏夹）：只收左栏的标签/分组，以及从外部拖来的网址；
-    //   左栏（当前窗口）：只收右栏的书签/文件夹——把它当成「打开」的落点。
     const toArchive = pane.dataset.dropPane === 'archive'
-    const internalToArchive = dragging?.kind === 'tab' || dragging?.kind === 'group'
-    const internalToWindow = dragging?.kind === 'bookmark' || dragging?.kind === 'folder'
     const externalUrls = Array.from(event.dataTransfer.types).includes('text/uri-list')
-    if (dragging ? (toArchive ? !internalToArchive : !internalToWindow) : !(toArchive && externalUrls)) {
+    if (!dragging && !externalUrls) return
+    if (toArchive && !canWrite()) return
+
+    const fromWindow = dragging?.kind === 'tab' || dragging?.kind === 'group'
+    const fromArchive = dragging?.kind === 'bookmark' || dragging?.kind === 'folder'
+
+    event.preventDefault()
+    event.dataTransfer.dropEffect = toArchive && fromWindow ? 'copy' : 'move'
+    clearDropMarks()
+
+    if (toArchive && fromArchive) {
+      // 挪一条收藏夹条目：与左栏同一套「行内三分法」。
+      const spot = archiveDropSpot(event)
+      const folderRow = (event.target as HTMLElement).closest<HTMLElement>('[data-drop-row="folder"]')
+      if (spot?.kind === 'into' && folderRow) {
+        folderRow.classList.add('is-drop-active')
+        return
+      }
+      if (spot?.kind === 'here') {
+        const rows = [...archiveList.children]
+        // 插到这一层末尾时，线画在最后一行的下缘。
+        const anchor = rows[Math.min(spot.index, rows.length - 1)]
+        if (anchor) {
+          anchor.classList.add(spot.index >= rows.length ? 'is-drop-after' : 'is-drop-before')
+          return
+        }
+      }
+      pane.classList.add('is-drop-active')
       return
     }
 
-    event.preventDefault()
-    event.dataTransfer.dropEffect = 'copy'
+    if (toArchive) {
+      // 存标签：落在文件夹行的中间就进那一层，否则进当前这一层。
+      const folderRow = (event.target as HTMLElement).closest<HTMLElement>('[data-drop-row="folder"]')
+      const inner = folderRow?.querySelector<HTMLElement>('.group__head') ?? folderRow
+      const into = folderRow && inner && spotIn(inner, event.clientY, true) === 'into'
+      ;(into ? folderRow : pane).classList.add('is-drop-active')
+      return
+    }
 
-    clearDropMarks()
-    const folder = dropFolderOf(event)
-    const marked = folder && toArchive
-      ? archiveList.querySelector(`[data-drop-folder="${folder}"]`)
-      : pane
-    marked?.classList.add('is-drop-active')
+    // 落到左栏。
+    const spot = windowDropSpot(event)
+    if (spot.kind === 'end') {
+      // 空白处 = 追加到末尾，画在最后一行的下缘。
+      const last = windowList.querySelector<HTMLElement>('[data-drop-row="tab"]:last-of-type')
+      ;(last ?? pane).classList.add('is-drop-after')
+      return
+    }
+    const rows = [...windowList.querySelectorAll<HTMLElement>('[data-drop-row="tab"]')]
+    const anchor = rows.find((row) => Number(row.dataset.tabIndex) === spot.anchorIndex)
+    if (!anchor) {
+      pane.classList.add('is-drop-active')
+      return
+    }
+    const groupRow = anchor.closest<HTMLElement>('[data-drop-row="group"]')
+    if (groupRow && spotIn(groupRow.querySelector<HTMLElement>('.group__head') ?? groupRow, event.clientY, true) === 'into') {
+      groupRow.classList.add('is-drop-active')
+      return
+    }
+    anchor.classList.add(spot.after ? 'is-drop-after' : 'is-drop-before')
   })
 
   element.addEventListener('drop', async (event) => {
@@ -833,34 +963,42 @@ export function createTransferPanel(events: AppEvents): Panel {
     event.preventDefault()
 
     const payload = dragging
-    const raw = event.dataTransfer.getData(DRAG_TYPE)
     const urls = event.dataTransfer
       .getData('text/uri-list')
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter((line) => line && !line.startsWith('#'))
 
+    const toArchive = pane.dataset.dropPane === 'archive'
+    // 落点在清掉标记之前算完：drop 的 target 与坐标都只在这一次事件里有效。
+    const archiveSpot = toArchive ? archiveDropSpot(event) : undefined
+    const windowSpot = toArchive ? undefined : windowDropSpot(event)
+
     dragging = undefined
     clearDropMarks()
 
-    if (pane.dataset.dropPane === 'archive') {
-      // 没落在某个文件夹行上 = 落在当前展示的这一层里（而不是无条件落在默认展示文件夹里）。
-      const parentId = dropFolderOf(event) ?? (canWrite() ? viewFolderId : '')
-      if (!parentId) return
+    if (toArchive) {
+      if (!canWrite()) return
+      if (payload?.kind === 'bookmark' || payload?.kind === 'folder') {
+        // 收藏夹里的条目拖回收藏夹 = **挪**（同一个东西换位置），不是再存一份。
+        await moveArchiveNode(payload, archiveSpot)
+        return
+      }
+      const parentId =
+        archiveSpot?.kind === 'into' ? archiveSpot.folderId : viewFolderId
       const children = payload ? childrenFor(payload) : []
       if (children.length > 0) await writeInto(parentId, children)
       else if (urls.length > 0) await saveUrls(urls, parentId)
       return
     }
 
-    // 落到左栏 = 打开。
-    if (payload?.kind === 'bookmark') {
-      await openBookmark(payload.id)
+    // 落到左栏。
+    if (payload?.kind === 'tab' || payload?.kind === 'group') {
+      await moveWindowTabs(payload, windowSpot ?? {kind: 'end'})
       return
     }
-    if (payload?.kind === 'folder') {
-      await restoreFolder(payload.id, {target: 'currentWindow', groupTabs: false})
-      setStatus(status, '已把该文件夹里的标签页打开。', 'ok')
+    if (payload?.kind === 'bookmark' || payload?.kind === 'folder') {
+      await openArchiveInto(payload, windowSpot ?? {kind: 'end'})
       return
     }
     if (urls.length > 0) {
@@ -889,12 +1027,183 @@ export function createTransferPanel(events: AppEvents): Panel {
     return []
   }
 
-  /** 打开一条书签（拖到左栏）。 */
-  async function openBookmark(id: string): Promise<void> {
-    const url = bookmarkUrl(id)
-    if (!url) return
-    await chrome.tabs.create({url, active: false})
-    setStatus(status, '已打开 1 个标签页。', 'ok')
+  /** 载荷在窗口里的全部标签，以及它们在窗口里的下标（算插入位置要用）。 */
+  function windowTabsFor(payload: DragPayload): TabSnapshot[] {
+    if (payload.kind === 'group') {
+      const child = windowChildren[payload.index]
+      return child?.kind === 'group' ? [...child.tabs] : []
+    }
+    if (payload.kind !== 'tab') return []
+    for (const child of windowChildren) {
+      if (child.kind === 'tab' && child.tab.tabId === payload.tabId) return [child.tab]
+      if (child.kind === 'group') {
+        const hit = child.tabs.find((tab) => tab.tabId === payload.tabId)
+        if (hit) return [hit]
+      }
+    }
+    return []
+  }
+
+  /**
+   * 把窗口里的标签挪到落点，并按落点所在的分组决定归组。
+   *
+   * 落点只表达两件事（插到哪一格、归不归组），于是「拖出分组」「拖进分组」「在组内换位置」
+   * 都是同一条规则的不同结果，不需要各写一套。
+   *
+   * `tabs.move` 的 index 是**移动完成之后**的位置（`TabListInterface::MoveTab`：「Moves the tab to
+   * index」，而同一族的 `MoveGroupTo` 才特意注明「assumes the group has already been removed」）。
+   * 所以算插入位置时必须先把「原本排在锚点前面的、要拖的那几枚」减掉，否则向后拖会差一位。
+   */
+  async function moveWindowTabs(payload: DragPayload, drop: WindowDrop): Promise<void> {
+    if (busy) return
+    const tabs = windowTabsFor(payload)
+    if (tabs.length === 0) return
+    const tabIds = tabs.map((tab) => tab.tabId)
+
+    const insertAt =
+      drop.kind === 'end'
+        ? allWindowTabs().length - tabIds.length
+        : anchorInsertIndex(drop.anchorIndex, drop.after, tabs.map((tab) => tab.index))
+
+    busy = true
+    updateButtons()
+    try {
+      await chrome.tabs.move(tabIdArg(tabIds), {index: Math.max(0, insertAt)})
+      // 归组跟着**落点所在的那一行**走：落点没有分组就拆组，有就归进去。
+      // 于是「拖进分组」「拖出分组」「在组内换位置」都是同一条规则的结果。
+      if (drop.groupId === undefined) await chrome.tabs.ungroup(tabIdArg(tabIds))
+      else await chrome.tabs.group({tabIds: tabIdArg(tabIds), groupId: drop.groupId})
+      setStatus(status, '已调整标签顺序。', 'ok')
+    } catch (error) {
+      setStatus(status, `调整失败：${errorText(error)}`, 'error')
+    } finally {
+      busy = false
+      await refresh()
+    }
+  }
+
+  /**
+   * `chrome.tabs` 的类型把 `tabIds` 写成**非空**元组（`number | [number, ...number[]]`），
+   * 而这里每个调用点前面都已经确认过「至少有一枚标签」，直接转换即可。
+   */
+  function tabIdArg(tabIds: readonly number[]): [number, ...number[]] {
+    return tabIds as [number, ...number[]]
+  }
+
+  /**
+   * 「插到第 anchor 枚标签前/后」对应的最终下标。
+   *
+   * `dragged` 是要挪的那几枚标签当前的下标：它们会先从数组里摘出去，
+   * 所以在锚点之前的那几枚都会让锚点前移一格。
+   */
+  function anchorInsertIndex(anchor: number, after: boolean, dragged: readonly number[]): number {
+    const removedBefore = dragged.filter((index) => index < anchor).length
+    const anchorInRest = anchor - removedBefore
+    return after ? anchorInRest + 1 : anchorInRest
+  }
+
+  /**
+   * 把收藏夹里的一条书签或文件夹挪到落点。
+   *
+   * `bookmarks.move` 的 index 与 `tabs.move` **相反**：传的是**移动前**坐标系里的插入位置
+   * （`BookmarkModel::Move` 里有 `if (old_parent == new_parent && index > old_index) index--`，
+   * 同父下移由 Chrome 自己减），所以插到锚点前就传锚点的下标、插到锚点后就传下标 + 1。
+   *
+   * 右栏一次只显示一层，所以落点的锚点永远是兄弟——不存在「把文件夹拖进它自己的子孙」这种事。
+   */
+  async function moveArchiveNode(
+    payload: {kind: 'bookmark' | 'folder'; id: string},
+    spot: ArchiveDrop | undefined
+  ): Promise<void> {
+    if (busy || !canWrite()) return
+    if (spot?.kind === 'into' && spot.folderId === payload.id) return
+
+    busy = true
+    updateButtons()
+    try {
+      if (spot?.kind === 'into') {
+        // 不给 index：`bookmarks.move` 省略 index 就是追加到末尾。
+        await chrome.bookmarks.move(payload.id, {parentId: spot.folderId})
+      } else {
+        await chrome.bookmarks.move(payload.id, {
+          parentId: viewFolderId,
+          index: spot?.kind === 'here' ? spot.index : archiveChildren.length
+        })
+      }
+      setStatus(status, '已调整收藏夹顺序。', 'ok')
+    } catch (error) {
+      setStatus(status, `调整失败：${errorText(error)}`, 'error')
+    } finally {
+      busy = false
+      await events.archiveChanged()
+    }
+  }
+
+  /**
+   * 把收藏夹里的一条书签或一个文件夹按落点开成标签页。
+   *
+   * 这是「把这一条放到窗口里的某个位置」：先按落点算出要插入的下标，再逐个 `tabs.create({index})`——
+   * 创建不需要「减掉自己」的修正，因为被插入的东西原本不在这个窗口里。
+   *
+   * 文件夹开成一组标签，并用文件夹名当分组名（与「文件夹 ⇄ 分组」这个对应关系一致）。
+   * 标签同样会在导航提交后被 `discard` 卸掉：拖一个几十枚书签的文件夹过来，
+   * 不至于把浏览器同时点燃几十个页面。
+   */
+  async function openArchiveInto(payload: DragPayload, drop: WindowDrop): Promise<void> {
+    if (busy) return
+    const items = archiveOpenItems(payload)
+    if (items.length === 0) {
+      setStatus(status, '这一条里没有可以打开的网址。', 'error')
+      return
+    }
+
+    const count = allWindowTabs().length
+    const startAt = drop.kind === 'end' ? count : drop.after ? drop.anchorIndex + 1 : drop.anchorIndex
+
+    busy = true
+    updateButtons()
+    setStatus(status, '正在打开…', 'ok')
+    try {
+      const tabIds: number[] = []
+      for (const [offset, item] of items.entries()) {
+        const tab = await chrome.tabs.create({url: item.url, index: startAt + offset, active: false})
+        if (tab.id !== undefined) tabIds.push(tab.id)
+      }
+
+      // 文件夹开的标签收进一个同名分组；单条书签就让它当散装标签。
+      const groupTitle = payload.kind === 'folder' ? (archiveFolderTitle(payload.id) ?? '') : ''
+      if (groupTitle && tabIds.length > 0) {
+        const groupId = await chrome.tabs.group({tabIds: tabIdArg(tabIds)})
+        await chrome.tabGroups.update(groupId, {title: groupTitle})
+      }
+
+      await discardCommittedTabs(tabIds, {keepLoadedTabId: tabIds[0]})
+      setStatus(status, `已打开 ${tabIds.length} 个标签页。`, 'ok')
+    } catch (error) {
+      setStatus(status, `打开失败：${errorText(error)}`, 'error')
+    } finally {
+      busy = false
+      await refresh()
+    }
+  }
+
+  /** 要开成标签的那几条（书签就是它自己；文件夹取它直属的真书签，内部页面跳过）。 */
+  function archiveOpenItems(payload: DragPayload): {url: string}[] {
+    if (payload.kind === 'bookmark') {
+      const url = bookmarkUrl(payload.id)
+      return url && !isInternalUrl(url) ? [{url}] : []
+    }
+    if (payload.kind !== 'folder') return []
+
+    const folder = archiveChildren.find((child) => child.id === payload.id)
+    return realBookmarks(folder?.children ?? [])
+      .map((node) => node.url as string)
+      .filter((url) => !isInternalUrl(url))
+      .map((url) => ({url}))
+  }
+
+  function archiveFolderTitle(id: string): string | undefined {
+    return archiveChildren.find((child) => child.id === id)?.title
   }
 
   function bookmarkUrl(id: string): string | undefined {
