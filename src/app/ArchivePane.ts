@@ -20,15 +20,13 @@ import {
 } from '../shared/bookmarks'
 import {formatTimestamp, sanitizeFolderName} from '../shared/naming'
 import {openInBookmarkManager} from '../shared/restore'
-import {escapeHtml, faviconMarkup} from '../shared/tile'
+import {escapeHtml} from '../shared/tile'
 import type {BookmarkNode} from '../shared/types'
 import {
   SEPARATOR_LABELS,
-  hostnameOf,
   isInternalUrl,
   isSeparatorUrl,
   separatorKind,
-  separatorTitle,
   separatorUrlOf,
   toggledSeparatorKind,
   type SeparatorKind
@@ -46,8 +44,12 @@ import {
   type ArchiveDrop,
   type DragPayload
 } from './dom'
+import {archiveBookmarkIds, countValue, folderBookmarkIds, keptCount} from './archiveCounts'
+import {canDropTo, dropTargetId} from './archiveDrop'
+import {archiveRowMarkup, type MarkupContext} from './archiveMarkup'
+import {pickOwnerOf, rangeBetween, topLevelPicked} from './archivePick'
+import {flattenArchive, type ArchiveRow} from './archiveRows'
 import {openBookmarkDialog} from './BookmarkDialog'
-import {CHEVRON_ICON, FAVICON_BASE, FOLDER_ICON, VERT_LINE_ICON} from './icons'
 
 /** 面板递给实例的那几样东西。 */
 export interface ArchivePaneDeps {
@@ -195,7 +197,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
       return kept === total ? `已全选 ${total} 个标签页` : `已选 ${kept} / ${total} 个标签页`
     },
     onChange: (wantAll) => {
-      for (const id of archiveBookmarkIds()) {
+      for (const id of archiveBookmarkIds(archiveChildren)) {
         if (wantAll) archiveExcluded.delete(id)
         else archiveExcluded.add(id)
       }
@@ -265,45 +267,6 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
 
   // ———————————————— 右栏 ————————————————
 
-  /**
-   * 扁平化之后的一行。**虚拟滚动以行为单位，行与行之间没有嵌套**——层级靠 `depth` 算出的缩进表达。
-   * 必须扁平：真实数据全展开是 11003 行 / 11.5 万元素 / 12MB HTML（同步 983ms + 布局 2402ms）。
-   */
-  type ArchiveNodeRow = {
-    kind: 'node'
-    node: BookmarkNode
-    parentId: string
-    depth: number
-    /** 在**同一层**里的下标。拖拽算插入位置用它，不必再去 DOM 里数兄弟。 */
-    siblingIndex: number
-    /** 只有文件夹行有意义。 */
-    expanded: boolean
-  }
-  type ArchiveRow = ArchiveNodeRow | {kind: 'empty'; depth: number}
-
-  /**
-   * 当前展开状态下的**可见行**，扁平成数组。
-   *
-   * 只走树、只产数据、不碰 DOM → 「全部展开」本身是纯内存操作（实测 11003 行约 20ms），
-   * 贵的那部分留给窗口渲染。
-   */
-  function flattenArchive(): ArchiveRow[] {
-    const rows: ArchiveRow[] = []
-    const walk = (nodes: readonly BookmarkNode[], parentId: string, depth: number): void => {
-      nodes.forEach((node, siblingIndex) => {
-        const expanded = !node.url && expandedIds.has(node.id)
-        rows.push({kind: 'node', node, parentId, depth, siblingIndex, expanded})
-        if (!expanded) return
-        const children = node.children ?? []
-        // 空文件夹展开后要有一行交代，否则点开之后什么都没有，看着像「点了没反应」。
-        if (children.length === 0) rows.push({kind: 'empty', depth: depth + 1})
-        else walk(children, node.id, depth + 1)
-      })
-    }
-    walk(archiveChildren, viewFolderId, 0)
-    return rows
-  }
-
   /** 视口上下各多渲染几行，滚动时不会看到正在补的空行。 */
   const ARCHIVE_OVERSCAN = 10
 
@@ -321,6 +284,14 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     archiveRowHeight = Math.round(probe.getBoundingClientRect().height) || 38
     probe.remove()
     return archiveRowHeight
+  }
+
+  /**
+   * 把「画出来会受什么影响」的三件事读一次，交给纯函数去拼 HTML（见 `archiveMarkup.ts`）。
+   * `canEdit` 与 `canWrite()` 是同一个判据：书签树的根及其子级都不能改名 / 删除。
+   */
+  function markupContext(): MarkupContext {
+    return {selectable, canEdit: canWrite(), renamingId: renaming?.id, pendingDeleteId}
   }
 
   /**
@@ -353,13 +324,13 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
      *
      * 虚拟滚动下比「一个框」简单：不管视口裁剪，渲染哪几行就画哪几行的边。
      */
-    const top = new Set(topLevelPicked())
+    const top = new Set(pickedTopLevel())
     const boxCache = new Map<number, boolean>()
     const inBoxAt = (index: number): boolean => {
       if (index < 0 || index >= archiveRows.length) return false
       const hit = boxCache.get(index)
       if (hit !== undefined) return hit
-      const value = pickOwnerOf(archiveRows[index], top) !== undefined
+      const value = pickOwnerOf(archiveRows[index], top, parentById) !== undefined
       boxCache.set(index, value)
       return value
     }
@@ -367,7 +338,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
       const pickCls = inBoxAt(index)
         ? ` is-picked${inBoxAt(index - 1) ? '' : ' is-picked-start'}${inBoxAt(index + 1) ? '' : ' is-picked-end'}`
         : ''
-      parts.push(archiveRowMarkup(archiveRows[index], pickCls))
+      parts.push(archiveRowMarkup(archiveRows[index], markupContext(), pickCls))
     }
     const rest = total - last * height
     if (rest > 0) parts.push(`<li class="vpad" style="height:${rest}px"></li>`)
@@ -434,23 +405,6 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   archiveBox.addEventListener('scroll', scheduleArchiveWindow, {passive: true})
 
   /**
-   * 这一行该不该有勾选框。
-   *
-   * **判据 = 这一行在不在「打开」的范围内**，与 `archiveBookmarkIds()` 严格同口径：
-   * 那个集合只覆盖「当前层书签 + 每个直属子文件夹里的书签」（depth ≤ 1），因为 `restoreFolder` 只处理一层。
-   * 文件夹行同理，只有**当前层直属子文件夹**（depth 0）才有意义。
-   *
-   * 更深的行是展开才看得见的，**不会被打开** → 不给勾选框（给了就是假话：勾了却不开），
-   * 而全部展开会让这个谎言一次性放大到近万行。
-   *
-   * 整个开关在 `selectable` 上：两栏都是收藏夹时根本没有勾选这回事。
-   */
-  function selectableAt(depth: number, isFolder: boolean): boolean {
-    if (!selectable) return false
-    return isFolder ? depth === 0 : depth <= 1
-  }
-
-  /**
    * 这一栏要不要显示勾选框（见 `ArchivePane.setSelectable`）。
    *
    * 窗口档下的右栏要：勾选驱动「打开 (N)」。两栏都是收藏夹时不要。
@@ -499,60 +453,20 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /**
-   * 把选择**规约成顶层项**：被选中文件夹的后代不再单列一份。
+   * 把选择**规约成顶层项**（`archivePick.ts` 的纯函数，这里只是补上本实例的索引）。
    * 绘制（否则嵌套框一个套一个）与拖拽（否则同一棵子树搬两次）都要它。
    */
-  function topLevelPicked(): string[] {
-    const out: string[] = []
-    for (const id of pickedIds) {
-      let nested = false
-      for (let at = parentById.get(id); at !== undefined; at = parentById.get(at)) {
-        if (pickedIds.has(at)) {
-          nested = true
-          break
-        }
-      }
-      if (!nested) out.push(id)
-    }
-    return out
+  function pickedTopLevel(): string[] {
+    return topLevelPicked(pickedIds, parentById)
   }
 
   /**
-   * 这一行归谁的高亮框（沿父链向上找第一个顶层选中项）。
-   * 用**规约过**的集合查 → 展开的文件夹被选中时，子行全归它名下，于是连成**一段**、共用一个框。
-   */
-  function pickOwnerOf(row: ArchiveRow, top: ReadonlySet<string>): string | undefined {
-    if (row.kind !== 'node' || top.size === 0) return undefined
-    for (let id: string | undefined = row.node.id; id !== undefined; id = parentById.get(id)) {
-      if (top.has(id)) return id
-    }
-    return undefined
-  }
-
-  /** 换一批选择（只有「起点找不到」时 Shift 扩范围退化成它）。 */
-  function selectOnly(id: string): void {
-    pickedIds.clear()
-    pickedIds.add(id)
-  }
-
-  /**
-   * Shift 点击：把起点到这一行之间的**可见行**全选上。
-   * 按**可见顺序**而非层级：用户看到的就是这一列行，展开的子级也在这列里
-   * → 「从上面那个文件夹拖到下面那条书签」会连中间隔着的都选上，与资源管理器一致。
+   * Shift 点击：把起点到这一行之间的**可见行**全选上（按**可见顺序**而非层级）。
+   * 起点或终点找不到时退化成「只选终点那一条」。
    */
   function extendPickTo(id: string): void {
-    const from = archiveRows.findIndex((row) => row.kind === 'node' && row.node.id === pickAnchor)
-    const to = archiveRows.findIndex((row) => row.kind === 'node' && row.node.id === id)
-    if (from < 0 || to < 0) {
-      selectOnly(id)
-      return
-    }
-    const [start, end] = from <= to ? [from, to] : [to, from]
     pickedIds.clear()
-    for (let index = start; index <= end; index++) {
-      const row = archiveRows[index]
-      if (row.kind === 'node') pickedIds.add(row.node.id)
-    }
+    for (const picked of rangeBetween(archiveRows, pickAnchor, id)) pickedIds.add(picked)
   }
 
   /**
@@ -608,183 +522,6 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     }
   }
 
-  /** 没有勾选框的行用它占位：`.marker__slot` 与复选框实测都是 14px，不给就会整列左移一格。 */
-  const NO_BOX_SLOT = '<span class="marker__slot" aria-hidden="true"></span>'
-
-  /**
-   * 行首那一格。三种情况：
-   * - **给勾选框**：这一行在「打开」范围内（见 `selectableAt`）。分隔线永远不给（传 `undefined`）。
-   * - **给等宽占位**：同一清单里别的行有勾选框，不给占位就差一格（`NO_BOX_SLOT`）。
-   * - **什么都不给**：整栏都不要勾选框时（再留一列空白就只是让文字白白右移 14px）。
-   */
-  function boxSlot(id: string | undefined, depth: number, isFolder: boolean): string {
-    if (id !== undefined && selectableAt(depth, isFolder)) {
-      return `<input type="checkbox" data-archive-item="${escapeHtml(id)}" />`
-    }
-    return selectable ? NO_BOX_SLOT : ''
-  }
-
-  /** 一条行的 HTML（三类行 + 空文件夹提示，都在这里分派）。 */
-  function archiveRowMarkup(row: ArchiveRow, pickCls = ''): string {
-    if (row.kind === 'empty') {
-      return `<li class="kids__empty" style="--depth:${row.depth}">这个文件夹是空的</li>`
-    }
-    return row.node.url ? archiveBookmarkRow(row, pickCls) : archiveFolderRow(row, pickCls)
-  }
-
-  /**
-   * 一条书签行。分隔线占位书签也画成横线，同样给「修改 / 删除」。
-   *
-   * 两种行**都能拖**：分隔线虽然只是个记号，但用户摆它的位置本来就有意义。
-   * 分隔线没有勾选框（不是书签，见 `isRealBookmark`），书签有。
-   *
-   * 网址**完整显示**（不截成主机名）：条目本来就靠网址区分同名页面，小一号字 + 一行够装下绝大多数。
-   * 真过长时仍省略，那时 `title` 里还有完整的一份。
-   */
-  function archiveBookmarkRow(row: ArchiveNodeRow, pickCls = ''): string {
-    const bookmark = row.node
-    // 三样东西每行都要带上：所在层（拖拽算插到哪一层的第几格）、层内下标（同一件事，
-    // 但不必再去 DOM 里数兄弟）、缩进（扁平之后层级只能这样表达）。
-    // `data-node-id` 是给「把这一行滚进视野」按 id 定位元素用的。
-    const boxAttrs = `data-parent-id="${escapeHtml(row.parentId)}" data-sibling-index="${row.siblingIndex}" style="--depth:${row.depth}"`
-    const nodeAttr = `data-node-id="${escapeHtml(bookmark.id)}"`
-    const kind = separatorKind(bookmark.url)
-    if (kind) {
-      const isRenaming = renaming?.id === bookmark.id
-      // 两种记号**外观完全不同**，因为它们在书签栏里的用途就不同：
-      //   间隔（`?t=horz`，横向）画成一条通栏横线 —— 竖排列表里要一条横线才隔得开；
-      //   分隔线（无参数，纵向）画成一枚竖线图标 —— 它是给书签栏那一排横排用的。
-      // 名字与外观必须一起改（见 urls.ts）：光看「一条线」用户分不清自己在两个按钮里点了哪个。
-      const label = SEPARATOR_LABELS[kind]
-      const target = SEPARATOR_LABELS[toggledSeparatorKind(kind)]
-      const rules = isRenaming || kind === 'sep'
-        ? ''
-        : '<span class="marker__rule" aria-hidden="true"></span>'
-      // 两条横线用**真实元素**而不是伪元素：`::after` 永远排在所有子元素之后（这是规范定的），
-      // 而按钮必须在这条线**右边**——用伪元素就只能得到「线在按钮右边」那种坏排布。
-      return `
-        <li class="marker marker--${kind}${pickCls}" draggable="true" data-drop-row="separator"
-            ${boxAttrs} ${nodeAttr} data-drag-separator="${escapeHtml(bookmark.id)}">
-          ${boxSlot(undefined, row.depth, false)}
-          ${
-            kind === 'sep' ? VERT_LINE_ICON : rules
-          }
-          ${
-            isRenaming
-              ? `<input type="text" class="input input--rename" draggable="false"
-                        data-rename-input="${escapeHtml(bookmark.id)}"
-                        value="${escapeHtml(separatorTitle(bookmark.title))}"
-                        placeholder="${label}标题（可留空）" aria-label="${label}标题" />`
-              : `<span class="marker__title">${escapeHtml(separatorTitle(bookmark.title))}</span>`
-          }
-          ${
-            isRenaming || kind === 'sep' ? '' : rules
-          }
-          ${
-            isRenaming
-              ? ''
-              : `<span class="tree__actions">
-                   <button type="button" class="btn btn--ghost btn--sm"
-                           data-swap-separator="${escapeHtml(bookmark.id)}"
-                           title="改成${target}">转${target}</button>
-                   <button type="button" class="btn btn--ghost btn--sm" data-rename="${escapeHtml(bookmark.id)}">修改</button>
-                   ${
-                     pendingDeleteId === bookmark.id
-                       ? `<button type="button" class="btn btn--danger btn--sm" data-confirm-delete="${escapeHtml(bookmark.id)}">确认删除</button>
-                          <button type="button" class="btn btn--ghost btn--sm" data-cancel-delete="">取消</button>`
-                       : `<button type="button" class="btn btn--ghost btn--sm" data-delete="${escapeHtml(bookmark.id)}">删除</button>`
-                   }
-                 </span>`
-          }
-        </li>
-      `
-    }
-
-    const url = bookmark.url ?? ''
-    const host = hostnameOf(url) ?? url
-
-    return `
-      <li class="item leaf${pickCls}" data-row data-drop-row="bookmark" draggable="true"
-          ${boxAttrs} ${nodeAttr} data-drag-bookmark="${escapeHtml(bookmark.id)}"
-          data-bookmark-url="${escapeHtml(url)}">
-        ${boxSlot(bookmark.id, row.depth, false)}
-        ${faviconMarkup(url, FAVICON_BASE)}
-        <span class="item__main">
-          <span class="item__title">${escapeHtml(bookmark.title.trim() || host)}</span>
-          <span class="item__meta item__meta--url" title="${escapeHtml(url)}">${escapeHtml(url)}</span>
-        </span>
-        <span class="tree__actions">
-          <button type="button" class="btn btn--ghost btn--sm" data-open="${escapeHtml(bookmark.id)}">打开</button>
-          <button type="button" class="btn btn--ghost btn--sm" data-rename="${escapeHtml(bookmark.id)}">修改</button>
-          ${
-            pendingDeleteId === bookmark.id
-              ? `<button type="button" class="btn btn--danger btn--sm" data-confirm-delete="${escapeHtml(bookmark.id)}">确认删除</button>
-                 <button type="button" class="btn btn--ghost btn--sm" data-cancel-delete="">取消</button>`
-              : `<button type="button" class="btn btn--ghost btn--sm" data-delete="${escapeHtml(bookmark.id)}">删除</button>`
-          }
-        </span>
-      </li>
-    `
-  }
-
-  /**
-   * 一个子文件夹行。两种「往里看」的方式，两码事：
-   * - **双击这一行（或点「进入」）= 进这一层**：它变成当前展示的文件夹（`viewFolderId` 跟过去），面包屑负责往回走。
-   * - **点左侧那枚方块 = 就地展开**：子级推开在下面、不换页（想看一眼里面又不想丢掉手上的上下文）。
-   */
-  function archiveFolderRow(row: ArchiveNodeRow, pickCls = ''): string {
-    const folder = row.node
-    // 两个计数都保持**直属**，且只算真书签：这样这一行上的三个数字同一口径
-    //（勾选框只勾这层、「打开（N）」也只算这层），一眼能看出「勾上它、点打开，会开几枚标签页」。
-    // 递归数字（312）跟着只能勾 18 条的勾选框 → 让人以为勾上会开 312 个。**展开也不改计数**。
-    const children = folder.children ?? []
-    const bookmarks = realBookmarks(children)
-    const folderCount = children.filter((child) => !child.url).length
-    const isRenaming = renaming?.id === folder.id
-    const editable = !atTreeRoot()
-    const expanded = row.expanded
-
-    const title = isRenaming
-      ? `<input type="text" class="input input--rename" draggable="false"
-                data-rename-input="${escapeHtml(folder.id)}"
-                value="${escapeHtml(folder.title)}" aria-label="重命名文件夹" />`
-      : `<span class="item__title">${escapeHtml(folder.title)}</span>`
-
-    // 「进入」永远有；「改名 / 删除」只在可编辑的层上给（见函数注释）。
-    const enterButton = `<button type="button" class="btn btn--ghost btn--sm" data-enter="${escapeHtml(folder.id)}">进入</button>`
-    const editButtons = editable
-      ? `<button type="button" class="btn btn--ghost btn--sm" data-rename="${escapeHtml(folder.id)}">改名</button>
-         ${
-           pendingDeleteId === folder.id
-             ? `<button type="button" class="btn btn--danger btn--sm" data-confirm-delete="${escapeHtml(folder.id)}">确认删除</button>
-                <button type="button" class="btn btn--ghost btn--sm" data-cancel-delete="">取消</button>`
-             : `<button type="button" class="btn btn--ghost btn--sm" data-delete="${escapeHtml(folder.id)}">删除</button>`
-         }`
-      : ''
-    const actions = isRenaming
-      ? ''
-      : `<span class="tree__actions">${enterButton}${editButtons}</span>`
-
-    return `
-      <li class="item group__head${expanded ? ' is-expanded' : ''}${pickCls}" data-row data-drop-row="folder"
-          data-parent-id="${escapeHtml(row.parentId)}" data-sibling-index="${row.siblingIndex}"
-          style="--depth:${row.depth}" data-node-id="${escapeHtml(folder.id)}"
-          data-drop-folder="${escapeHtml(folder.id)}" data-enter-folder="${escapeHtml(folder.id)}">
-        ${boxSlot(folder.id, row.depth, true)}
-        <button type="button" class="folder-tile" data-toggle-folder="${escapeHtml(folder.id)}"
-                aria-expanded="${expanded}"
-                title="${expanded ? '收起这一层' : '就地展开这一层（不换页）'}"
-                aria-label="${expanded ? '收起' : '展开'}${escapeHtml(folder.title)}">${FOLDER_ICON}${CHEVRON_ICON}</button>
-        <span class="item__main item__main--row" draggable="true"
-              data-drag-folder="${escapeHtml(folder.id)}" title="双击进入这一层">
-          ${title}
-          <span class="item__meta">${bookmarks.length} 个书签 • ${folderCount} 个文件夹</span>
-        </span>
-        ${actions}
-      </li>
-    `
-  }
-
   /**
    * 当前展示的是不是书签树的**根**。
    *
@@ -838,7 +575,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     clearPickButton.classList.toggle('is-slot-hidden', pickedIds.size === 0)
     // 胸章数「这一层里能干活的东西」：子文件夹可以进去，书签可以打开。分隔线两样都不是。
     // **这一栏可以没有胸章**（左栏那个实例）：它的两档共用一枚，而那枚归面板管（见 `count()`）。
-    if (archiveCount) archiveCount.textContent = String(archiveCountValue())
+    if (archiveCount) archiveCount.textContent = String(countValue(archiveChildren))
 
     if (!viewFolderId) {
       archiveList.innerHTML =
@@ -857,7 +594,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
       return
     }
 
-    archiveRows = flattenArchive()
+    archiveRows = flattenArchive(archiveChildren, viewFolderId, expandedIds)
     // 编辑中的那一行、或刚存下的文件夹，都可能不在视口里（新建的落在末尾）→ 先滚进来再渲染窗口，
     // 否则 `focusRenameInput()` 抓不到输入框，用户也看不到自己刚建的东西。
     if (renaming) scrollRowIntoView(renaming.id)
@@ -866,33 +603,6 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
       pendingScrollId = undefined
     }
     renderArchiveWindow()
-  }
-
-  /** 右栏某个文件夹下的「会被打开」的书签 id。分隔线不在内：它没有勾选框，也不参与计数。 */
-  function folderBookmarkIds(folder: BookmarkNode): string[] {
-    return realBookmarks(folder.children ?? []).map((bookmark) => bookmark.id)
-  }
-
-  /** 当前这一层里「能干活的东西」的枚数（胸章与 `count()` 都用它）。 */
-  function archiveCountValue(): number {
-    return archiveChildren.filter((child) => !child.url).length + realBookmarks(archiveChildren).length
-  }
-
-  /**
-   * 当前这一层里全部可打开的书签 id（含散装与分组内的）。
-   *
-   * **必须与 `restoreFolder` 同口径**（它跳过分隔线）：否则「打开（N）」多算，
-   * 而且全选框按这份名单算总数，总数里混进永远勾不上的项 → 永远停在「部分选择」，点了全选也回不去。
-   */
-  function archiveBookmarkIds(): string[] {
-    return archiveChildren.flatMap((child) => {
-      if (!child.url) return folderBookmarkIds(child)
-      return isRealBookmark(child) ? [child.id] : []
-    })
-  }
-
-  function archiveKeptCount(): number {
-    return archiveBookmarkIds().filter((id) => !archiveExcluded.has(id)).length
   }
 
   function syncArchiveStates(): void {
@@ -912,7 +622,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
       input.indeterminate = kept > 0 && kept < ids.length
     }
 
-    const ids = archiveBookmarkIds()
+    const ids = archiveBookmarkIds(archiveChildren)
     archiveSelectAll.update(ids.filter((id) => !archiveExcluded.has(id)).length, ids.length)
     updateButtons()
   }
@@ -1015,7 +725,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     }
     pendingExpandIds = []
 
-    const alive = new Set(archiveBookmarkIds())
+    const alive = new Set(archiveBookmarkIds(archiveChildren))
     for (const id of alive) {
       if (!knownBookmarks.has(id)) {
         knownBookmarks.add(id)
@@ -1075,7 +785,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     spot: ArchiveDrop | undefined
   ): Promise<void> {
     if (flags.busy || !canWrite()) return
-    if (spot && !canDropAt(payload, dropTargetId(spot))) {
+    if (spot && !canDropTo(payload, dropTargetId(spot), parentById)) {
       // 兜底：正常路径上 `dragover` 已把 dropEffect 置成 none、drop 不会派发，
       // 但万一走到这里绝不能报「已调整收藏夹顺序」——那是假话，实际什么都没做。
       setStatus(status, '不能把文件夹挪进它自己里面。', 'error')
@@ -1102,26 +812,6 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
       flags.busy = false
       await events.archiveChanged()
     }
-  }
-
-  /**
-   * 这个落点收不收这份载荷。两种不行，而它们以前都不可能发生（右栏一次只显示一层，锚点永远是兄弟）：
-   * **拖到自己身上**；**拖进自己的子孙里**（展开 A 再把 A 拖进它里面那层）。
-   * Chrome 也会拒（会成环），但不能等到报错——那会在界面上留下「拖了但没动」而没有任何解释的痕迹。
-   * 两个落点都要过这一关：`into` 目标是那个文件夹，`here` 目标是**它所在的那一层**。
-   */
-  function canDropAt(payload: DragPayload, targetId: string): boolean {
-    if (payload.kind !== 'folder') return true
-    if (payload.id === targetId) return false
-    for (let at = parentById.get(targetId); at !== undefined; at = parentById.get(at)) {
-      if (at === payload.id) return false
-    }
-    return true
-  }
-
-  /** 落点对应的「收件层」是哪一个（`into` 是那个文件夹，`here` 是它所在的那一层）。 */
-  function dropTargetId(spot: ArchiveDrop): string {
-    return spot.kind === 'into' ? spot.folderId : spot.parentId
   }
 
   /**
@@ -1585,7 +1275,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   function dragIdsOf(row: HTMLElement): string[] | undefined {
     const id = row.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId
     if (id === undefined || !pickedIds.has(id)) return undefined
-    const ids = topLevelPicked()
+    const ids = pickedTopLevel()
     if (ids.length < 2) return undefined
     // 整段一起变淡（拖动时才看得出这一批有哪几条）。
     markPickedDragging()
@@ -1598,7 +1288,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
    * 面板用它把「这一批」写进拖拽载荷（`{kind: 'selection', ids}`）。
    */
   function selectionIds(): string[] {
-    return topLevelPicked()
+    return topLevelPicked(pickedIds, parentById)
   }
 
   return {
@@ -1612,8 +1302,8 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     clearPick,
     currentFolderId: () => viewFolderId,
     currentFolderTitle: () => viewPath.at(-1)?.title ?? '',
-    keptCount: archiveKeptCount,
-    count: archiveCountValue,
+    keptCount: () => keptCount(archiveBookmarkIds(archiveChildren), archiveExcluded),
+    count: () => countValue(archiveChildren),
     setSelectable,
     excluded: () => archiveExcluded,
     reload: refresh,
@@ -1621,7 +1311,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     updateButtons,
     handleChange,
     dropSpot: archiveDropSpot,
-    canDropAt,
+    canDropAt: (payload, targetId) => canDropTo(payload, targetId, parentById),
     dropTargetId,
     moveNode: moveArchiveNode,
     openItems: archiveOpenItems,
