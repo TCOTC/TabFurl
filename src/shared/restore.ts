@@ -355,7 +355,7 @@ async function currentWindowId(
  * 集成已经存在的能力，比自己再实现一遍更合适（见 docs/design.md 二）。
  *
  * 传的是 `chrome.bookmarks` 给的动作 id，管理器的 `?id=` 认它（见 `bookmarkManagerUrl`）。
- * 注意 Chrome 154.x 上这个入口有个已知回归（issue 565829425），修复已进 M155——
+ * 注意 Chrome 154.x 上这个入口有个已知回归（issue 565829425），**155.0.8059.26 已修**——
  * 在旧版上会看到「落在默认层」，不是我们的 bug。
  *
  * `chrome://` 不能无脑跳：扩展的访问被限制在一份白名单里。所以这里只试新开一页，
