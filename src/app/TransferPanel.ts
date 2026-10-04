@@ -7,7 +7,7 @@ import {
   writeChildren,
   type WindowChild
 } from '../shared/capture'
-import {discardCommittedTabs, restoreFolder} from '../shared/restore'
+import {discardCommittedTabs, openExtensionsPage, restoreFolder} from '../shared/restore'
 import {loadSettings} from '../shared/settings'
 import type {RestoreOptions, TabSnapshot, WindowSnapshot} from '../shared/types'
 import {
@@ -254,6 +254,13 @@ ${archiveColumnMarkup('archive')}
   -->
   <div class="row status-bar">
     <span class="status" id="status" hidden></span>
+    <!--
+      「管理扩展程序」钉在这一行的**右端**（状态行是页面最后一行 → 也就是整页的右下角）。
+      它说的是这个扩展自己（重新加载、看权限、看报错），与任何一栏都无关，所以不放进两栏的表头；
+      而两栏的表头都已经被别的东西占满了。
+    -->
+    <button type="button" class="btn btn--sm" id="extensions-btn"
+            title="在浏览器里打开扩展程序页面（chrome://extensions）">管理扩展程序</button>
   </div>
 `
 
@@ -416,6 +423,20 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     actions.append(pane.openRootButton, makeRefreshButton(`${prefix}-refresh-btn`, label))
     pane.actionsHost.append(actions)
   }
+
+  /**
+   * 「扩展程序」：一个打开浏览器扩展程序页面的快捷方式（改装完扩展要重新加载时就点它）。
+   * 落点由 `chrome.runtime.id` 决定，源码里没有写死的 id（见 `extensionsPageUrl`）。
+   * 成功不写状态行——Chrome 会切到那个标签页，写在这儿的字用户根本看不到。
+   */
+  q<HTMLButtonElement>(element, '#extensions-btn').addEventListener('click', async () => {
+    try {
+      await openExtensionsPage()
+    } catch (error) {
+      // 这里的错误文案是写给用户看的（含地址），不是 API 的原文，所以直接展示。
+      setStatus(status, errorText(error), 'error')
+    }
+  })
 
   /** 上一次采到的窗口快照（**完整**的一份：`planWindowChildren` 的输入）。 */
   let windowSnapshot: WindowSnapshot | undefined

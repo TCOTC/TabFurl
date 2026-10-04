@@ -1,6 +1,6 @@
 import {getSubTree} from './bookmarks'
 import type {BookmarkNode, RestoreOptions, RestoreResult} from './types'
-import {bookmarkManagerUrl, isInternalUrl, isSeparatorUrl} from './urls'
+import {bookmarkManagerUrl, extensionsPageUrl, isInternalUrl, isSeparatorUrl} from './urls'
 
 export interface PlannedBookmark {
   /** 书签 id；界面里取消勾选某一枚标签时用它。 */
@@ -336,5 +336,20 @@ export async function openInBookmarkManager(folderId: string): Promise<void> {
     await chrome.tabs.create({url: bookmarkManagerUrl(folderId), active: true})
   } catch {
     throw new Error('浏览器不允许扩展打开书签管理器，请按 Ctrl+Shift+O 打开后再找这个文件夹')
+  }
+}
+
+/**
+ * 在浏览器自带的扩展程序页面里打开**本扩展自己**（`chrome://extensions/?id=<自己的 id>`）。
+ *
+ * 与书签管理器同一条限制：`chrome://` 能不能被扩展打开由 Chrome 的白名单决定，而白名单不属于
+ * 扩展控制 → 被挡下来时同样抛一句**可操作**的话（这次没有快捷键可用，只能给地址），
+ * 而不是把 API 的原文丢给用户。id 取运行时值，理由见 `extensionsPageUrl`。
+ */
+export async function openExtensionsPage(): Promise<void> {
+  try {
+    await chrome.tabs.create({url: extensionsPageUrl(chrome.runtime.id), active: true})
+  } catch {
+    throw new Error('浏览器不允许扩展打开扩展程序页面，请在地址栏输入 chrome://extensions')
   }
 }

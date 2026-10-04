@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   applyExclusions,
   discardCommittedTabs,
+  openExtensionsPage,
   planRestore,
   restorableBookmarks,
   restoreFolder,
@@ -534,4 +535,39 @@ test('空列表直接返回 0，不发任何调用', async () => {
 
   assert.equal(await discardCommittedTabs([]), 0)
   assert.deepEqual(spy.discarded, [])
+})
+
+/**
+ * 「扩展程序」按钮不看界面，只发一个 `tabs.create`。地址里的 id 取的是**运行时**值
+ *（`chrome.runtime.id`）——源码里写死一个，在别人机器上指的就是另一个扩展。
+ */
+test('openExtensionsPage 用运行时 id 打开本扩展的扩展页面', async () => {
+  const opened: {url?: string; active?: boolean}[] = []
+  ;(globalThis as Record<string, unknown>).chrome = {
+    runtime: {id: 'djjjlbfhdnonfphnjdeoeoofdpdglofd'},
+    tabs: {
+      create: async (props: {url?: string; active?: boolean}) => {
+        opened.push(props)
+      }
+    }
+  }
+
+  await openExtensionsPage()
+
+  assert.equal(opened.length, 1)
+  assert.equal(at(opened, 0).url, 'chrome://extensions/?id=djjjlbfhdnonfphnjdeoeoofdpdglofd')
+  assert.equal(at(opened, 0).active, true, '点了就是要看，不在后台开')
+})
+
+test('扩展页面被浏览器挡下时给一句可操作的话，而不是 API 的原文', async () => {
+  ;(globalThis as Record<string, unknown>).chrome = {
+    runtime: {id: 'x'},
+    tabs: {
+      create: async () => {
+        throw new Error('Cannot access a chrome:// URL')
+      }
+    }
+  }
+
+  await assert.rejects(openExtensionsPage(), /chrome:\/\/extensions/)
 })

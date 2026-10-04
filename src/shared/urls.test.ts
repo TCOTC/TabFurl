@@ -6,6 +6,7 @@ import {
   SEPARATOR_LABELS,
   SEPARATOR_URL,
   bookmarkManagerUrl,
+  extensionsPageUrl,
   faviconUrl,
   hostnameOf,
   isInternalUrl,
@@ -119,6 +120,15 @@ test('bookmarkManagerUrl 用数字 id 直接定位到那一层', () => {
   // 数字 id 是官方入口（浏览器自己的右键菜单就这么生成 URL），只是 154.x 有个回归。
   assert.equal(bookmarkManagerUrl('80'), 'chrome://bookmarks/?id=80')
   assert.equal(bookmarkManagerUrl('380'), 'chrome://bookmarks/?id=380')
+})
+
+test('extensionsPageUrl 用运行时给的 id 指向本扩展自己', () => {
+  // id 是运行时值（`chrome.runtime.id`），这里只验拼法：写死一个 id 在别人机器上指的是另一个扩展。
+  assert.equal(
+    extensionsPageUrl('djjjlbfhdnonfphnjdeoeoofdpdglofd'),
+    'chrome://extensions/?id=djjjlbfhdnonfphnjdeoeoofdpdglofd'
+  )
+  assert.equal(extensionsPageUrl('a b'), 'chrome://extensions/?id=a%20b')
 })
 
 test('separatorTitle 剔除首尾手画的横杠，并收掉留下的空白', () => {

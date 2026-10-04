@@ -47,7 +47,8 @@ const slow = async () => {
 
 Object.defineProperty(window, 'chrome', {
   value: {
-    runtime: {getURL: (p) => 'chrome-extension://stub/' + p, lastError: undefined},
+    // `id` 真浏览器上一定有（扩展自己的 id）。右下角那枚「扩展程序」按钮读的就是它。
+    runtime: {id: 'stub-extension-id', getURL: (p) => 'chrome-extension://stub/' + p, lastError: undefined},
     bookmarks: {
       getTree: async () => tree.map((n) => shape(n, true)),
       getSubTree: async (id) => {
