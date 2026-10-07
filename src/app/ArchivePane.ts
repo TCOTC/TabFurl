@@ -941,7 +941,8 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
       else {
         renaming = {id, committed: false}
         renderArchive()
-        focusRenameInput()
+        // 改的是已有的名字，全选让「直接打字 = 换掉整个名字」。
+        focusRenameInput(true)
       }
       return
     }
@@ -1203,17 +1204,21 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /**
-   * 把光标放到刚出现的重命名输入框的**最前面**。
+   * 接过刚出现的重命名输入框，并把选区定下来。
    *
-   * `focus()` 只给焦点，插入点会落在内容末尾；而新建出来的默认名是时间戳，
-   * 用户十有八九要在前面加自己的名字——放到开头，直接打字就是「我的名字 + 时间戳」。
+   * 两种入口的意图不同，所以选区也不同：
+   * - **点「改名」**（`selectAll`）：改的是用户自己写的名字，多半要整段换掉 → **全选**。
+   * - **新建之后**：默认名是时间戳，用户十有八九要在前面加自己的名字 → 插入点放**最前面**。
+   *
+   * `focus()` 只给焦点，插入点落在内容末尾，而浏览器是否顺手全选并不一致，
+   * 所以两种情况都自己显式设定选区，不指望默认行为。
    */
-  function focusRenameInput(): void {
+  function focusRenameInput(selectAll = false): void {
     const input = archiveList.querySelector<HTMLInputElement>('[data-rename-input]')
     if (!input) return
     input.focus()
-    // 有些浏览器在 focus 时会全选内容，所以显式把选区收成开头处的空选区。
-    input.setSelectionRange(0, 0)
+    if (selectAll) input.select()
+    else input.setSelectionRange(0, 0)
   }
 
   /**
