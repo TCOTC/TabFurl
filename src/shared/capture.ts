@@ -1,4 +1,4 @@
-import {createBookmark, createFolder} from './bookmarks'
+import {clampInsertIndex, createBookmark, createFolder} from './bookmarks'
 import {groupFolderName} from './naming'
 import type {
   SaveResult,
@@ -157,12 +157,16 @@ export function planWindowChildren(snapshot: WindowSnapshot): WindowChild[] {
 async function writeTabs(
   folderId: string,
   tabs: readonly TabSnapshot[],
-  result: SaveResult
+  result: SaveResult,
+  index?: number
 ): Promise<void> {
+  let at = index
   for (const tab of tabs) {
-    const created = await createBookmark(folderId, tab.title, tab.url)
+    // 给 `index` 时逐个递增：`create` 的 index 是**插入后**的位置，所以连着写就得到一段连续的顺序。
+    const created = await createBookmark(folderId, tab.title, tab.url, at)
     result.bookmarkIds.push(created.id)
     result.saved++
+    if (at !== undefined) at += 1
   }
 }
 
@@ -171,23 +175,29 @@ async function writeTabs(
  *
  * 结构（详见 `docs/design.md` 三）：分组 → 子文件夹，未分组标签在那一层就地成散装书签，顺序即传入顺序。
  * **同名文件夹允许共存**，不合并也不追加序号（书签树本就允许同级同名）。
+ *
+ * `options.index` 只给**拖拽落点**用（“插到这一层的第几格”）：省略 = 追加到末尾（按钮保存永远走这一条）。
+ * 给下标时每个子级占一格，分组只算它自己那一格（里面的标签属于它，不影响父层顺序）。
  */
 export async function writeChildren(
   parentId: string,
-  children: readonly WindowChild[]
+  children: readonly WindowChild[],
+  options: {index?: number} = {}
 ): Promise<SaveResult> {
   const result: SaveResult = {saved: 0, groups: 0, skipped: 0, folderIds: [], bookmarkIds: []}
 
+  let at = options.index === undefined ? undefined : await clampInsertIndex(parentId, options.index)
+
   for (const child of children) {
     if (child.kind === 'tab') {
-      await writeTabs(parentId, [child.tab], result)
-      continue
+      await writeTabs(parentId, [child.tab], result, at)
+    } else {
+      const folder = await createFolder(parentId, child.name, at)
+      result.folderIds.push(folder.id)
+      result.groups++
+      await writeTabs(folder.id, child.tabs, result)
     }
-
-    const folder = await createFolder(parentId, child.name)
-    result.folderIds.push(folder.id)
-    result.groups++
-    await writeTabs(folder.id, child.tabs, result)
+    if (at !== undefined) at += 1
   }
 
   return result

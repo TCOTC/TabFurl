@@ -1,6 +1,7 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  clampInsertIndex,
   getBookmarksBarId,
   getNodePath,
   isRealBookmark,
@@ -81,7 +82,8 @@ function stubChrome(tree: StubNode[]): void {
         const node = find(tree, id)
         if (!node) throw new Error(`未知节点 ${id}`)
         return [shallow(node)]
-      }
+      },
+      getChildren: async (id: string) => (find(tree, id)?.children ?? []).map(shallow)
     }
   }
 }
@@ -119,6 +121,17 @@ const TREE: StubNode[] = [
 test('getBookmarksBarId 按 id 认书签栏，而不是按位置', async () => {
   stubChrome(TREE)
   assert.equal(await getBookmarksBarId(), '1')
+})
+
+test('clampInsertIndex 把插位收进这一层现有的长度（create 越界是报错，不会自己钳位）', async () => {
+  stubChrome(TREE)
+
+  // 「存档」（id 11）有 3 个子级：下标 3 正好是「追加到末尾」，大于它就是越界。
+  assert.equal(await clampInsertIndex('11', 0), 0)
+  assert.equal(await clampInsertIndex('11', 3), 3)
+  assert.equal(await clampInsertIndex('11', 99), 3)
+  assert.equal(await clampInsertIndex('11', -5), 0)
+  assert.equal(await clampInsertIndex('11', Number.NaN), 3, '行上属性缺失时当追加')
 })
 
 test('getNodePath 由浅到深给出祖先，含自身与 id', async () => {

@@ -49,6 +49,8 @@ interface StubNode {
 
 interface CreatedNode extends StubNode {
   parentId: string
+  /** 调用方给 `create` 的插入位置；`undefined` = 追加到末尾。 */
+  index?: number
 }
 
 const PARENT_FOLDER = 'parent-1'
@@ -76,13 +78,14 @@ function stubChrome(
     windows: {WINDOW_ID_CURRENT: -2},
     bookmarks: {
       getChildren: async (id: string) => (tree[id] ?? []).map((node) => ({...node})),
-      create: async (input: {parentId: string; title: string; url?: string}) => {
+      create: async (input: {parentId: string; title: string; url?: string; index?: number}) => {
         seq += 1
         const node: CreatedNode = {
           id: `new-${seq}`,
           parentId: input.parentId,
           title: input.title,
-          url: input.url
+          url: input.url,
+          index: input.index
         }
         ;(tree[input.parentId] ??= []).push({id: node.id, title: node.title, url: node.url})
         created.push(node)
@@ -306,6 +309,49 @@ test('同名分组允许共存：不合并、也不追加序号', async () => {
   const names = foldersOf(created).map((node) => node.title)
   assert.deepEqual(names, ['工作', '工作'], '两个同名文件夹各自独立')
   assert.equal(new Set(foldersOf(created).map((node) => node.id)).size, 2, '不是同一个文件夹')
+})
+
+test('writeChildren 带 index 时插到那一格，而不是追加到末尾', async () => {
+  const {created} = stubChrome([], {
+    seed: {[PARENT_FOLDER]: [{id: 'old-1', title: '旧的一'}, {id: 'old-2', title: '旧的两'}]}
+  })
+
+  await writeChildren(
+    PARENT_FOLDER,
+    [
+      {kind: 'tab', tab: plainTab(1, 'https://a.com')},
+      {kind: 'group', name: '工作', tabs: [plainTab(2, 'https://b.com')]}
+    ],
+    {index: 1}
+  )
+
+  assert.deepEqual(
+    created.map((node) => [node.title, node.index]),
+    [
+      ['https://a.com', 1],
+      // 分组在父层只占它自己那一格，里面的标签属于它、不影响父层顺序。
+      ['工作', 2],
+      ['https://b.com', undefined]
+    ]
+  )
+})
+
+test('writeChildren 的 index 越界时收进合法范围（create 对越界是报错，不像 tabs.move 会钳位）', async () => {
+  const {created} = stubChrome([], {seed: {[PARENT_FOLDER]: [{id: 'old-1', title: '只有一条'}]}})
+
+  await writeChildren(PARENT_FOLDER, [{kind: 'tab', tab: plainTab(1, 'https://a.com')}], {
+    index: 99
+  })
+
+  assert.equal(at(created, 0).index, 1, '越界下标收到这一层现在的长度')
+})
+
+test('不给 index 时照旧追加到末尾（按钮保存那条路）', async () => {
+  const {created} = stubChrome([])
+
+  await writeChildren(PARENT_FOLDER, [{kind: 'tab', tab: plainTab(1, 'https://a.com')}])
+
+  assert.equal(at(created, 0).index, undefined, '不给落点就不要传 index，让 Chrome 自己追加')
 })
 
 test('writeChildren 收集新建的 id，供撤销使用', async () => {

@@ -83,16 +83,38 @@ export async function getChildren(id: string): Promise<BookmarkNode[]> {
   }
 }
 
-export async function createFolder(parentId: string, title: string): Promise<BookmarkNode> {
-  return toNode(await chrome.bookmarks.create({parentId, title}))
+/**
+ * 把「想插到的位置」收进 `parentId` **现在**的合法范围。
+ *
+ * `chrome.bookmarks.create` 的 `index` 是**插入后**的位置（0 起），但**越界是报错**
+ * （源码 `BookmarksCreateFunction::CreateBookmarkNode`：`index > parent->children().size()` →
+ * `kInvalidIndexError`），**不像 `tabs.move` 那样钳到末尾**。
+ * 而落点下标来自**渲染那一刻**的行（`data-sibling-index`），两次之间这一层可能变过
+ * → 给下标时先按现状收一次，别让「这一层刚好变了」变成一次保存失败。
+ * 非数字（行上属性缺失 / 损坏）一律当「追加到末尾」。
+ */
+export async function clampInsertIndex(parentId: string, index: number): Promise<number> {
+  const size = (await getChildren(parentId)).length
+  if (!Number.isFinite(index)) return size
+  return Math.min(Math.max(index, 0), size)
+}
+
+/** `index` 省略时追加到这一层末尾（`chrome.bookmarks.create` 的语义），见 `clampInsertIndex`。 */
+export async function createFolder(
+  parentId: string,
+  title: string,
+  index?: number
+): Promise<BookmarkNode> {
+  return toNode(await chrome.bookmarks.create({parentId, title, index}))
 }
 
 export async function createBookmark(
   parentId: string,
   title: string,
-  url: string
+  url: string,
+  index?: number
 ): Promise<BookmarkNode> {
-  return toNode(await chrome.bookmarks.create({parentId, title, url}))
+  return toNode(await chrome.bookmarks.create({parentId, title, url, index}))
 }
 
 /** 删除整个子树，用于「撤销本次保存」与删除存档。 */

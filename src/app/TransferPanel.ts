@@ -1,4 +1,4 @@
-import {createBookmark, getNodePath, removeSubTree} from '../shared/bookmarks'
+import {clampInsertIndex, createBookmark, getNodePath, removeSubTree} from '../shared/bookmarks'
 import {
   countSnapshotTabs,
   planWindowChildren,
@@ -790,14 +790,19 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
   // ———————————————— 写入 / 撤销 / 打开 ————————————————
 
-  async function writeInto(parentId: string, children: readonly WindowChild[]): Promise<void> {
+  async function writeInto(
+    parentId: string,
+    children: readonly WindowChild[],
+    index?: number
+  ): Promise<void> {
     if (children.length === 0) return
     flags.busy = true
     updateButtons()
     try {
-      const result = await writeChildren(parentId, children)
+      const result = await writeChildren(parentId, children, {index})
       lastWrite = {folderIds: result.folderIds, bookmarkIds: result.bookmarkIds}
-      // 新存下的分组展开给自己看，并滚进视野——写入总是追加到这一层末尾，那行往往在屏幕外。
+      // 新存下的分组展开给自己看，并滚进视野——追加到末尾时那一行往往在屏幕外
+      //（插到中间时它就在鼠标底下，展开祖先仍可能把它挤出视口，所以这一步照旧）。
       if (result.folderIds.length > 0) {
         archive.expandOnNextReload(result.folderIds, result.folderIds[0])
       }
@@ -880,14 +885,22 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     }
   }
 
-  /** 把外部拖进来的网址存成书签（从网页里拖过来的链接走这条路）。 */
-  async function saveUrls(urls: readonly string[], parentId: string): Promise<void> {
+  /**
+   * 把外部拖进来的网址存成书签（从网页里拖过来的链接走这条路）。
+   *
+   * `index` 与 `writeInto` 同一个口径：给了就插到那一格（多个网址依次占位）。
+   */
+  async function saveUrls(urls: readonly string[], parentId: string, index?: number): Promise<void> {
     if (urls.length === 0) return
     flags.busy = true
     updateButtons()
     try {
+      // 与 `writeChildren` 同一口径：给落点就按现状先收进合法范围（`create` 越界是报错）。
+      const start = index === undefined ? undefined : await clampInsertIndex(parentId, index)
       const ids: string[] = []
-      for (const url of urls) ids.push((await createBookmark(parentId, url, url)).id)
+      for (const [offset, url] of urls.entries()) {
+        ids.push((await createBookmark(parentId, url, url, start === undefined ? undefined : start + offset)).id)
+      }
       lastWrite = {folderIds: [], bookmarkIds: ids}
       setStatus(status, `已存下 ${ids.length} 个链接。`, 'ok')
       await events.archiveChanged()
@@ -1067,16 +1080,26 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     event.dataTransfer.dropEffect = moving ? 'move' : 'copy'
     clearDropMarks()
 
-    if (target && fromArchive) {
-      // 挪一条收藏夹条目：同栏是排序，跨栏是搬去另一层——两处都是「行内三分法」。
+    if (target) {
+      // 落到收藏夹栏的东西（搬条目 / 存标签 / 存链接）**共用同一套行内三分法**：
+      // 上缘 = 插前，下缘 = 插后，中间 = **进入**（`dropSpot` 已按行的类型决定给不给 `into`——
+      // 只有文件夹行中间那一段才算）。三条路各画各的提示，迟早会画得不一样。
       const spot = target.dropSpot(event)
-      const samePane = draggingPane === target
-      if (samePane && dragging && spot && !target.canDropAt(dragging, target.dropTargetId(spot))) {
+
+      if (
+        fromArchive &&
+        draggingPane === target &&
+        dragging &&
+        spot &&
+        !target.canDropAt(dragging, target.dropTargetId(spot))
+      ) {
         // 拖到自己或自己的子孙里：拒收。`dropEffect = 'none'` 不只换光标：按规范，操作是 none 时
         // 浏览器**连 `drop` 都不派发** → 这个落点真的收不了东西（否则用户会看到提示线、松手却什么都没发生）。
+        // 跨栏不走这一关：`canDropAt` 查的是**本栏**那份父子索引，跨栏时里面没有源那一侧的节点。
         event.dataTransfer.dropEffect = 'none'
         return
       }
+
       const folderRow = (event.target as HTMLElement).closest<HTMLElement>('[data-drop-row="folder"]')
       if (spot?.kind === 'into' && folderRow) {
         folderRow.classList.add('is-drop-active')
@@ -1094,16 +1117,6 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       }
       // 落在行之间的空白处（或这一层是空的）：一律按「追加到末尾」提示。
       markEndDrop(target.list, pane)
-      return
-    }
-
-    if (target) {
-      // 存标签：落在文件夹行的中间就进那一层，否则进当前这一层（也就是追加到它的末尾）。
-      const folderRow = (event.target as HTMLElement).closest<HTMLElement>('[data-drop-row="folder"]')
-      const inner = folderRow?.querySelector<HTMLElement>('.group__head') ?? folderRow
-      const into = folderRow && inner && spotIn(inner, event.clientY, true) === 'into'
-      if (into && folderRow) folderRow.classList.add('is-drop-active')
-      else markEndDrop(target.list, pane)
       return
     }
 
@@ -1170,11 +1183,13 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
         else await target.moveNode(payload, archiveSpot)
         return
       }
-      const parentId =
-        archiveSpot?.kind === 'into' ? archiveSpot.folderId : target.currentFolderId()
+      // 落点解出「写进哪一层、插到第几格」：`into` = 那个文件夹（追加到它末尾）；
+      // `here` = **它所在的那一层**的某个下标（行内展开后「这一行」与「当前这一层」不是一回事）；
+      // 都没有 = 目标栏当前这一层（追加到末尾）。
+      const dest = destOf(target, archiveSpot)
       const children = payload ? childrenFor(payload, windowChildren) : []
-      if (children.length > 0) await writeInto(parentId, children)
-      else if (urls.length > 0) await saveUrls(urls, parentId)
+      if (children.length > 0) await writeInto(dest.id, children, dest.index)
+      else if (urls.length > 0) await saveUrls(urls, dest.id, dest.index)
       return
     }
 

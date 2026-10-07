@@ -61,8 +61,14 @@ Object.defineProperty(window, 'chrome', {
         const node = {id: 'new' + seq++, title: arg.title, url: arg.url, children: arg.url ? undefined : []}
         index.set(node.id, node)
         parents.set(node.id, arg.parentId)
-        ;(index.get(arg.parentId).children ??= []).push(node)
-        window.__calls.bookmarks.push({op: 'create', parentId: arg.parentId, title: arg.title, url: arg.url, id: node.id})
+        const siblings = (index.get(arg.parentId).children ??= [])
+        // 与 Chromium 一致（`BookmarksCreateFunction::CreateBookmarkNode`）：index 是**插入后**的位置，
+        // 而且**越界是报错**——不像 `tabs.move` 那样钳到末尾。
+        if (arg.index !== undefined && (arg.index < 0 || arg.index > siblings.length)) {
+          throw new Error('Invalid index: ' + arg.index)
+        }
+        siblings.splice(arg.index ?? siblings.length, 0, node)
+        window.__calls.bookmarks.push({op: 'create', parentId: arg.parentId, title: arg.title, url: arg.url, id: node.id, index: arg.index})
         return shape(node, true)
       },
       update: async (id, arg) => {
