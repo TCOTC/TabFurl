@@ -487,10 +487,16 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /**
-   * 点一行：**Ctrl / Cmd 切换、Shift 扩范围**，**普通点击不改选择**。
+   * 点一行：**Ctrl / Cmd 切换一条、Shift 扩范围、普通点击取消已选的那一批**。
    *
-   * 普通点击什么都不做是有意的：这一档没有勾选框，「只选这一条」会**随手点一下就把刚选好的一批清掉**。
-   * 但它**仍然挪 Shift 起点**（先随手点一下再 Shift 点另一头是很自然的用法）。
+   * 普通点击按**这一条本来有没有被选中**分两种情况：
+   * 没选中 → 取消已选的那批（亮着的框只该靠「点别处」或那枚按钮收掉；
+   * 以前是点哪儿都不动，于是那一批会一直亮到下一次 Ctrl 点击，看着像点了没反应）；
+   * 已选中 → 什么都不做（按住它把整批拖走是常见动作，那时选择不该被清掉）。
+   *
+   * 两种都**不选中点到的那一条**：这一档没有勾选框，「点一下 = 只选它」会让
+   * 「先 Ctrl 选一批、再随手点一下」变成一次误清空。
+   * 两种都**挪 Shift 起点**（看不见，但「先随手点一下再 Shift 点另一头」依赖它）。
    *
    * 返回 true = 这次点击已处理完；落在行内按钮 / 输入框上时返回 false（各有自己的语义）。
    */
@@ -522,7 +528,12 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
       renderArchive()
       return true
     }
-    // 普通点击：不改选择，也不重绘——只把起点挪过来（上面那两条依赖它）。
+    // 普通点击：点到**没选中**的那一条 → 取消已选的那批（不必重绘——本来就没选中任何东西）；
+    // 点到**已选中**的那一条 → 什么都不做（见上面的理由）。两种都不选中这一条。
+    if (!pickedIds.has(id) && pickedIds.size > 0) {
+      pickedIds.clear()
+      renderArchive()
+    }
     pickAnchor = id
     return true
   }
