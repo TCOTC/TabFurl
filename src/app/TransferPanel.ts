@@ -1,4 +1,4 @@
-import {clampInsertIndex, createBookmark, getNodePath, removeSubTree} from '../shared/bookmarks'
+import {clampInsertIndex, createBookmark, getChildren, getNodePath, removeSubTree} from '../shared/bookmarks'
 import {
   countSnapshotTabs,
   planWindowChildren,
@@ -27,6 +27,7 @@ import {
   type Panel
 } from './dom'
 import {createArchivePane, type ArchivePane} from './ArchivePane'
+import {planPickedMove} from './archivePick'
 import {OPEN_MANAGER_ICON, REFRESH_ICON, plusIcon} from './icons'
 import {
   childrenFor,
@@ -1031,7 +1032,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       return key === String(dragging.index)
     }
     if (dragging.kind === 'selection') {
-      // 一批：指着这批里的任意一行松手 = 原地不动（多选搬运一律追加到目标层末尾）。
+      // 一批：指着这批里的任意一行松手 = 原地不动。锚点就在这一批里，而这一批是**按块**搬的
+      //（相对顺序不变、逐条接在上一条后面）→「在它之前 / 之后」没有一个确定的意思。
       const rowId = target.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId
       return rowId !== undefined && dragging.ids.includes(rowId)
     }
@@ -1168,7 +1170,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
     if (target) {
       if (!target.isWritable()) return
-      // 一次拖好几条：搬的是整批，落点只用来解出「搬到哪一层」（见 `movePickedTo`）。
+      // 一次拖好几条：搬的是整批，落点解出「搬到哪一层、插到第几格」（见 `movePickedTo`）。
       if (payload?.kind === 'selection') {
         await movePickedTo(target, payload.ids, archiveSpot)
         return
@@ -1280,13 +1282,18 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   /**
-   * 把一批选中的条目搬到目标那一层（多选拖动）。
+   * 把一批选中的条目搬到落点（多选拖动）。
    *
-   * **一律追加到目标层的末尾**，不认「插到第几格」：一批一起精确插入的语义很绕（相对顺序、
-   * 同父下移时 index 要先减一…），而用户拖一批过来要说的是「搬到那一层」→ 落点只用来解出**哪一层**。
-   * 三种情况留在原地，而且都要说出来（不说的话用户看到的是「拖了但没动」）：
-   * 已在目标那一层的（`move` 对同父是**追加末尾**，而用户要的不是「排到最后」）、
-   * 要搬进它自己里面的（会成环）、一条都搬不动时整件事直接说不做。
+   * **落点给了具体某一格就按那一格插**（行上的插入线 = `here`），**没给才是追加到那一层末尾**
+   * （落文件夹行中间 = 进那一层；落在空白处 / 这一层没有行可锚）。
+   * 以前一律追加，于是出现「插入线画在这儿、东西却跑到末尾」——而单条拖动一直认下标，两套口径对不上。
+   *
+   * 一批的**相对顺序用载荷里的顺序**（= 用户点选的顺序），逐条接在**上一条刚落地的那一格**后面：
+   * `bookmarks.move` 的 index 是**移动前**坐标系里的位置（同父下移时 Chrome 自己减 1），
+   * 而「上一条现在在第几格」正是下一次要用的那个锚点（`move` 的返回值带着它落地的 index）。
+   *
+   * 留在原地的情况都要说出来（不说的话用户看到的是「拖了但没动」）：
+   * 追加那条路上「本来就在目标那一层的」、要搬进它自己里面的（会成环）、一条都搬不动时整件事直接不做。
    */
   async function movePickedTo(
     target: ArchivePane,
@@ -1297,19 +1304,16 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     const dest = destOf(target, spot)
     if (!dest.id) return
 
+    const base = dest.index
     const destPath = new Set((await getNodePath(dest.id)).map((node) => node.id))
-    const movable: string[] = []
-    let here = 0
-    let cyclic = 0
-    for (const id of ids) {
-      // 文件夹落在它自己（或它自己的子孙）里：`move` 会成环。
-      if (destPath.has(id)) cyclic++
-      else if (target.parentOf(id) === dest.id) here++
-      else movable.push(id)
-    }
+    const {ordered, here, cyclic} = planPickedMove(ids, dest.id, {
+      parentOf: (id) => target.parentOf(id),
+      destPath,
+      atPosition: base !== undefined
+    })
 
     const destName = destLabel(target, dest.id)
-    if (movable.length === 0) {
+    if (ordered.length === 0) {
       setStatus(
         status,
         cyclic > 0 ? '不能把文件夹搬进它自己里面。' : `这些已经在「${destName}」里了。`,
@@ -1320,13 +1324,29 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
     flags.busy = true
     try {
-      for (const id of movable) await chrome.bookmarks.move(id, {parentId: dest.id})
+      // 下标来自**渲染那一刻**的行，两次之间这一层可能变过 → 先按现状收进合法范围（`move` 越界也是报错）。
+      let index = base === undefined ? undefined : await clampInsertIndex(dest.id, base)
+      for (const id of ordered) {
+        if (index === undefined) {
+          await chrome.bookmarks.move(id, {parentId: dest.id})
+          continue
+        }
+        // 下一条要接在**这一条**后面 → 拿它落地的 index 当锚点。
+        // 拿不到时（真实 API 总会给）退回读一遍这一层，而不是让整批静默错位。
+        const landed = (await chrome.bookmarks.move(id, {parentId: dest.id, index})).index
+        if (landed !== undefined) {
+          index = landed + 1
+        } else {
+          const at = (await getChildren(dest.id)).findIndex((child) => child.id === id)
+          index = at < 0 ? undefined : at + 1
+        }
+      }
       const notes: string[] = []
       if (here > 0) notes.push(`${here} 条本来就在这一层`)
       if (cyclic > 0) notes.push('文件夹不能搬进它自己里面')
       setStatus(
         status,
-        `已把 ${movable.length} 条移到「${destName}」。${notes.length > 0 ? `（${notes.join('；')}）` : ''}`,
+        `已把 ${ordered.length} 条移到「${destName}」。${notes.length > 0 ? `（${notes.join('；')}）` : ''}`,
         'ok'
       )
     } catch (error) {

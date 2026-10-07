@@ -1,6 +1,6 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {pickOwnerOf, rangeBetween, topLevelPicked} from './archivePick'
+import {pickOwnerOf, planPickedMove, rangeBetween, topLevelPicked} from './archivePick'
 import {flattenArchive} from './archiveRows'
 import type {BookmarkNode} from '../shared/types'
 
@@ -61,6 +61,48 @@ test('pickOwnerOf：文件夹被选中时，它的后代行归到它名下（共
 test('pickOwnerOf：空选择集时谁都不归', () => {
   const rows = flattenArchive(sampleTree(), 'root', new Set())
   assert.equal(pickOwnerOf(at(rows, 0), new Set(), parentIndex(sampleTree())), undefined)
+})
+
+test('planPickedMove：给了落点下标时，已在目标那一层的也一起挪（不算「动不了」）', () => {
+  const parents = parentIndex(sampleTree())
+  const plan = planPickedMove(['a1', 'b'], 'root', {
+    parentOf: (id) => parents.get(id),
+    destPath: new Set(['root']),
+    atPosition: true
+  })
+  assert.deepEqual(plan, {ordered: ['a1', 'b'], here: 0, cyclic: 0})
+})
+
+test('planPickedMove：追加到末尾时，已在目标那一层的跳过并数出来', () => {
+  const parents = parentIndex(sampleTree())
+  const plan = planPickedMove(['a1', 'b'], 'root', {
+    parentOf: (id) => parents.get(id),
+    destPath: new Set(['root']),
+    atPosition: false
+  })
+  assert.deepEqual(plan, {ordered: ['a1'], here: 1, cyclic: 0})
+})
+
+test('planPickedMove：目标层在自己的子孙里 → 算成环（不管有没有落点下标）', () => {
+  const parents = parentIndex(sampleTree())
+  for (const atPosition of [true, false]) {
+    const plan = planPickedMove(['a', 'b'], 'a2', {
+      parentOf: (id) => parents.get(id),
+      destPath: new Set(['root', 'a', 'a2']),
+      atPosition
+    })
+    assert.deepEqual(plan, {ordered: ['b'], here: 0, cyclic: 1})
+  }
+})
+
+test('planPickedMove：顺序按载荷来的（落进修的目标层就是这个顺序）', () => {
+  const parents = parentIndex(sampleTree())
+  const plan = planPickedMove(['b', 'a1', 'a2x'], 'root', {
+    parentOf: (id) => parents.get(id),
+    destPath: new Set(['root']),
+    atPosition: true
+  })
+  assert.deepEqual(plan.ordered, ['b', 'a1', 'a2x'])
 })
 
 test('rangeBetween：按**可见顺序**取范围，展开出来的子级也在范围内', () => {

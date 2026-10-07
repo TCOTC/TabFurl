@@ -39,6 +39,38 @@ export function pickOwnerOf(
 }
 
 /**
+ * 一次批量搬运要动哪几条、哪几条动不了。
+ *
+ * - `ordered`：真要搬的，**顺序就是落到目标层里的顺序**（= 载荷里的顺序 = 用户点选的顺序）。
+ * - `cyclic`：目标层在它自己（或它的子孙）里 → `move` 会成环，拒收。
+ * - `here`：**已经在目标那一层**的条数。只在「追加到末尾」（落点没给具体某一格）时才算动不了
+ *   ——`move` 对同父的行为就是排到最后，而用户要的显然不是这个，所以说一句、不动它；
+ *   落点给了具体某一格时它照样要挪过去，那正是「把这批放到这儿」。
+ */
+export function planPickedMove(
+  ids: readonly string[],
+  destId: string,
+  options: {
+    /** 这一条现在挂在谁下面（拿不到 = 不在本栏那份索引里，一律当要搬）。 */
+    parentOf(id: string): string | undefined
+    /** 目标层的父链（含它自己）——用它挡「搬进自己的子孙」。 */
+    destPath: ReadonlySet<string>
+    /** 落点给没给**具体某一格**（`here`）；没给 = 追加到那一层末尾。 */
+    atPosition: boolean
+  }
+): {ordered: string[]; here: number; cyclic: number} {
+  const ordered: string[] = []
+  let here = 0
+  let cyclic = 0
+  for (const id of ids) {
+    if (options.destPath.has(id)) cyclic++
+    else if (!options.atPosition && options.parentOf(id) === destId) here++
+    else ordered.push(id)
+  }
+  return {ordered, here, cyclic}
+}
+
+/**
  * Shift 点击：把起点到这一行之间的**可见行**全选上。
  * 按**可见顺序**而非层级：用户看到的就是这一列行，展开的子级也在这列里
  * → 「从上面那个文件夹拖到下面那条书签」会连中间隔着的都选上，与资源管理器一致。

@@ -16,13 +16,19 @@ const walk = (n) => {
 }
 tree.forEach(walk)
 
-const shape = (n, deep) => ({
-  id: n.id,
-  title: n.title,
-  url: n.url,
-  parentId: parents.get(n.id),
-  children: deep ? (n.children ?? []).map((c) => shape(c, true)) : undefined
-})
+const shape = (n, deep) => {
+  const parent = index.get(parents.get(n.id))
+  return {
+    id: n.id,
+    title: n.title,
+    url: n.url,
+    parentId: parents.get(n.id),
+    // 与真 API 一致（`PopulateBookmarkTreeNode` 总会填）：`index` = 它在父级里的下标。
+    // 少了这个字段时，界面那份「拿 `move` 的返回值当下一格锚点」的逻辑在预览里跑不到。
+    index: parent ? (parent.children ?? []).indexOf(n) : undefined,
+    children: deep ? (n.children ?? []).map((c) => shape(c, true)) : undefined
+  }
+}
 
 /** 按 id 取节点。真 API 找不到就 reject，这里照做——否则会静默拿到一个 `undefined` 组成的形状。 */
 const nodeById = (id) => {
