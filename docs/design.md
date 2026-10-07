@@ -1006,6 +1006,92 @@ chip 才是这一行的主角，两个带文字的按钮加起来能占掉半行
 删掉阅读页后就只剩这一个入口，整个共享层并进了 `pages/app.js`（实测 34.8 KB → 41.9 KB）。
 所以 `tools/verify-build.mjs` 不再列它——列着就会自检失败，而那并不代表产物有问题。
 
+#### 界面实现约定（写错了不会报错，只是看着不对）
+
+**界面渲染的清单直接来自计划函数，不要自己遍历。** 勾选清单渲染 `planWindowChildren()` / `planRestore()` 的产物，
+枚数走 `countSnapshotTabs(selectTabs(...))` / `applyExclusions()`——自己再走一遍树，顺序或过滤口径就会与写入 / 还原脱钩。
+这两个计划函数是**一对逆运算**（`capture.ts` 的 `planWindowChildren()` 按 `TabSnapshot.index` 归并 ↔
+`restore.ts` 的 `planRestore()` 按子级数组顺序还原），**改一处必须同步另一处**。
+
+**模板字面量的两条禁忌。** `FAVORITE_HOST_ID` 这类常量必须写在 `TEMPLATE` **之前**（模板求值时就在读它，放后面是 TDZ 报错）；
+`TEMPLATE` 里的 HTML 注释**不能出现反引号**（会截断模板字面量）。`archiveColumnMarkup()` 生成的标记同理。
+
+**`[hidden]` 要显式写出来**（`.left-view[hidden]` / `.mid__archive[hidden]`）：`hidden` 属性只有浏览器默认样式表里的
+`display: none`，而作者样式优先级更高——不补这一句，该收起来的两块会同时显示、上下摞在一起。
+
+**图标只有一份**（`src/app/icons.ts`）：同一个图形不许在两个模块里各写一遍；两处要不同尺寸时**传 class**
+（`plusIcon('move__icon')`），不要复制一份改描边（同一个加号在两处粗细不同，看着像两个人画的）。
+**SVG 的 `stroke-width` 是 viewBox 单位而不是像素**：`viewBox="0 0 16 16"` 画在 26px 槽位里，
+屏幕粗细 = `stroke-width × 26 / 16`——要调粗细先按这个比换算，否则会在「明显粗」与「几乎看不见」之间来回改。
+**只有图标的按钮用 `.btn--icon`**（方形定值 24px，不靠内边距撑）；它没有可读文字，所以 `title` / `aria-label`
+**必须**写，否则读屏与悬停都拿不到含义。
+
+**两栏的浏览器事件按「事件落在哪一栏」路由，不靠 id 前缀猜。** `dragstart` 时记下 `draggingPane`：
+两栏停在同一层时两边认得的是同一批 id，光看载荷分不出它来自哪一栏。落点用 `archivePaneAt()` 按**落在哪一栏**路由；
+`change` 事件按**输入框在哪一栏**分发（不能写成「先问一个、不是再问另一个」——`data-archive-item` 两栏都有，
+第一个实例会把它当成自己的）。两个 `ArchivePane` 实例靠 `idPrefix` 分开（`archive` / `left-archive`）：它们住在同一份
+DOM 里，id 重了就会各自找到对方的东西，而那种错很安静（一边勾选、另一边跟着变）。左栏那个实例的 `root` 用**整栏**
+而不是那个视图（表头里的东西不在视图里）；左栏那枚胸章整栏共用一个，由面板按当前档写，所以 `ArchivePane` 的胸章
+元素是**可选**的。两个实例共用一个 `flags {busy}`——「正在写入」是全局的一件事。
+跨栏搬东西 = `bookmarks.move`（移动，不是复制），**只有拖拽这一条路**；跨栏**不要用 `canDropAt`**
+（它查的是本栏的父子索引，跨栏时里面没有源那一侧的节点）→ 用 `getNodePath()` 沿目标层的父链挡「搬进自己的子孙」。
+
+**两处静默失效（都是 F7 引入的）：**
+① **CSS 里不按 id 选两栏共用的东西**：`--depth` 缩进与 `.vpad` 原本写成 `#archive-list > li`，参数化后左栏那个叫
+`#left-archive-list` → **左栏的行全都不缩进**，连「这个文件夹是空的」也贴左边。形状类规则一律挂 class。
+② **「进入这一格」的圈不能只写 `.group`**：那是窗口栏标签分组行的 class，而收藏夹的文件夹行是 `item group__head`，
+从来没匹配上过 → 拖到文件夹上什么都不显示。两个都要有（`.group.is-drop-active, [data-enter-folder].is-drop-active`）。
+
+**多选的两个细节。** **Shift 不挪起点**（`pickAnchor`）：连按几次可以反复调范围。「取消选中」那枚按钮只在真选中了
+东西时露面，没有时用 `is-slot-hidden` 藏起来**而不是 `display: none`**（一出现就把右边四个按钮整体往右顶）；
+那句可见性写在 `renderArchive()` 的**开头**——它有好几条提前 return，漏哪一条都会让按钮在走到空层时还留着。
+
+**勾选框：三态用原生 `indeterminate`，点击意图自己推。** `indeterminate` 是 **DOM 属性**，写不进 `innerHTML`
+（必须建好元素后用 JS 设）——这常被误认为「原生不支持三态」。唯一入口是 `dom.ts` 的 `triState(kept, total)` /
+`nextSelectAll(state)` / `createSelectAll()`，三层（顶层 / 文件夹 / 标签）共用一份，不要各写一遍。
+**不读原生点击结果**（它只把 `checked` 取反，于是「部分选择」变「全不选」）。**叶子勾选框必须在渲染后手工回填**：
+`innerHTML` 写不出 `checked`，不回填的叶子永远空着、点一下反而变成「勾上」（看着毫无反应）；容器（三态）同理。
+
+**点整行 = 替用户点它的那个勾选框**（`toggleRowFromClick()`），不要另写一份勾选逻辑——三态意图只在 `change`
+处理器里写一次，再写一份必然分叉。行上标 `data-row`（落在**包含**勾选框的那一层），处理器排除 `input, button, a`。
+
+**写入的 `index` 越界是报错，不是钳位。** `chrome.bookmarks.create` 只接受 `0 ≤ index ≤ 子级数`，超出就
+`kInvalidIndexError` 失败（与 `tabs.move` 的钳位相反）。所以拿「渲染那一刻的行下标」去插之前，必须先过
+`clampInsertIndex(parentId, index)`（`shared/bookmarks.ts`，收口只此一处，`writeChildren` 与 `saveUrls` 都走它）
+——两次之间那一层可能已经变了。
+
+**版面与尺寸是算出来的，不是凑出来的。** 两栏表头必须等高（`.col__head` 的 `min-height: var(--head-min)`：
+差几像素会一直传下去，两栏的每一行都不在同一水平线上）。盒子套盒子时外圆角 = `calc(内圆角 + 内边距)`。
+列表**外面**的顶层全选框要与列表**里面**的勾选框对齐，差的是框那道描边 →
+`.select-all` 的左边距 = `calc(var(--item-pad-x) + var(--border-width))`。一行条目的排版用
+`.item` / `.item__main` / `.item__title` / `.item__meta`，**不要在各处重写 flex 与省略号**——每重复一处就漏一次
+`min-width: 0`（省略号会静默失效）。
+
+**行内改名的输入框高度 = `--row-inner`（26px），不是 `--row-height`。** 后者 38px = 「26px 内容 + 上下各 6px
+内边距」，而输入框本身就是内容的一部分——写 38px 时整行变 50px（实测），下面的行全部往下跳、退出又跳回来。
+同时要把 `.input` 的 `padding-top/bottom` 收掉，否则内容盒被压扁。
+
+**`.box` 里所有「一排东西」都必须能换行。** `.box` 写着 `overflow-x: hidden`（§八10），内容宽过容器时
+**不会出现滚动条、也不报错**——只是最右边的东西被静默裁掉。实测 820px 视口下右栏那个框只有 334px，
+而框顶那排按钮自带 351px：面包屑被挤成 0 宽（变成一列竖着的字），`＋ 间隔` 整个点不到。修法是两级 `flex-wrap`
+（`.box__bar` 与 `.box__bar > .row` 都要），而且按钮组必须是 `flex: 0 1 auto`——写成 `0 0 auto`（不许收缩）时
+内层 `flex-wrap` 形同虚设。同类风险在 `.col__head` 的 chip 栏也一样。量的时候用 `evaluate` 比 `scrollWidth`
+与 `clientWidth`，**不要靠肉眼**——被裁掉的是最右边那个元素，截图里不一定看得见。
+
+**左栏行内那几个动作的次要约束。** 「打开」除了 `tabs.update({active: true})`，**还必须 `windows.update({focused: true})`**
+（主界面与那一枚标签在不同窗口时，不聚焦窗口看着就是「点了没反应」）。**分组行的「关闭」是先解散、再关闭**
+（`tabs.ungroup` → `tabs.remove`，**顺序不能反**）：解散让分组因为「空了」而消失，连 Chrome 菜单里那份「已保存
+标签页群组」存档一起消掉（与菜单的「删除群组」一致）；反过来先 `remove` 只会得到「关闭群组」那个行为（存档保留）。
+2026-10-03 真实 Chrome 实测确认。那个按钮还要**按 groupId 向浏览器要名单**（`tabs.query({groupId})`）：界面那份把
+内部页面跳过了（它们存不成书签），而**关的时候跳过就错了**——分组只要还剩一枚标签就不会消失。标签行的「关闭」
+保持只 `remove`（给单枚做 ungroup 会静默把它从分组里摘出来，那是另一件事）。两栏的确认状态**分开两个变量**
+（`pendingClose` / `pendingDeleteId`），主键用 `t<tabId>` / `g<groupId>`（**不按列表下标**：确认态跨越两次点击，
+中间窗口结构可能变了）；**`pendingClose` 必须进 `renderWindow()` 的签名**，否则换到确认态时那行不重画；
+关闭后**立刻 `refreshWindowOnly()`、不等去抖**（`onRemoved` 那条路要 120ms，那段时间里看着像「点了没反应」）。
+
+**拖拽的光标（`dropEffect`）照同一套判断**：只有「收藏夹 → 收藏夹」与「窗口 → 窗口」是 `move`，其余都是 `copy`。
+（**验证时不要读它**——合成事件里永远是 `'none'`，理由与替代判据见 `tools/preview/README.md`。）
+
 ## 八、关键约定与已知取舍
 
 1. **书签 id 是设备本地的。** 跨设备同步后 id 会变，因此任何持久化数据都不能把书签 id 当作跨设备稳定的标识。现在**唯一**存进设置的 id 组就是 `favoriteFolderIds`，重建代价是用户重新收藏一次。
@@ -1098,7 +1184,9 @@ chip 才是这一行的主角，两个带文字的按钮加起来能占掉半行
    改它的都是我们自己），所以两个面板各备了一个手动刷新按钮（`#window-refresh-btn` /
    `#archive-refresh-btn`，都是只有图标的 `.btn--icon`，**不置灰**——正因为「界面看着不对」才点它）。
    两个按钮都挂在**各自全选框那一行的右端**，两栏位置对称；两个 id 都要写进同一条 CSS，
-   而且都要在 `createSelectAll()` 之后 append（按钮靠 `margin-left: auto` 贴右，先插就会把全选框挤到行尾）。
+   而且都要在 `createSelectAll()` 之后 append（按钮靠 `margin-left: auto` 贴右，先插就会把全选框挤到行尾）；
+   **贴右的多个东西要包成一组**（`.row--push-end`，只留最外层一个 `auto`）——flex 会把剩余空间在多个 `auto`
+   之间**平分**（实测两个按钮各被推到一半、相距 216px），左栏那个还必须钉在那行**右端**（跟在文字后面会随文字长度左右滑）。
    它们走同一条 `refresh()`；右栏那个不为「只重读书签树」另写一条路径，多一条就多一处会分叉。
    实测：在界面之外（例如书签管理器里）往当前层加一条书签，点右栏的刷新之后列表从 18 变 19，
    全选框的「已选 0 / 281」也变成 282；两栏的按钮右缘都等于各自那一行的右缘（640 / 1384）。

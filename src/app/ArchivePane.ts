@@ -1112,7 +1112,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   // 「打开书签管理器」开的就是当前展示的这一层：给 `?id=` 一个数字 id 就能直接落在那一层
-  //（为什么用数字 id、以及那个上游 bug 见 `AGENTS.md` 第 29 条）。
+  //（为什么用数字 id、以及那个上游 bug 见 `docs/design.md` 七「为什么是「打开书签管理器」而不是自己做一个阅读页」）。
   openRootButton.addEventListener('click', async () => {
     if (!viewFolderId) return
     try {

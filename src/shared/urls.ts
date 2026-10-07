@@ -96,7 +96,7 @@ export function bookmarkManagerUrl(folderId: string): string {
  *
  * id 由调用方递进来（`chrome.runtime.id`），**不写死在源码里**：清单里没有 `key` 时，
  * 未打包扩展的 id 由加载时的绝对路径推出——换个 clone 目录、换台机器、上架之后都不同。
- * 写死一个的值在别人机器上指的是**另一个扩展**（与约定 6「bookmarks id 是设备本地的」同一类错）。
+ * 写死一个的值在别人机器上指的是**另一个扩展**（与 `docs/design.md` 八「书签 id 是设备本地的」同一类错）。
  */
 export function extensionsPageUrl(extensionId: string): string {
   return `chrome://extensions/?id=${encodeURIComponent(extensionId)}`

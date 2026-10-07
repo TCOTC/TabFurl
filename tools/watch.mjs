@@ -5,7 +5,7 @@
  * 浏览器侧仍需自己点扩展卡片上的刷新（↻）——本脚本不碰浏览器，也不需要下载 Chrome for Testing。
  *
  * 为什么不直接用 `extension dev --no-browser`：它会产出开发版清单，多出 `scripting` 与
- * `management` 两个权限并写入 CSP，导致 `pnpm verify` 失败；而本项目的第 1 条约定是权限最小化。
+ * `management` 两个权限并写入 CSP，导致 `pnpm verify` 失败；而本项目的头一条约定是权限最小化。
  * 这里走 `extension build --mode development`，权限与生产构建完全一致。
  */
 import {spawn} from 'node:child_process'

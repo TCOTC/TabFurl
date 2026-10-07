@@ -39,7 +39,7 @@ const nodeById = (id) => {
 
 const store = {
   // `favoriteFolderIds` 是**有序数组**：第一个可用的是右栏起点，chip 栏靠它渲染。
-  // 三个都在书签栏下面（收藏只认书签栏里的层，见 AGENTS.md「收藏文件夹是书签」）。
+  // 三个都在书签栏下面（收藏只认书签栏里的层，见 `docs/design.md` 三、七）。
   settings: {favoriteFolderIds: ['1-5', '1-0', '1-6']}
 }
 let seq = 0

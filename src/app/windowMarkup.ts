@@ -164,7 +164,7 @@ export function drawnFieldsOf(tab: TabSnapshot): (string | number)[] {
  * 但**行里画出来的东西一个都不能漏**（漏 `status` → 点「加载」后那行不变；漏 `pinned` → 图钉要等别的变化才出现）。
  * 拼串用 `JSON.stringify`，**不自己定分隔符**：手写分隔符要求「内容里不会出现这个字符」，而标题与网址里什么都有
  *（实测：空格拼时 `[a, b, a b]` 与 `[a b, a, b]` 撞成同一个串）。代价是字段要显式列出——而这恰好是想要的
- *（整份快照会把每点一次就变的 `lastAccessed` 也算上）。细节见 `AGENTS.md`。
+ *（整份快照会把每点一次就变的 `lastAccessed` 也算上）。细节见 `docs/design.md` 八「内容没变就别重建 DOM」。
  */
 export function windowSignatureOf(children: readonly WindowChild[]): string {
   return JSON.stringify(

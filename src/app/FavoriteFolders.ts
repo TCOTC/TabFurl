@@ -254,7 +254,7 @@ export function createFavoriteBar(
   }
 
   function renderChips(entries: readonly FavoriteEntry[]): void {
-    // 两处签名都用 `JSON.stringify` 拼，**不自己定分隔符**（见 `AGENTS.md` 第 27 条）：
+    // 两处签名都用 `JSON.stringify` 拼，**不自己定分隔符**（见 `docs/design.md` 八「内容没变就别重建 DOM」）：
     // 手写分隔符隐含「内容里不会出现这个字符」，而文件夹名里什么字符都可能有。
     const signature = JSON.stringify(entries.map((entry) => [entry.id, entry.title]))
     if (signature === lastChips) return
