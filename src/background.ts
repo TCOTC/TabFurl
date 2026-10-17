@@ -6,10 +6,13 @@
  * **以窗口为单位**：主界面左栏列的是「这个窗口」的标签页 → 点哪个窗口的图标，界面就出现在哪个窗口。
  * 曾经是全局只留一个实例、找到后 `windows.update` 把焦点拽过去，于是在窗口 B 点图标会跳回窗口 A
  *（等于把用户从他正要操作的那一窗拽走）→ 检索时带上 `windowId` 就解决了，同窗连点也不会堆出第二个。
+ *
+ * **紧跟在当前标签页之后**：`tabs.create` 的 `index` 是「插入后」的位置，所以传 `当前 index + 1`。
+ * 省略它就会追加到标签栏末尾——而用户是从手上这一枚标签点出去的，界面理应就在旁边。
  */
 const APP_PAGE = 'pages/app.html'
 
-async function openAppPage(windowId?: number): Promise<void> {
+async function openAppPage(windowId?: number, afterIndex?: number): Promise<void> {
   const url = chrome.runtime.getURL(APP_PAGE)
   const query: chrome.tabs.QueryInfo = {url}
   if (windowId !== undefined) {
@@ -25,12 +28,20 @@ async function openAppPage(windowId?: number): Promise<void> {
     return
   }
 
-  await chrome.tabs.create(windowId === undefined ? {url} : {url, windowId})
+  const create: chrome.tabs.CreateProperties = {url}
+  if (windowId !== undefined) {
+    create.windowId = windowId
+  }
+  if (afterIndex !== undefined) {
+    // 越界（当前标签页恰好在最末）时 Chrome 会钳到末尾，与省略 index 等价。
+    create.index = afterIndex + 1
+  }
+  await chrome.tabs.create(create)
 }
 
 // 必须在顶层注册：MV3 的 service worker 随时会被回收，监听器注册晚了会吞掉点击。
 chrome.action.onClicked.addListener((tab) => {
-  openAppPage(tab?.windowId).catch((error: unknown) => {
+  openAppPage(tab?.windowId, tab?.index).catch((error: unknown) => {
     console.error('[tabfurl] 无法打开主界面', error)
   })
 })
