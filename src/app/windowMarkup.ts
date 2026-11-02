@@ -80,7 +80,7 @@ export function statusSlotMarkup(tab: TabSnapshot): string {
 }
 
 /**
- * 一条标签行。三个 data 属性各有用处：`data-row` 供「点整行切换勾选」找到勾选框；
+ * 一条标签行。几个 data 属性各有用处：`data-pick-line` 供多选定位这一行；
  * `data-tab-index` / `data-tab-group` 供拖拽算落点。
  * 副文案是**完整网址**（与右栏一致）：同站不同页靠路径区分，只显主机名时两条看着一模一样。
  * 行尾按钮从左到右：**状态（加载/加载中/释放）· 打开 · 关闭**。
@@ -89,9 +89,9 @@ export function tabRowMarkup(tab: TabSnapshot, pendingKey: string | undefined): 
   const url = tab.url
   const groupAttr = tab.groupId === undefined ? '' : ` data-tab-group="${tab.groupId}"`
   return `
-    <li class="item leaf" draggable="true" data-row data-drop-row="tab"
+    <li class="item leaf" draggable="true" data-drop-row="tab" data-pick-line="t${tab.tabId}"
+        data-pick-tab="${tab.tabId}"
         data-tab-index="${tab.index}"${groupAttr} data-drag-tab="${tab.tabId}">
-      <input type="checkbox" data-window-tab="${tab.tabId}" />
       ${faviconMarkup(url, FAVICON_BASE)}
       <span class="item__main">
         <span class="item__title">${escapeHtml(tab.title || url)}${tab.pinned ? PIN_ICON : ''}</span>
@@ -117,6 +117,8 @@ export function groupRowMarkup(
 ): string {
   const bucketGroupId = child.tabs[0]?.groupId
   const groupAttr = bucketGroupId === undefined ? '' : ` data-group-id="${bucketGroupId}"`
+  // 多选的键优先用 groupId：分组在列表里的下标会随着别的分组变化而漂，而 Shift 起点要跨刷新记住。
+  const pickKey = bucketGroupId === undefined ? `g${index}` : `g${bucketGroupId}`
   const label = `解散这一组并关闭它的全部标签页（共 ${child.tabs.length} 枚已列出；组里的浏览器内部页面也会一起关）`
   // 关闭要按 groupId 问浏览器要这一组的全部标签（界面这份跳过了内部页面，关的时候跳过就错了）。
   // 拿不到 groupId 时不给按钮：给了也只能按名字 / 下标猜。
@@ -124,9 +126,9 @@ export function groupRowMarkup(
     ? ''
     : closeSlotMarkup(closeKey({kind: 'group', groupId: bucketGroupId}), label, pendingKey)
   return `
-    <li class="group" data-row data-drop-row="group"${groupAttr}>
-      <div class="item group__head" draggable="true" data-drag-group="${index}">
-        <input type="checkbox" data-window-group="${index}" />
+    <li class="group" data-drop-row="group"${groupAttr}>
+      <div class="item group__head" draggable="true" data-drag-group="${index}"
+           data-pick-line="${pickKey}" data-pick-group="${index}">
         <span class="item__title">${escapeHtml(child.name)}</span>
         <span class="item__meta">${child.tabs.length} 个标签</span>
         <span class="tree__actions">${close}</span>
@@ -160,7 +162,7 @@ export function drawnFieldsOf(tab: TabSnapshot): (string | number)[] {
 /**
  * 左栏现在的样子：结构 + 文本。
  *
- * **勾选不在签名里**（由 `syncWindowStates()` 回填，算进去会「勾一下重绘整列」）；
+ * **多选状态不在签名里**（由 `syncWindowPicks()` 改 class，算进去会「点一下重绘整列」）；
  * 但**行里画出来的东西一个都不能漏**（漏 `status` → 点「加载」后那行不变；漏 `pinned` → 图钉要等别的变化才出现）。
  * 拼串用 `JSON.stringify`，**不自己定分隔符**：手写分隔符要求「内容里不会出现这个字符」，而标题与网址里什么都有
  *（实测：空格拼时 `[a, b, a b]` 与 `[a b, a, b]` 撞成同一个串）。代价是字段要显式列出——而这恰好是想要的

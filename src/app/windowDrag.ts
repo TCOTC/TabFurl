@@ -39,11 +39,34 @@ export function payloadNodeId(payload: DragPayload | undefined): string | undefi
  * 载荷 → 要写进书签的子级。
  *
  * 组内的标签单独拖出来时只写**这一枚**（散装书签），而不是把整组建一遍。
+ *
+ * 多选（`tabs`）时：**整组都被选中的分组照旧写成文件夹**（分组名是用户起的信息，丢不得），
+ * 只选中一部分的分组则把它被选中的那几枚当散装书签写出去——把「只挑了两枚」写成整个文件夹
+ * 等于多存了没选的标签。顺序即窗口顺序（`tabIds` 就是按窗口顺序给的）。
  */
 export function childrenFor(payload: DragPayload, children: readonly WindowChild[]): WindowChild[] {
   if (payload.kind === 'group') {
     const child = children[payload.index]
     return child?.kind === 'group' ? [child] : []
+  }
+  if (payload.kind === 'tabs') {
+    const ids = new Set(payload.tabIds)
+    const out: WindowChild[] = []
+    for (const child of children) {
+      if (child.kind === 'tab') {
+        if (ids.has(child.tab.tabId)) out.push(child)
+        continue
+      }
+      const hits = child.tabs.filter((item) => ids.has(item.tabId))
+      if (hits.length === 0) continue
+      if (hits.length === child.tabs.length) {
+        out.push(child)
+        continue
+      }
+      // 只选中一部分：这几枚按散装书签写，别把整个分组搬过去。
+      for (const item of hits) out.push({kind: 'tab', tab: item})
+    }
+    return out
   }
   if (payload.kind !== 'tab') return []
 
@@ -63,6 +86,18 @@ export function windowTabsFor(payload: DragPayload, children: readonly WindowChi
   if (payload.kind === 'group') {
     const child = children[payload.index]
     return child?.kind === 'group' ? [...child.tabs] : []
+  }
+  if (payload.kind === 'tabs') {
+    const wanted = new Set(payload.tabIds)
+    const out: TabSnapshot[] = []
+    for (const child of children) {
+      if (child.kind === 'tab') {
+        if (wanted.has(child.tab.tabId)) out.push(child.tab)
+        continue
+      }
+      for (const item of child.tabs) if (wanted.has(item.tabId)) out.push(item)
+    }
+    return out
   }
   if (payload.kind !== 'tab') return []
   for (const child of children) {

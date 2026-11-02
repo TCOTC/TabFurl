@@ -12,15 +12,11 @@ import {loadSettings} from '../shared/settings'
 import type {RestoreOptions, TabSnapshot, WindowSnapshot} from '../shared/types'
 import {
   createPanelElement,
-  createSelectAll,
   errorText,
   markEndDrop,
-  nextSelectAll,
   q,
   setStatus,
   spotIn,
-  toggleRowFromClick,
-  triState,
   type AppEvents,
   type ArchiveDrop,
   type DragPayload,
@@ -88,7 +84,7 @@ export const LEFT_FAVORITE_HOST_ID = 'left-favorite-host'
  * 右栏本来就是这一套，F7 之后**左栏也能切成收藏夹**，所以它必须能被生成两份，而不是复制一遍 HTML。
  * 两栏的 `id` 用前缀区分（`archive` / `left-archive`）：两个 `ArchivePane` 住在同一份 DOM 里，
  * 而 `ArchivePane` 是按 id 找元素的——id 重了就会各自找到对方的东西，而且那种错很安静
- * （一边勾选、另一边跟着变）。
+ * （一边点选、另一边跟着变）。
  *
  * 必须定义在 `TEMPLATE` **之前**：模板字面量在求值时就会调用它。
  */
@@ -122,7 +118,7 @@ function archiveColumnMarkup(prefix: string): string {
                       title="在当前位置插一条分隔线（竖线，给横向排列的书签栏用）">＋ 分隔线</button>
               <button type="button" class="btn btn--ghost btn--sm" id="${prefix}-new-gap-btn"
                       title="在当前位置插一条间隔（横线，给竖向排列的列表用）">＋ 间隔</button>
-              <!-- 它挂在全选框那一行的右端（在刷新按钮左边），见 makeRefreshButton 附近。 -->
+              <!-- 它挂在面包屑那一行的右端（在刷新按钮左边），见 makeRefreshButton 附近。 -->
               <button type="button" class="btn btn--ghost btn--icon" id="${prefix}-open-root-btn"
                       title="在浏览器自带的书签管理器里打开这一层"
                       aria-label="在浏览器自带的书签管理器里打开这一层">${OPEN_MANAGER_ICON}</button>
@@ -136,7 +132,7 @@ function archiveColumnMarkup(prefix: string): string {
           而「空列表」与「真的没有内容」长得一模一样——用户看到的是「先空一下、内容再蹦出来」。
           骨架把这一段变成「正在读」（尺寸见 app.css 的 .skeleton）。
         -->
-        <ul class="list list--archive" id="${prefix}-list">
+        <ul class="list list--archive is-picking" id="${prefix}-list">
           <li class="skeleton" aria-hidden="true"></li>
           <li class="skeleton" aria-hidden="true"></li>
           <li class="skeleton" aria-hidden="true"></li>
@@ -180,14 +176,21 @@ const TEMPLATE = `
         <div class="favs-host" id="${LEFT_FAVORITE_HOST_ID}" hidden></div>
       </header>
       <div class="left-view" id="window-view">
-        <div class="row row--compact" id="window-all-host"></div>
+        <div class="row row--compact" id="window-all-host">
+          <!--
+            「取消选中」只在真选中了标签时露面；没有时用 is-slot-hidden 藏起来而不是
+            display: none——一出现就把右边那枚刷新按钮往左顶。
+          -->
+          <button type="button" class="btn btn--ghost btn--sm is-slot-hidden"
+                  id="window-clear-pick-btn" title="取消选中的标签页（也可以点空白处）">取消选中</button>
+        </div>
         <div class="box" data-drop-pane="window">
           <!--
             先放几块骨架：数据是异步读来的（设置 + 标签 + 书签树三处），在它们回来之前列表是空的，
             而「空列表」与「真的没有标签」长得一模一样——用户看到的是「先空一下、内容再蹦出来」。
             骨架把这一段变成「正在读」（尺寸见 app.css 的 .skeleton）。
           -->
-          <ul class="list" id="window-list">
+          <ul class="list is-picking" id="window-list">
             <li class="skeleton" aria-hidden="true"></li>
             <li class="skeleton" aria-hidden="true"></li>
             <li class="skeleton" aria-hidden="true"></li>
@@ -206,12 +209,12 @@ ${archiveColumnMarkup('left-archive')}
         <span id="save-label">存过去</span>
       </button>
       <button type="button" class="btn btn--move" id="open-btn" disabled
-              title="在当前窗口打开勾选的内容">
+              title="在当前窗口打开选中的内容">
         <span class="move__arrow">←</span>
         <span id="open-label">打开</span>
       </button>
       <button type="button" class="btn btn--move" id="open-window-btn" disabled
-              title="在新窗口打开勾选的内容">
+              title="在新窗口打开选中的内容">
         ${plusIcon('move__icon')}
         <span id="open-window-label">新窗口</span>
       </button>
@@ -271,8 +274,9 @@ ${archiveColumnMarkup('archive')}
  * 两栏装的是**同一个东西的两侧**：左边是活会话（当前窗口，标签还住在浏览器里），
  * 右边是已落盘的（收藏夹里的文件夹与散装书签）。两者同形——都是有序的「分组 | 标签」序列——所以：
  *
- * - 「存过去」与「打开」会把左栏或右栏**当前勾选**的内容整体送过去；
+ * - 「存过去」与「打开」会把左栏或右栏**当前选中**的内容整体送过去；
  * - 拖拽是同一件事的**精确版**：拖一条标签就只存这一条，落在哪个文件夹行上就进哪个文件夹；
+ *   拖一行**选中的**标签就是整批（载荷 `{kind: 'tabs'}`，见 `windowDragIdsOf`）；
  * - 没有会话层：每次保存都是往当前展示的那一层里**追加**，不做去重，同名文件夹也不合并。
  */
 export interface TransferPanel extends Panel {
@@ -332,7 +336,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       lastWrite = {folderIds: result.folderIds, bookmarkIds: result.bookmarkIds}
     },
     favoriteIds: () => favoriteFolderIds,
-    // 换层或勾选变了时重算中间那一列（存过去的提示、「打开 / 移动 (N)」）。
+    // 换层或选择变了时重算中间那一列（存过去的提示、「打开 / 移动 (N)」）。
     onStateChanged: () => updateButtons()
   }
   const archive: ArchivePane = createArchivePane({...paneDeps, root: rightCol, idPrefix: 'archive'})
@@ -354,31 +358,14 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   const openWindowLabel = q<HTMLSpanElement>(element, '#open-window-label')
   const undoButton = q<HTMLButtonElement>(element, '#undo-btn')
   const noGroupCheck = q<HTMLInputElement>(element, '#no-group-check')
-
-  const windowSelectAll = createSelectAll(q<HTMLDivElement>(element, '#window-all-host'), {
-    describe: (kept, total) =>
-      total === 0
-        ? '当前窗口没有可保存的标签页'
-        : kept === total
-          ? `已全选 ${total} 个标签页`
-          : `已选 ${kept} / ${total} 个标签页`,
-    onChange: (wantAll) => {
-      if (wantAll) for (const tab of allWindowTabs()) windowSelected.add(tab.tabId)
-      else windowSelected.clear()
-      syncWindowStates()
-    }
-  })
+  const windowClearPickButton = q<HTMLButtonElement>(element, '#window-clear-pick-btn')
 
   /**
-   * 两面板的刷新按钮。
+   * 三块列表的刷新按钮。
    *
-   * 它们都挂在**全选框那一行的右端**（左栏挂在 `#window-all-host`、右栏挂在 `#archive-all-host`），
-   * 两栏位置对称。不紧跟在全选框文字后面是有原因的：那行文字会随勾选从
-   * 「已全选 3 个标签页」变成「已选 2 / 127 个标签页」，紧跟就会左右滑动。
-   *
-   * **必须在两个全选框都建好之后再 append**：`createSelectAll()` 也是往同一行里 append 的，
-   * 而按钮靠 `margin-left: auto` 贴右——一旦按钮先插进去，它会把后面的标签挤到行尾，
-   * 看着就像「刷新按钮跑到左边去了」（实测右栏就是这样：按钮 784、标签 1239–1384）。
+   * 它们都挂在每一栏顶部那一行的右端（左栏挂在 `#window-all-host`、两个收藏夹栏挂在各自
+   * 的 `-all-host`），两栏位置对称。靠 `margin-left: auto` 贴右，所以左边那枚
+   * 「取消选中」出现 / 消失都不会把它顶走。
    *
    * 两者都**不置灰**（哪怕 `busy`）：这是手动退路，正因为「界面看着不对」才点它。
    * 两者走的是**同一条** `refresh()`：右栏不为「只重读书签树」另写一条路径，
@@ -400,16 +387,14 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
 
-  // 两个全选框都建好之后才插刷新按钮：它们靠贴右把自己推到行尾，
-  // 先插进去会把后面的全选框挤走（见 `makeRefreshButton` 的注释）。
+  // 刷新按钮靠贴右把自己推到行尾；左栏那行的左端是「取消选中」，两者互不挤动。
   //
-  // 右栏那两个按钮包在**同一个组**里：两个 `margin-left: auto` 会把剩余空间**平分**，
+  // 收藏夹栏那两个按钮包在**同一个组**里：两个 `margin-left: auto` 会把剩余空间**平分**，
   // 两个按钮就各自被推到左边一截、中间留一大块空白（实测相距 216px）。
   // 包成一组之后只有最外层那个 `auto` 生效，两个按钮就紧挨着靠在行尾。
   // 顺序也是刻意的：管理器在左、刷新在右（刷新是「重新看一眼」，放最外面最顺手）。
   //
-  // 右栏那两枚都不是面板的：管理器按钮归收藏夹实例，所以这里只往它留出的位置里放东西。
-  // 而这一行**必须在 `createArchivePane` 之后**——全选框是它建好并 append 进去的。
+  // 收藏夹栏那两枚都不是面板的：管理器按钮归收藏夹实例，所以这里只往它留出的位置里放东西。
   q<HTMLDivElement>(element, '#window-all-host').append(
     makeRefreshButton('window-refresh-btn', '重新读取当前窗口的标签页')
   )
@@ -463,13 +448,15 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    */
   let windowSignature: string | undefined
   /**
-   * 左栏**被勾选**的标签 id。
+   * 左栏**被点选**的标签 id。
    *
-   * 保存侧现在是**默认一个都不选**（用户要的是「挑几条去存」，而不是「先整窗收起来再排除几条」），
-   * 所以这里记的是选中集，不是排除集。右边收藏夹那一侧也默认不选，但用的是排除集 +
-   * 一份「见过的书签」（因为那边的列表会随导航换掉，见 `applyArchive`）。
+   * 保存侧默认一个都不选（用户要的是「挑几条去存」，而不是「先整窗收起来再排除几条」），
+   * 所以这里记的是选中集，不是排除集。与两个收藏夹栏用的是同一套手势：
+   * Ctrl / Cmd 切换、Shift 扩范围、普通点击收掉已选的那一批。
    */
-  const windowSelected = new Set<number>()
+  const windowPicked = new Set<number>()
+  /** Shift 范围的起点（上次不带修饰键点击的那一行）。Shift 点击不挪它。 */
+  let windowPickAnchor: string | undefined
   /**
    * 左栏里正在等第二次确认的关闭目标。
    *
@@ -512,8 +499,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   /**
-   * 让界面反映 `mode`：换左栏那一块、收起中间那一列、给出两档的选中态，
-   * 并让两栏的勾选框该出现的出现、该收起的收起。
+   * 让界面反映 `mode`：换左栏那一块、收起中间那一列、给出两档的选中态。
    *
    * 中间那一列**整列收起**，而不是把里面的按钮逐个藏起来：
    * 两栏都是收藏夹时，窗口语义的五个控件（存过去 / 打开 / 新窗口 / 不建分组 / 撤销）
@@ -535,9 +521,11 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     mid.hidden = isArchive
     // 轨道同时从三条收到两条：不收的话中间那个空轨道还会吃掉一格 `gap`。
     split.classList.toggle('split--archive', isArchive)
-    // 勾选框只在窗口档下有意义（右栏的驱动「打开 (N)」），两栏都是收藏夹时两栏都不要。
-    archive.setSelectable(!isArchive)
-    leftArchive.setSelectable(!isArchive)
+    // 窗口档的收藏夹栏只负责「打开」→ 只能点选会被打开的行；
+    // 两栏都是收藏夹时是搬东西 → 任意层级的行都能点选（整棵子树可以拖）。
+    const scope = isArchive ? 'all' : 'open'
+    archive.setPickScope(scope)
+    leftArchive.setPickScope(scope)
     // 换了一档，那枚共用的胸章与中间那一列的计数都跟着换一套。
     updateButtons()
   }
@@ -550,14 +538,10 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     )
   }
 
-  function windowKeptTabs(tabs: readonly TabSnapshot[]): TabSnapshot[] {
-    return tabs.filter((tab) => windowSelected.has(tab.tabId))
-  }
-
   /**
    * 「这一批会被存下去」的那份窗口快照。
    *
-   * **不自己遍历**：把「没勾上的」交给 `shared/capture.ts` 的 `selectTabs()`，再走与渲染同一个
+   * **不自己遍历**：把「没选中的」交给 `shared/capture.ts` 的 `selectTabs()`，再走与渲染同一个
    * `planWindowChildren()`——自己再写一遍过滤就多一处分叉的机会（`存过去 (N)` 与实际存下的枚数、
    * 写入顺序三者都会各自漂）。排除集是**临时的**（由选中集现算），左栏那份状态仍是选中集。
    */
@@ -566,7 +550,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     if (!snapshot) return {windowId: -1, capturedAt: 0, groups: [], ungrouped: [], skipped: 0}
     const notSelected = new Set<number>()
     for (const tab of allWindowTabs()) {
-      if (!windowSelected.has(tab.tabId)) notSelected.add(tab.tabId)
+      if (!windowPicked.has(tab.tabId)) notSelected.add(tab.tabId)
     }
     return selectTabs(snapshot, notSelected)
   }
@@ -587,16 +571,14 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     const key = pendingCloseKey(pendingClose)
     const signature = windowSignatureOf(windowChildren) + '|' + (key ?? '')
     if (signature === windowSignature) {
-      syncWindowStates()
+      syncWindowPicks()
       return
     }
     windowSignature = signature
 
     if (windowChildren.length === 0) {
       windowList.innerHTML = '<li class="empty">当前窗口没有可保存的标签页。</li>'
-      // 早退时也要走同步：全选框的文案与三态在它里面算。只调 `updateButtons()` 的话，
-      // 全选框会停在上一次的数字上（实测：换到没有标签的窗口时还写着上一个窗口的枚数）。
-      syncWindowStates()
+      syncWindowPicks()
       return
     }
 
@@ -608,28 +590,122 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       )
       .join('')
 
-    syncWindowStates()
+    syncWindowPicks()
   }
 
-  /** 让左栏的勾选框反映 `windowSelected`。`innerHTML` 写不出 `checked`，必须手工回填。 */
-  function syncWindowStates(): void {
-    for (const input of windowList.querySelectorAll<HTMLInputElement>('[data-window-tab]')) {
-      input.checked = windowSelected.has(Number(input.dataset.windowTab))
-    }
+  /**
+   * 多选的一行：一条标签，或一个分组行（分组行代表它下面的**全部**标签）。
+   * `data-pick-line` 是稳定的键（`t<tabId>` / `g<groupId>`，拿不到 groupId 才退回 `g<index>`），
+   * 范围选择与 Shift 起点都按它比。
+   */
+  function windowPickLines(): HTMLElement[] {
+    return [...windowList.querySelectorAll<HTMLElement>('[data-pick-line]')]
+  }
 
-    for (const input of windowList.querySelectorAll<HTMLInputElement>('[data-window-group]')) {
-      const child = windowChildren[Number(input.dataset.windowGroup)]
-      if (!child || child.kind !== 'group') continue
-      const kept = windowKeptTabs(child.tabs).length
-      input.checked = kept > 0
-      input.indeterminate = kept > 0 && kept < child.tabs.length
-    }
+  /** 这一行代表哪几枚标签。分组行是整组；找不到分组时是空的。 */
+  function pickLineTabIds(line: HTMLElement): number[] {
+    const tabId = line.dataset.pickTab
+    if (tabId !== undefined) return [Number(tabId)]
+    const groupIndex = line.dataset.pickGroup
+    if (groupIndex === undefined) return []
+    const child = windowChildren[Number(groupIndex)]
+    return child?.kind === 'group' ? child.tabs.map((tab) => tab.tabId) : []
+  }
 
-    const tabs = allWindowTabs()
-    windowSelectAll.update(
-      tabs.filter((tab) => windowSelected.has(tab.tabId)).length,
-      tabs.length
-    )
+  /** 这一行是不是「整行都在选中的那一批里」。组内只选中一部分时，分组行不算选中。 */
+  function pickLineSelected(line: HTMLElement): boolean {
+    const ids = pickLineTabIds(line)
+    return ids.length > 0 && ids.every((id) => windowPicked.has(id))
+  }
+
+  function clearWindowPick(): void {
+    windowPicked.clear()
+    windowPickAnchor = undefined
+  }
+
+  /** 选中这一行代表的所有标签（Shift 扩范围用；收掉已有选择由调用方决定）。 */
+  function addPickLine(line: HTMLElement): void {
+    for (const id of pickLineTabIds(line)) windowPicked.add(id)
+  }
+
+  /**
+   * Shift 点击：把起点到这一行之间的**可见行**全选上（按看到的顺序，不按层级）。
+   * 起点或终点找不到时退化成「只选终点那一行」。
+   */
+  function extendWindowPickTo(key: string): void {
+    const lines = windowPickLines()
+    const at = (value: string | undefined): number =>
+      value === undefined ? -1 : lines.findIndex((line) => line.dataset.pickLine === value)
+    const from = at(windowPickAnchor)
+    const to = at(key)
+    const hit = lines[to]
+    if (from < 0 || to < 0 || !hit) {
+      if (hit) addPickLine(hit)
+      return
+    }
+    const [start, end] = from <= to ? [from, to] : [to, from]
+    for (let index = start; index <= end; index++) {
+      const line = lines[index]
+      if (line) addPickLine(line)
+    }
+  }
+
+  /**
+   * 点一行：Ctrl / Cmd 切换、Shift 扩范围、普通点击收掉已选的那一批。
+   *
+   * 与收藏夹那两栏同一套语义（见 `ArchivePane.handlePickClick`）：普通点击**不**选中点到的那一行
+   * ——「先 Ctrl 选一批、再随手点一下」不该变成一次误清空。
+   */
+  function handleWindowPickClick(event: MouseEvent): boolean {
+    const target = event.target as HTMLElement
+    if (target.closest('input, button, a')) return false
+    const line = target.closest<HTMLElement>('[data-pick-line]')
+    const key = line && windowList.contains(line) ? line.dataset.pickLine : undefined
+
+    // 点在空白处：取消选择。
+    if (key === undefined) {
+      if (windowPicked.size === 0) return false
+      clearWindowPick()
+      syncWindowPicks()
+      return true
+    }
+    if (!line) return false
+
+    if (event.shiftKey) {
+      extendWindowPickTo(key)
+      // Shift 不挪起点（见 `windowPickAnchor`）。
+      syncWindowPicks()
+      return true
+    }
+    if (event.ctrlKey || event.metaKey) {
+      const wasSelected = pickLineSelected(line)
+      for (const id of pickLineTabIds(line)) {
+        if (wasSelected) windowPicked.delete(id)
+        else windowPicked.add(id)
+      }
+      windowPickAnchor = key
+      syncWindowPicks()
+      return true
+    }
+    if (!pickLineSelected(line) && windowPicked.size > 0) {
+      clearWindowPick()
+      syncWindowPicks()
+    }
+    windowPickAnchor = key
+    return true
+  }
+
+  /** 把多选状态画成高亮框（一段连续的行走一个框），并刷新中间那一列的计数。 */
+  function syncWindowPicks(): void {
+    const lines = windowPickLines()
+    const inBox = lines.map(pickLineSelected)
+    lines.forEach((line, index) => {
+      const on = inBox[index] === true
+      line.classList.toggle('is-picked', on)
+      line.classList.toggle('is-picked-start', on && inBox[index - 1] !== true)
+      line.classList.toggle('is-picked-end', on && inBox[index + 1] !== true)
+    })
+    windowClearPickButton.classList.toggle('is-slot-hidden', windowPicked.size === 0)
     updateButtons()
   }
 
@@ -650,7 +726,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
 
     // 标签被关掉之后它的 tabId 不会再出现；留着只会让集合越涨越大。
     const aliveTabs = new Set(allWindowTabs().map((tab) => tab.tabId))
-    for (const tabId of [...windowSelected]) if (!aliveTabs.has(tabId)) windowSelected.delete(tabId)
+    for (const tabId of [...windowPicked]) if (!aliveTabs.has(tabId)) windowPicked.delete(tabId)
 
     renderWindow()
     if (mode === 'archive') await leftArchive.reload()
@@ -660,8 +736,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   /**
    * 中间那一列的可用状态与计数。
    *
-   * 两档各算各的：窗口档是「存过去 / 打开 / 新窗口 / 撤销」（跟着左栏的标签勾选），
-   * 收藏夹档是「移动过去 / 移动过来」（跟着**两栏各自的**书签勾选）。
+   * 两档各算各的：窗口档是「存过去 / 打开 / 新窗口 / 撤销」（跟着左栏的标签选择），
+   * 收藏夹档是「移动过去 / 移动过来」（跟着**两栏各自的**书签选择）。
    * 两套都算一遍而不是只算当前那档——另一档的按钮还留在 DOM 里，切回去时不该先闪一个旧数字。
    *
    * 收藏夹实例自己那几枚（新建文件夹 / 记号 / 全部展开 / 管理器）不在这里，
@@ -711,7 +787,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     applySnapshot(await snapshotCurrentWindow())
     // 被关掉的标签不能继续留在选中集里，否则那个集合只会越涨越大。
     const alive = new Set(allWindowTabs().map((tab) => tab.tabId))
-    for (const tabId of [...windowSelected]) if (!alive.has(tabId)) windowSelected.delete(tabId)
+    for (const tabId of [...windowPicked]) if (!alive.has(tabId)) windowPicked.delete(tabId)
     renderWindow()
   }
 
@@ -757,14 +833,14 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
    * 为什么必须处理：扩展看到的 `Tab.id` 是 `SessionTabHelper::IdForTab(webContents)`，
    * 而释放的旧实现会把 WebContents 换成一个空的（新的那个有自己的 id），
    * 也就是**释放之后这一枚的 tab id 会变**（Chrome 自己的 API 测试里就写着
-   * 「the id changes after a tab is discarded」）。而界面里「勾选了哪几枚」正是按 tabId 存的，
-   * 不管的话勾选会在释放的那一刻**静默丢掉**（`refreshWindowOnly()` 会把不认识的 id 剪掉）。
+   * 「the id changes after a tab is discarded」）。而界面里「选中了哪几枚」正是按 tabId 存的，
+   * 不管的话选中会在释放的那一刻**静默丢掉**（`refreshWindowOnly()` 会把不认识的 id 剪掉）。
    *
-   * `onReplaced(addedTabId, removedTabId)` 给的正好是这张新旧对照表，所以把勾选搬过去。
+   * `onReplaced(addedTabId, removedTabId)` 给的正好是这张新旧对照表，所以把选中搬过去。
    * 迁移必须在刷新之前做完：刷新会剪掉「不在窗口里」的 id，而此刻旧 id 已经不在窗口里了。
    */
   chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
-    if (windowSelected.delete(removedTabId)) windowSelected.add(addedTabId)
+    if (windowPicked.delete(removedTabId)) windowPicked.add(addedTabId)
     // 正在等确认的那一枚也要搬：不搬的话确认按钮会指向一个已经不在的 id，
     // 点了之后 Chrome 抛「No tab with id」，而那本来是个正常操作。
     if (pendingClose?.kind === 'tab' && pendingClose.tabId === removedTabId) {
@@ -848,10 +924,10 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
   /**
-   * 打开右栏当前勾选的内容。
+   * 打开右栏当前选中的内容。
    *
-   * 直接复用 `restoreFolder(当前层, …)`：当前层的直接子级就是要还原的那一层，排除集已表达「哪些不要」。
-   * 排除集**跟随展示的层**：换一层就换成那一层的选择，不会把别处的勾选悄悄带过来。
+   * 直接复用 `restoreFolder(当前层, …)`：当前层的直接子级就是要还原的那一层，
+   * 「没被选中」由 `excludedFromPick()` 表达。选择**跟随展示的层**：换一层就换成那一层的选择。
    * 「建不建分组」读复选框，不在这里定——它与「开到哪里」是两个独立维度。
    */
   async function openSelection(kind: RestoreKind): Promise<void> {
@@ -864,7 +940,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     const options: RestoreOptions = {
       target: kind,
       groupTabs: !noGroupCheck.checked,
-      excludeBookmarkIds: archive.excluded()
+      excludeBookmarkIds: archive.excludedFromPick()
     }
 
     try {
@@ -934,12 +1010,17 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     if (!dragged || !event.dataTransfer) return
     // 起点先记：两栏都有收藏夹条目，而载荷里只有 id——两栏停在同一层时两边认得的是同一批 id。
     draggingPane = archivePaneAt(dragged)
-    // 多选时拖任意一条都是拖**整批**，载荷里是规约过的顶层 id（否则同一棵子树会被搬两次）。
-    const pickedIds = draggingPane?.dragIdsOf(dragged)
+    // 多选时拖任意一条都是拖**整批**：
+    //   收藏夹 → 规约过的顶层 id（否则同一棵子树会被搬两次）；
+    //   窗口栏 → 按窗口顺序排好的那一批 tabId。
+    const archiveIds = draggingPane?.dragIdsOf(dragged)
+    const windowIds = windowDragIdsOf(dragged)
     const single = payloadFromDataset(dragged.dataset)
-    const payload: DragPayload | undefined = pickedIds
-      ? {kind: 'selection', ids: pickedIds}
-      : single
+    const payload: DragPayload | undefined = archiveIds
+      ? {kind: 'selection', ids: archiveIds}
+      : windowIds
+        ? {kind: 'tabs', tabIds: windowIds}
+        : single
     if (!payload) return
 
     dragging = payload
@@ -950,9 +1031,45 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     // 有网址时也写一份 `text/uri-list`，拖到浏览器别处（书签栏、地址栏）也有意义。
     // 只有单条拖动才写：一批里可能有文件夹，而 `text/uri-list` 表达不了。
     const url = dragged.dataset.bookmarkUrl
-    if (!pickedIds && url) event.dataTransfer.setData('text/uri-list', url)
-    dragged.classList.add('is-dragging')
+    if (!archiveIds && !windowIds && url) event.dataTransfer.setData('text/uri-list', url)
+    if (windowIds) {
+      // 窗口栏的多选也把整批标成「正在拖」——只看得到鼠标下那一条在变淡会让人以为只拖了一枚。
+      for (const line of windowPickLines()) {
+        if (pickLineSelected(line)) line.classList.add('is-dragging')
+      }
+    } else {
+      dragged.classList.add('is-dragging')
+    }
   })
+
+  /**
+   * 拖动窗口栏的一行时该带走哪几枚标签（`undefined` = 就拖这一行，走单条 / 分组那条路）。
+   *
+   * 三个条件缺一不可：
+   * 1. 这一行**整行都在选中集里**（点到一行没选中的不会清空选择，也不该搬整批）；
+   * 2. 整批**不止一枚**（一枚时与单拖等价，没必要让载荷变成一个数组）；
+   * 3. 拖的如果是分组头、而选中的**只有这一组**，就返回 `undefined`——那种情况走 `group` 载荷，
+   *    它会连组内**浏览器内部页面**一起搬（界面这份把它们滤掉了）；换成 tabId 清单会把那些漏下，
+   *    分组被拆成两半。混着别的选中项时没有这个待遇（`text/uri-list` 同样表达不了一批）。
+   */
+  function windowDragIdsOf(dragged: HTMLElement): number[] | undefined {
+    if (!windowList.contains(dragged)) return undefined
+    const line = dragged.closest<HTMLElement>('[data-pick-line]')
+    if (!line || !pickLineSelected(line)) return undefined
+
+    const picked = allWindowTabs()
+      .filter((tab) => windowPicked.has(tab.tabId))
+      .map((tab) => tab.tabId)
+    if (picked.length < 2) return undefined
+
+    // 拖分组头且只选中了这一组 → 交给 `group` 载荷（保住内部页面与分组名）。
+    const groupIndex = line.dataset.pickGroup
+    if (groupIndex !== undefined) {
+      const child = windowChildren[Number(groupIndex)]
+      if (child?.kind === 'group' && picked.length === child.tabs.length) return undefined
+    }
+    return picked
+  }
 
   element.addEventListener('dragend', () => {
     dragging = undefined
@@ -1031,6 +1148,14 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       const key = row?.querySelector<HTMLElement>('[data-drag-group]')?.dataset.dragGroup
       return key === String(dragging.index)
     }
+    if (dragging.kind === 'tabs') {
+      // 窗口栏的一批：指着这一批里的任意一行松手 = 原地不动。比的是**载荷里那几枚**
+      // （拖分组头时它可能比选中集小，见 `windowDragIdsOf`）。
+      const payload = dragging
+      const line = target.closest<HTMLElement>('[data-pick-line]')
+      const ids = line ? pickLineTabIds(line) : []
+      return ids.length > 0 && ids.every((id) => payload.tabIds.includes(id))
+    }
     if (dragging.kind === 'selection') {
       // 一批：指着这批里的任意一行松手 = 原地不动。锚点就在这一批里，而这一批是**按块**搬的
       //（相对顺序不变、逐条接在上一条后面）→「在它之前 / 之后」没有一个确定的意思。
@@ -1056,7 +1181,8 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     if (!dragging && !externalUrls) return
     if (target && !target.isWritable()) return
 
-    const fromWindow = dragging?.kind === 'tab' || dragging?.kind === 'group'
+    const fromWindow =
+      dragging?.kind === 'tab' || dragging?.kind === 'group' || dragging?.kind === 'tabs'
     const fromArchive =
       dragging?.kind === 'bookmark' ||
       dragging?.kind === 'folder' ||
@@ -1196,7 +1322,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
     }
 
     // 落到窗口那一栏。
-    if (payload?.kind === 'tab' || payload?.kind === 'group') {
+    if (payload?.kind === 'tab' || payload?.kind === 'group' || payload?.kind === 'tabs') {
       // 拖到标签自己那一行上：也是原地不动（`moveWindowTabs` 里本来就有这条早退，这里只是不再画线）。
       if (onOwnRow) return
       await moveWindowTabs(payload, windowSpot ?? {kind: 'end'})
@@ -1448,7 +1574,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
   }
 
 
-  // ———————————————— 勾选 ————————————————
+  // ———————————————— 点选 ————————————————
 
 
   windowList.addEventListener('click', (event) => {
@@ -1484,7 +1610,12 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       void switchToTab(Number(switchButton.dataset.switchTab))
       return
     }
-    toggleRowFromClick(windowList, event)
+    handleWindowPickClick(event)
+  })
+
+  windowClearPickButton.addEventListener('click', () => {
+    clearWindowPick()
+    syncWindowPicks()
   })
 
   /**
@@ -1597,7 +1728,7 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       await chrome.tabs.remove(ids)
       // 从选中集里剔掉：虽然 `refreshWindowOnly()` 也会剪（那一刻它们已经不在窗口里了），
       // 但这里先剔一次，这一行的话更直白。
-      for (const tabId of tabIds) windowSelected.delete(tabId)
+      for (const tabId of tabIds) windowPicked.delete(tabId)
       // 报**真实枚数**：它可能比界面上看到的多（内部页面不在列表里），
       // 说「已关闭 5 枚」比说「已关闭 4 枚」诚实，也让用户明白分组为什么没了。
       const what = tabIds.length === 1 ? '1 枚标签页' : `${tabIds.length} 枚标签页`
@@ -1615,39 +1746,6 @@ export function createTransferPanel(events: AppEvents): TransferPanel {
       await refreshWindowOnly()
     }
   }
-
-  element.addEventListener('change', (event) => {
-    const input = event.target as HTMLInputElement
-
-    const tabId = input.dataset.windowTab
-    if (tabId !== undefined) {
-      if (input.checked) windowSelected.add(Number(tabId))
-      else windowSelected.delete(Number(tabId))
-      syncWindowStates()
-      return
-    }
-
-    const groupIndex = input.dataset.windowGroup
-    if (groupIndex !== undefined) {
-      const child = windowChildren[Number(groupIndex)]
-      if (child?.kind === 'group') {
-        // 不读原生取反的结果：部分选择时它会变成「全不选」，与惯例相反。
-        const wantAll = nextSelectAll(triState(windowKeptTabs(child.tabs).length, child.tabs.length))
-        for (const tab of child.tabs) {
-          if (wantAll) windowSelected.add(tab.tabId)
-          else windowSelected.delete(tab.tabId)
-        }
-      }
-      syncWindowStates()
-      return
-    }
-
-    // 收藏夹那一栏的勾选（三态、叶子、以及「只有它认识这个输入框」）全在实例里。
-    // 面板只把事件递给**输入框所在的那一栏**——不问它「是不是你的、不是再问另一个」：
-    // `data-archive-item` 两栏都有，第一个实例会把它当成自己的，而它属于另一栏。
-    const owner = input.closest('#left-archive-view') ? leftArchive : archive
-    if (owner.handleChange(input)) return
-  })
 
   // ———————————————— 按钮 ————————————————
 

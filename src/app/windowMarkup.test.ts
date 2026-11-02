@@ -92,13 +92,14 @@ test('statusSlotMarkup：**活动标签不给「释放」**（它就在屏幕上
   assert.equal(statusSlotMarkup(tab({status: 'complete', active: true})), '')
 })
 
-test('tabRowMarkup：带上拖拽落点需要的属性，以及勾选框与完整网址', () => {
+test('tabRowMarkup：带上拖拽落点与多选需要的属性，以及完整网址', () => {
   const html = tabRowMarkup(tab({tabId: 12, index: 3, groupId: 100, url: 'https://a.test/x'}), undefined)
   assert.match(html, /data-tab-index="3"/)
   assert.match(html, /data-tab-group="100"/)
   assert.match(html, /data-drag-tab="12"/)
-  assert.match(html, /data-window-tab="12"/)
-  assert.match(html, /data-row/)
+  assert.match(html, /data-pick-line="t12"/)
+  assert.match(html, /data-pick-tab="12"/)
+  assert.equal(count(html, 'type="checkbox"'), 0)
   // 两处原样：`title` 属性与副文案。favicon 那一处是百分号编码的，不算。
   assert.equal(count(html, 'https://a.test/x'), 2)
   assert.match(html, /item__meta--url/)
@@ -181,7 +182,12 @@ test('groupRowMarkup：拖拽下标用**分组在列表里的下标**，不是�
   assert.match(html, /data-drag-group="3"/)
   assert.match(html, /data-group-id="100"/)
   assert.match(html, /2 个标签/)
-  assert.equal(count(html, 'data-window-tab'), 2)
+  // 分组行自己 + 组内两枚标签 = 三条可选的行；勾选框已经没有了。
+  assert.equal(count(html, 'data-pick-line'), 3)
+  // 键优先用 groupId（稳定），另带一份列表下标给「这一组是哪几枚标签」。
+  assert.match(html, /data-pick-line="g100"/)
+  assert.match(html, /data-pick-group="3"/)
+  assert.equal(count(html, 'type="checkbox"'), 0)
 })
 
 test('groupRowMarkup：确认态只落在命中的那一个上（标签的 t<id> 不会连带分组）', () => {

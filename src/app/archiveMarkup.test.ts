@@ -23,16 +23,15 @@ function nodeRow(
 }
 
 const ctx = (over: Partial<Parameters<typeof archiveRowMarkup>[1]> = {}) => ({
-  selectable: true,
   canEdit: true,
   ...over
 })
 
 const count = (html: string, needle: string): number => html.split(needle).length - 1
 
-test('书签行：给勾选框，并带上算拖拽落点要用的三样属性', () => {
+test('书签行：不再有勾选框，并带上算拖拽落点要用的三样属性', () => {
   const html = archiveRowMarkup(nodeRow(bookmark('c'), 0, 2), ctx())
-  assert.equal(count(html, 'data-archive-item="c"'), 1)
+  assert.equal(count(html, 'type="checkbox"'), 0)
   assert.match(html, /data-parent-id="root"/)
   assert.match(html, /data-sibling-index="2"/)
   assert.match(html, /data-node-id="c"/)
@@ -78,34 +77,25 @@ test('文件夹行：展开态写在 class 与 aria-expanded 上，按钮提示�
   assert.match(closed, /aria-expanded="false"/)
 })
 
-test('勾选框只给「会被打开」的行：更深层的行不给（勾了却不开是假话）', () => {
-  // 书签：depth ≤ 1 给；文件夹：只有 depth 0 给（而且里面得真有可打开的书签）。
+test('三类行都不再有勾选框（多选画在整行上）', () => {
   const withBookmark = folder('f', [bookmark('f1')])
-  assert.equal(count(archiveRowMarkup(nodeRow(bookmark('a'), 0), ctx()), 'data-archive-item'), 1)
-  assert.equal(count(archiveRowMarkup(nodeRow(bookmark('a'), 1), ctx()), 'data-archive-item'), 1)
-  assert.equal(count(archiveRowMarkup(nodeRow(bookmark('a'), 2), ctx()), 'data-archive-item'), 0)
-  assert.equal(count(archiveRowMarkup(nodeRow(withBookmark, 0), ctx()), 'data-archive-item'), 1)
-  assert.equal(count(archiveRowMarkup(nodeRow(withBookmark, 1), ctx()), 'data-archive-item'), 0)
+  const rows = [
+    archiveRowMarkup(nodeRow(bookmark('a'), 0), ctx()),
+    archiveRowMarkup(nodeRow(bookmark('a'), 2), ctx()),
+    archiveRowMarkup(nodeRow(withBookmark, 0), ctx()),
+    archiveRowMarkup(nodeRow(folder('f')), ctx()),
+    archiveRowMarkup(nodeRow(folder('f', [folder('sub', [bookmark('s1')])])), ctx())
+  ]
+  for (const html of rows) {
+    assert.equal(count(html, 'type="checkbox"'), 0)
+    assert.equal(count(html, 'marker__slot'), 0, '占位也一起删了（行首不再留一列）')
+  }
 })
 
-test('空文件夹的勾选框不给（勾选框会当场弹回未勾选，看着像「点了没反应」）', () => {
-  const empty = archiveRowMarkup(nodeRow(folder('f')), ctx())
-  assert.equal(count(empty, 'data-archive-item'), 0)
-  assert.equal(count(empty, 'marker__slot'), 1, '要占位，否则整列左移一格')
-})
-
-test('只装着子文件夹的文件夹也不给勾选框（这一层一枚可打开的都没有）', () => {
-  const nested = archiveRowMarkup(nodeRow(folder('f', [folder('sub', [bookmark('s1')])])), ctx())
-  assert.equal(count(nested, 'data-archive-item'), 0)
-})
-
-test('内部页面不参与勾选：书签行不给勾选框，文件夹副文案也不算它', () => {
+test('内部页面不影响行长相，也不进文件夹副文案', () => {
   const chromePage: BookmarkNode = {id: 'c', title: 'discards', url: 'chrome://discards/'}
   const leaf = archiveRowMarkup(nodeRow(chromePage), ctx())
-  assert.equal(count(leaf, 'data-archive-item'), 0)
-  assert.equal(count(leaf, 'marker__slot'), 1)
-
-  assert.equal(count(archiveRowMarkup(nodeRow(folder('f', [chromePage])), ctx()), 'data-archive-item'), 0)
+  assert.equal(count(leaf, 'type="checkbox"'), 0)
   // 「N 个书签」只算会被打开的：1 枚可打开 + 1 枚内部页面 → 写 1。
   assert.match(archiveRowMarkup(nodeRow(folder('f', [chromePage, bookmark('b')])), ctx()), /1 个书签/)
 })
@@ -118,22 +108,10 @@ test('书签树根的子级不能拖（Chrome 的 move 会拒，不给拖比拖�
   assert.match(archiveRowMarkup(nodeRow(folder('f')), ctx()), /data-drag-folder="f"/)
 })
 
-test('没有勾选框的行用等宽占位（不给就整列左移一格）', () => {
-  const deep = archiveRowMarkup(nodeRow(bookmark('a'), 2), ctx())
-  assert.equal(count(deep, 'marker__slot'), 1)
-})
-
-test('整栏都不要勾选框时，连占位也不给（不白留一列）', () => {
-  const html = archiveRowMarkup(nodeRow(bookmark('a')), ctx({selectable: false}))
-  assert.equal(count(html, 'data-archive-item'), 0)
-  assert.equal(count(html, 'marker__slot'), 0)
-})
-
-test('分隔线：没有勾选框（它不是书签），但有占位与「转成另一种」按钮', () => {
+test('分隔线：没有勾选框（它不是书签），但有「转成另一种」按钮', () => {
   const sep: BookmarkNode = {id: 's', title: '', url: 'https://separator.mayastudios.com/index.php'}
   const html = archiveRowMarkup(nodeRow(sep), ctx())
-  assert.equal(count(html, 'data-archive-item'), 0)
-  assert.equal(count(html, 'marker__slot'), 1)
+  assert.equal(count(html, 'type="checkbox"'), 0)
   assert.match(html, /data-swap-separator="s"/)
   assert.match(html, /转间隔/) // 竖线 → 横线的目标
 })
@@ -181,7 +159,7 @@ test('空文件夹提示行：只有深度，没有任何可拖拽 / 可勾选�
   const html = archiveRowMarkup({kind: 'empty', depth: 2}, ctx())
   assert.match(html, /--depth:2/)
   assert.equal(count(html, 'data-drop-row'), 0)
-  assert.equal(count(html, 'data-archive-item'), 0)
+  assert.equal(count(html, 'type="checkbox"'), 0)
 })
 
 test('pickCls 只加在行首的 class 上（多选框的高亮段靠它拼）', () => {

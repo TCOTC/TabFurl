@@ -59,7 +59,7 @@ test('内部页面不进「会被打开」的名单（按钮上写 5 枚、实�
   assert.deepEqual(archiveBookmarkIds(children), ['a', 'f1'])
 })
 
-test('一个文件夹里只有内部页面时，它没有「会被打开」的书签（勾选框不能给）', () => {
+test('一个文件夹里只有内部页面时，它没有「会被打开」的书签（不该被点选）', () => {
   assert.deepEqual(folderBookmarkIds(folder('f', [internal('y')])), [])
   assert.deepEqual(folderBookmarkIds(folder('f', [])), [])
 })

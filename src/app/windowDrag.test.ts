@@ -69,6 +69,7 @@ test('payloadNodeId：只有收藏夹那三类有节点 id', () => {
   assert.equal(payloadNodeId({kind: 'folder', id: 'f'}), 'f')
   assert.equal(payloadNodeId({kind: 'separator', id: 's'}), 's')
   assert.equal(payloadNodeId({kind: 'tab', tabId: 1}), undefined)
+  assert.equal(payloadNodeId({kind: 'tabs', tabIds: [1, 2]}), undefined)
   assert.equal(payloadNodeId({kind: 'selection', ids: ['f']}), undefined)
   assert.equal(payloadNodeId(undefined), undefined)
 })
@@ -88,6 +89,31 @@ test('childrenFor：从分组里拖**单枚**标签出来，只写这一枚（�
   assert.equal(first.kind === 'tab' ? first.tab.tabId : 0, 3)
 })
 
+test('childrenFor：多选里**整组都选中**的分组照旧写成文件夹（分组名不能丢）', () => {
+  const children = childrenFor({kind: 'tabs', tabIds: [2, 3]}, sampleChildren())
+  assert.equal(children.length, 1)
+  const first = at(children, 0)
+  assert.equal(first.kind, 'group')
+  assert.equal(first.kind === 'group' ? first.name : '', '工作')
+})
+
+test('childrenFor：多选只碰到分组里的一部分时，那几枚当散装书签写（不把整组搬过去）', () => {
+  const children = childrenFor({kind: 'tabs', tabIds: [3]}, sampleChildren())
+  assert.equal(children.length, 1)
+  const first = at(children, 0)
+  assert.equal(first.kind, 'tab')
+  assert.equal(first.kind === 'tab' ? first.tab.tabId : 0, 3)
+})
+
+test('childrenFor：多选跨组时按**窗口顺序**输出，整组仍然是整组', () => {
+  // 选中 t1（散装）、整组 (t2,t3)、t4：顺序即列表顺序。
+  const children = childrenFor({kind: 'tabs', tabIds: [1, 2, 3, 4]}, sampleChildren())
+  assert.deepEqual(
+    children.map((child) => (child.kind === 'tab' ? `t${child.tab.tabId}` : `g:${child.name}`)),
+    ['t1', 'g:工作', 't4']
+  )
+})
+
 test('childrenFor：找不到那一条时返回空（调用方据此不改任何东西）', () => {
   assert.deepEqual(childrenFor({kind: 'tab', tabId: 99}, sampleChildren()), [])
   assert.deepEqual(childrenFor({kind: 'group', index: 9}, sampleChildren()), [])
@@ -97,6 +123,10 @@ test('childrenFor：找不到那一条时返回空（调用方据此不改任何
 test('windowTabsFor：分组给出组内**全部**标签（算插入位置要整组）', () => {
   const tabs = windowTabsFor({kind: 'group', index: 1}, sampleChildren())
   assert.deepEqual(tabs.map((item) => item.tabId), [2, 3])
+})
+
+test('windowTabsFor：多选给出那一批（组内外都算），顺序按窗口', () => {
+  assert.deepEqual(windowTabsFor({kind: 'tabs', tabIds: [3, 1, 4]}, sampleChildren()).map((t) => t.tabId), [1, 3, 4])
 })
 
 test('windowTabsFor：单枚标签在组内也能找出来', () => {

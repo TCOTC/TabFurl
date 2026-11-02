@@ -15,7 +15,7 @@ export function archiveBookmarkIds(children: readonly BookmarkNode[]): string[] 
 
 /**
  * 一个子文件夹里「会被打开」的书签 id。
- * 记号与内部页面都不在内（它们没有勾选框，也不参与计数）。
+ * 记号与内部页面都不在内（它们不参与「打开」那一档的点选，也不参与计数）。
  */
 export function folderBookmarkIds(folder: BookmarkNode): string[] {
   return openableBookmarks(folder.children ?? []).map((bookmark) => bookmark.id)

@@ -42,7 +42,7 @@
    * 中栏那几个方向按钮的最小宽度。
    *
    * 原因很具体：按钮文字带计数（`存过去 (123)`），位数一变文字就变长，而这几个按钮恰好出现在
-   * 勾选的瞬间 → 不固定宽度就每点一下抽动一下。只需**装得下三位数的最长文案**（实测 88px，留余量取 96）。
+   * 选中的瞬间 → 不固定宽度就每点一下抽动一下。只需**装得下三位数的最长文案**（实测 88px，留余量取 96）。
    * 注意不是把数字包进定宽盒子（那样一位数会被推到盒子右侧，看着是 `打开 (  3)`），是按钮整体够宽。
    */
   --move-btn-min: 96px;
@@ -56,11 +56,7 @@
    * 缩进一大就把内容压成一条缝。12px 下 7 层也只吃 84px。
    */
   --tree-indent: var(--space-4);
-  /*
-   * 行条目的横向内边距。
-   * 抽成变量是因为**列表外面的全选框要跟列表里面的勾选框对齐**：两者左边距都从它算，
-   * 不可能出现「外面的差几像素」那种看起来像没对齐的效果。
-   */
+  /* 行条目的横向内边距。列表上方那一行与列表里的行都从它算，两处左缘才对得齐。 */
   --item-pad-x: var(--space-3);
   /* 行条目的上下内边距。与横向一样抽成变量：行的总高由它算出来。 */
   --item-pad-y: var(--space-2);
@@ -155,10 +151,9 @@ body {
 }
 
 /*
- * 勾选框：锁死尺寸与外边距。
- * 原生勾选框的尺寸随平台与 DPI 变（Windows / macOS / 高 DPI 各不相同），
- * 而列表的子级缩进是拿它算的；不锁死，父级与子级的勾选框就会差一两个像素，
- * 看着像没对齐。
+ * 复选框（只剩「打开不建分组」这一枚）：锁死尺寸与外边距。
+ * 原生复选框的尺寸随平台与 DPI 变（Windows / macOS / 高 DPI 各不相同），
+ * 不锁死的话它与旁边那行字在换平台 / 缩放时就会差一两个像素。
  */
 input[type='checkbox'] {
   flex: 0 0 auto;
@@ -264,34 +259,6 @@ input[type='checkbox'] {
 
 .row--compact {
   gap: var(--space-2);
-}
-
-/*
- * 顶层三态勾选框：原生 checkbox 的 indeterminate 就是第三种状态。
- *
- * 左边距 = `--item-pad-x`（与 `.item` 同一个值）**再加列表框的描边宽度**：
- * 列表在带描边的 `.box` 里面，而这个勾选框在框外面，不把那一像素算进去就会差一格。
- * 用 calc 而不是写死 9px：描边或内边距将来变了，两者仍会一起变（实测不改就是差 1px）。
- */
-.select-all {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) 0 var(--space-1)
-    calc(var(--item-pad-x) + var(--border-width));
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-
-.select-all:hover {
-  color: var(--text);
-}
-
-/* 没有可勾的项：整块变淡且不能点，但仍占位，免得版面抽动。 */
-.select-all:has(input:disabled) {
-  opacity: 0.5;
-  cursor: default;
 }
 
 .badge {

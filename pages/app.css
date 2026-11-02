@@ -482,36 +482,40 @@
 }
 
 /*
- * 多选（Ctrl / Shift，只在「两栏都是收藏夹」那一档）。
+ * 多选（Ctrl / Shift，三块列表共用一套）。
  *
  * 一**段**连续的行共用一个框：上下边只画在段的首尾（`.is-picked-start` / `-end`），左右边每行都画。
  * 不摆绝对定位的框是因为行是等高的扁平列表，逐行拼在视觉上等价，而**虚拟滚动下不用关心视口裁剪**。
  * 也因此**不会嵌套**：选中一个展开的文件夹时它的子项已归到父那段里（见 `pickOwnerOf`）。
  * 用 `box-shadow` 不用 `border`：后者会把行撑高（行高是算出来的定值）。四条规则是因为盒阴影整体覆盖，
  * 要按「有没有上/下边」拼出四种组合。
+ *
+ * 选择器挂在 `.is-picking` 下面而不是某个列表的 id 上：窗口栏与两个收藏夹栏都要用同一套，
+ * 而收藏夹的行是扁平 `li`、窗口栏的分组行是嵌在 `.group` 里的 `.group__head`
+ * → 不能再写 `> li`（那样窗口栏与组内标签都匹配不到）。
  */
-.list--archive > li.is-picked {
+.is-picking .is-picked {
   background: var(--accent-soft);
   box-shadow:
     inset 2px 0 0 var(--accent),
     inset -2px 0 0 var(--accent);
 }
 
-.list--archive > li.is-picked.is-picked-start {
+.is-picking .is-picked.is-picked-start {
   box-shadow:
     inset 0 2px 0 var(--accent),
     inset 2px 0 0 var(--accent),
     inset -2px 0 0 var(--accent);
 }
 
-.list--archive > li.is-picked.is-picked-end {
+.is-picking .is-picked.is-picked-end {
   box-shadow:
     inset 2px 0 0 var(--accent),
     inset -2px 0 0 var(--accent),
     inset 0 -2px 0 var(--accent);
 }
 
-.list--archive > li.is-picked.is-picked-start.is-picked-end {
+.is-picking .is-picked.is-picked-start.is-picked-end {
   box-shadow:
     inset 0 2px 0 var(--accent),
     inset 2px 0 0 var(--accent),
@@ -520,9 +524,10 @@
 }
 
 /*
- * 能点选的那一档给个手型（不然尤其窄栏里没人知道这些行可以点）。只加在行上，行内按钮自己还有 pointer。
+ * 能点选的行给个手型（不然尤其窄栏里没人知道这些行可以点）。只加在行上，行内按钮自己还有 pointer。
  */
-.list--archive.is-picking > li[data-node-id] {
+.is-picking [data-pick-line],
+.is-picking li[data-node-id] {
   cursor: pointer;
 }
 
@@ -643,16 +648,7 @@
   cursor: grabbing;
 }
 
-/*
- * 勾选框位置的占位。记号行没有勾选框，但竖线得落在与书签行网站图标**同一列**上
- *——不占位就会整排左移一格，看上去像没对齐。
- */
-.marker__slot {
-  flex: 0 0 auto;
-  width: 14px;
-}
-
-/* 分隔线：一枚竖线，占位宽度与网站图标一致，所以它落在**同一列的中心**上。 */
+/* 分隔线：一枚竖线，与书签行的网站图标同一个尺寸，所以它落在**同一列的中心**上。 */
 .marker__vert {
   flex: 0 0 auto;
   width: var(--row-inner);

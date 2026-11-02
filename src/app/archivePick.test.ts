@@ -1,7 +1,15 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {pickOwnerOf, planPickedMove, rangeBetween, topLevelPicked} from './archivePick'
-import {flattenArchive} from './archiveRows'
+import {
+  isOpenableRow,
+  isWithinPick,
+  pickOwnerOf,
+  planPickedMove,
+  rangeBetween,
+  splitPicked,
+  topLevelPicked
+} from './archivePick'
+import {flattenArchive, type ArchiveNodeRow} from './archiveRows'
 import type {BookmarkNode} from '../shared/types'
 
 /**
@@ -46,6 +54,61 @@ test('topLevelPicked：彼此无关的几条都留着', () => {
 
 test('topLevelPicked：空集合返回空', () => {
   assert.deepEqual(topLevelPicked(new Set(), parentIndex(sampleTree())), [])
+})
+
+const nodeRow = (node: BookmarkNode, depth = 0): ArchiveNodeRow => ({
+  kind: 'node',
+  node,
+  parentId: 'root',
+  depth,
+  siblingIndex: 0,
+  expanded: false
+})
+
+test('isOpenableRow：只有「打开」范围内的行能点选（书签 depth ≤ 1、文件夹 depth 0 且有内容）', () => {
+  const withBookmark = folder('f', [bookmark('f1')])
+  assert.equal(isOpenableRow(nodeRow(bookmark('a'), 0)), true)
+  assert.equal(isOpenableRow(nodeRow(bookmark('a'), 1)), true)
+  assert.equal(isOpenableRow(nodeRow(bookmark('a'), 2)), false)
+  assert.equal(isOpenableRow(nodeRow(withBookmark, 0)), true)
+  assert.equal(isOpenableRow(nodeRow(withBookmark, 1)), false)
+  assert.equal(isOpenableRow(nodeRow(folder('empty'), 0)), false)
+})
+
+test('isOpenableRow：内部页面与记号都不能点选（点了也打不开）', () => {
+  const internal: BookmarkNode = {id: 'i', title: 'discards', url: 'chrome://discards/'}
+  const separator: BookmarkNode = {
+    id: 's',
+    title: '',
+    url: 'https://separator.mayastudios.com/index.php'
+  }
+  assert.equal(isOpenableRow(nodeRow(internal)), false)
+  assert.equal(isOpenableRow(nodeRow(separator)), false)
+})
+
+test('isWithinPick：点选文件夹等于选中整棵子树，后代不必自己再进集合', () => {
+  const parents = parentIndex(sampleTree())
+  const picked = new Set(['a'])
+  assert.equal(isWithinPick('a', picked, parents), true)
+  assert.equal(isWithinPick('a1', picked, parents), true)
+  assert.equal(isWithinPick('a2x', picked, parents), true)
+  assert.equal(isWithinPick('b', picked, parents), false)
+})
+
+test('splitPicked：同一份名单分成「会被打开」与「不会被打开」，两半加起来就是全部', () => {
+  const parents = parentIndex(sampleTree())
+  const ids = ['a1', 'a2x', 'b']
+  const {picked, excluded} = splitPicked(ids, new Set(['a2']), parents)
+  assert.deepEqual(picked, ['a2x'])
+  assert.deepEqual(excluded, ['a1', 'b'])
+})
+
+test('splitPicked：一个都没选时整份名单都排除（按钮置灰只是界面层，这里口径也不能反）', () => {
+  const ids = ['a1', 'a2x', 'b']
+  assert.deepEqual(splitPicked(ids, new Set(), parentIndex(sampleTree())), {
+    picked: [],
+    excluded: ids
+  })
 })
 
 test('pickOwnerOf：文件夹被选中时，它的后代行归到它名下（共用一个框）', () => {

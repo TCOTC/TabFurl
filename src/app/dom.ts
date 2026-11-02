@@ -69,91 +69,21 @@ export function createPanelElement(id: string): HTMLElement {
   return element
 }
 
-/** 勾选的三种状态。 */
-export type TriState = 'all' | 'some' | 'none'
-
-/**
- * 由「保留数 / 总数」推出三态。
- *
- * `total` 为 0（没有可勾的项）时一律算 `none`：此时勾选框应当不可用，而不是显示成「全选」。
- */
-export function triState(kept: number, total: number): TriState {
-  if (total <= 0 || kept <= 0) return 'none'
-  return kept >= total ? 'all' : 'some'
-}
-
-/**
- * 点一下三态勾选框该变成什么。
- *
- * 「全选」→ 全不选（清空）；「部分」「全不选」→ 全选。
- * 这是 Windows 资源管理器一类界面的惯例：部分选择时点击的意图是「干脆全要」。
- *
- * 之所以不读 `input.checked` 的取反结果：原生 indeterminate 被点击时只是把 `checked`
- * 取反，在「部分」状态下（checked 为真）会变成「全不选」，与惯例相反。
- */
-export function nextSelectAll(state: TriState): boolean {
-  return state !== 'all'
-}
-
-/** 顶层三态勾选框。 */
-export interface SelectAllControl {
-  readonly input: HTMLInputElement
-  /** 用「保留数 / 总数」刷新三态与文案；`filtered` 表示列表正处于搜索过滤状态。 */
-  update(kept: number, total: number, filtered?: boolean): void
-}
-
-/**
- * 建一个顶层三态勾选框，追加到 `host` 里。
- *
- * 原生 `<input type="checkbox">` 就能表示三态——`indeterminate` 是 **DOM 属性**，
- * 所以不能写进 `innerHTML`，必须建好元素后用 JS 设置（这也常被误认为「原生不支持」）。
- */
-export function createSelectAll(
-  host: HTMLElement,
-  options: {
-    /** 由保留数、总数、以及「列表是否在过滤中」生成文案。 */
-    describe(kept: number, total: number, filtered: boolean): string
-    /** 用户点击后的意图：true = 全选，false = 全不选。 */
-    onChange(selectAll: boolean): void
-  }
-): SelectAllControl {
-  const label = document.createElement('label')
-  label.className = 'select-all'
-
-  const input = document.createElement('input')
-  input.type = 'checkbox'
-
-  const text = document.createElement('span')
-
-  label.append(input, text)
-  host.append(label)
-
-  let state: TriState = 'none'
-
-  input.addEventListener('change', () => {
-    options.onChange(nextSelectAll(state))
-  })
-
-  return {
-    input,
-    update(kept: number, total: number, filtered = false): void {
-      state = triState(kept, total)
-      input.checked = state !== 'none'
-      input.indeterminate = state === 'some'
-      input.disabled = total <= 0
-      text.textContent = options.describe(kept, total, filtered)
-    }
-  }
-}
-
 /**
  * 拖动载荷来源。用自定义类型而非 `text/plain`，与「从网页拖来的链接」（只带 `text/uri-list`）分开。
- * `selection` = 一次拖好几条（只在收藏夹栏出现，那一档没有勾选框）；id 是**规约过的顶层项**，
+ * `selection` = 一次拖好几条收藏夹条目；id 是**规约过的顶层项**，
  * 否则同一个文件夹会被搬两次（子树已经跟着走了）。
  */
 export type DragPayload =
   | {kind: 'tab'; tabId: number}
   | {kind: 'group'; index: number}
+  /**
+   * 多选的一批标签（窗口栏）。`tabIds` 按**窗口顺序**给，搬动时就用这个顺序。
+   *
+   * 与 `selection`（收藏夹节点 id）分开：两者 id 混不到一起，而 `windowTabsFor()` /
+   * `childrenFor()` 都要按 tabId 去 `windowChildren` 里找。
+   */
+  | {kind: 'tabs'; tabIds: number[]}
   | {kind: 'bookmark'; id: string}
   | {kind: 'folder'; id: string}
   | {kind: 'separator'; id: string}
@@ -197,15 +127,4 @@ export function markEndDrop(list: HTMLElement, pane: HTMLElement): void {
   else pane.classList.add('is-drop-active')
 }
 
-/**
- * 点整行 = 点它的勾选框：**替用户点那个复选框**，而不是另写勾选逻辑
- *（三态意图判定只在 `change` 处理器里写一次，再写一份必然分叉）。
- * 勾选框、行内按钮、重命名输入框各有自己的语义，落在它们身上不算「点行」。
- */
-export function toggleRowFromClick(list: HTMLElement, event: MouseEvent): void {
-  const target = event.target as HTMLElement
-  if (target.closest('input, button, a')) return
-  const row = target.closest<HTMLElement>('[data-row]')
-  if (!row || !list.contains(row)) return
-  row.querySelector<HTMLInputElement>('input[type=checkbox]')?.click()
-}
+

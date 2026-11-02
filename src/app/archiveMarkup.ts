@@ -1,4 +1,4 @@
-import {isOpenableBookmark, openableBookmarks} from '../shared/bookmarks'
+import {openableBookmarks} from '../shared/bookmarks'
 import {escapeHtml, faviconMarkup} from '../shared/tile'
 import type {BookmarkNode} from '../shared/types'
 import {
@@ -18,8 +18,6 @@ import type {ArchiveNodeRow, ArchiveRow} from './archiveRows'
  * 它们不碰 DOM，只把数据拼成字符串。
  */
 export interface MarkupContext {
-  /** 这一栏要不要显示勾选框（两栏都是收藏夹时不要，见 `ArchivePane.setSelectable`）。 */
-  selectable: boolean
   /**
    * 当前这一层能不能编辑（改名 / 删除）。与 `canWrite()` 是**同一个判据**（书签树的根）：
    * 根的子级是 Chrome 的固定文件夹，两个动作都会被浏览器拒绝 → 那些行只给「进入」。
@@ -29,45 +27,6 @@ export interface MarkupContext {
   renamingId?: string
   /** 正在等第二次确认删除的节点 id。 */
   pendingDeleteId?: string
-}
-
-/** 没有勾选框的行用它占位：`.marker__slot` 与复选框实测都是 14px，不给就会整列左移一格。 */
-const NO_BOX_SLOT = '<span class="marker__slot" aria-hidden="true"></span>'
-
-/**
- * 这一行该不该有勾选框。**判据 = 这一行到底会不会被打开**，与 `archiveBookmarkIds()` 同口径。
- * 1. 在「打开」范围内：书签 depth ≤ 1、文件夹只有当前层直属（depth 0）；
- * 2. 是能打开的网址（内部页面与 `tabs.create` 无缘）；
- * 3. `openableCount > 0`——空层、只装子文件夹、只装内部页面的文件夹，
- *    勾上会当场弹回未勾选（`triState(0, 0)` 是 `none`），看着就是「点了没反应」。
- */
-function selectableAt(
-  depth: number,
-  isFolder: boolean,
-  selectable: boolean,
-  openableCount: number
-): boolean {
-  if (!selectable || openableCount <= 0) return false
-  return isFolder ? depth === 0 : depth <= 1
-}
-
-/**
- * 行首那一格。三种情况：
- * - **给勾选框**：这一行在「打开」范围内且真勾得上东西。分隔线永远不给（传 `undefined`）。
- * - **给等宽占位**：同一清单里别的行有勾选框，不给占位就差一格（`NO_BOX_SLOT`）。
- * - **什么都不给**：整栏都不要勾选框时（再留一列空白就只是让文字白白右移 14px）。
- */
-function boxSlot(
-  id: string | undefined,
-  depth: number,
-  isFolder: boolean,
-  ctx: MarkupContext,
-  openableCount: number
-): string {
-  if (id !== undefined && selectableAt(depth, isFolder, ctx.selectable, openableCount)) {
-    return `<input type="checkbox" data-archive-item="${escapeHtml(id)}" />`
-  }
-  return ctx.selectable ? NO_BOX_SLOT : ''
 }
 
 /** 一条行的 HTML（三类行 + 空文件夹提示，都在这里分派）。 */
@@ -82,7 +41,7 @@ export function archiveRowMarkup(row: ArchiveRow, ctx: MarkupContext, pickCls = 
  * 一条书签行。分隔线占位书签也画成横线，同样给「修改 / 删除」。
  *
  * 两种行**都能拖**：分隔线虽然只是个记号，但用户摆它的位置本来就有意义。
- * 分隔线没有勾选框（不是书签，见 `isRealBookmark`）；**内部页面也没有**——勾上也不会开。
+ * 分隔线不会被打开（不是书签，见 `isRealBookmark`）；**内部页面也不会**。
  * 书签树根那三个固定文件夹的子级不能拖（见 `folderRow`）。
  *
  * 网址**完整显示**（不截成主机名）：条目本来就靠网址区分同名页面，小一号字 + 一行够装下绝大多数。
@@ -111,7 +70,6 @@ function bookmarkRow(row: ArchiveNodeRow, ctx: MarkupContext, pickCls: string): 
     return `
       <li class="marker marker--${kind}${pickCls}" draggable="true" data-drop-row="separator"
           ${boxAttrs} ${nodeAttr} data-drag-separator="${escapeHtml(bookmark.id)}">
-        ${boxSlot(undefined, row.depth, false, ctx, 0)}
         ${
           kind === 'sep' ? VERT_LINE_ICON : rules
         }
@@ -143,14 +101,11 @@ function bookmarkRow(row: ArchiveNodeRow, ctx: MarkupContext, pickCls: string): 
 
   const url = bookmark.url ?? ''
   const host = hostnameOf(url) ?? url
-  // 内部页面给「打开」也弹不出东西（见 `openBookmarkNow`）：它没有勾选框，只占一格。
-  const boxable = isOpenableBookmark(bookmark)
 
   return `
-    <li class="item leaf${pickCls}" data-row data-drop-row="bookmark" draggable="true"
+    <li class="item leaf${pickCls}" data-drop-row="bookmark" draggable="true"
         ${boxAttrs} ${nodeAttr} data-drag-bookmark="${escapeHtml(bookmark.id)}"
         data-bookmark-url="${escapeHtml(url)}">
-      ${boxSlot(boxable ? bookmark.id : undefined, row.depth, false, ctx, boxable ? 1 : 0)}
       ${faviconMarkup(url, FAVICON_BASE)}
       <span class="item__main">
         <span class="item__title">${escapeHtml(bookmark.title.trim() || host)}</span>
@@ -171,7 +126,7 @@ function bookmarkRow(row: ArchiveNodeRow, ctx: MarkupContext, pickCls: string): 
  * - **点左侧那枚方块 = 就地展开**：子级推开在下面、不换页。
  *
  * 两个计数都保持**直属**；「N 个书签」只算**会被打开**的书签（不含记号、不含内部页面）。
- * 这样这一行上的三个数字同一口径（勾选框只勾这层、「打开（N）」也只算这层）。**展开也不改计数**。
+ * 这样这一行上的三个数字同一口径（「打开 (N)」只算这层）。**展开也不改计数**。
  *
  * 根那一层（`ctx.canEdit` 为假）的子级是 Chrome 的固定文件夹：改名 / 删除会被拒，
  * 所以那两个按钮不给，**它自己也不能被拖**（`move` 同样拒 `kModifySpecialError`）。
@@ -202,11 +157,10 @@ function folderRow(row: ArchiveNodeRow, ctx: MarkupContext, pickCls: string): st
   const actions = isRenaming ? '' : `<span class="tree__actions">${enter}${edit}</span>`
 
   return `
-    <li class="item group__head${expanded ? ' is-expanded' : ''}${pickCls}" data-row data-drop-row="folder"
+    <li class="item group__head${expanded ? ' is-expanded' : ''}${pickCls}" data-drop-row="folder"
         data-parent-id="${escapeHtml(row.parentId)}" data-sibling-index="${row.siblingIndex}"
         style="--depth:${row.depth}" data-node-id="${escapeHtml(folder.id)}"
         data-drop-folder="${escapeHtml(folder.id)}" data-enter-folder="${escapeHtml(folder.id)}">
-      ${boxSlot(folder.id, row.depth, true, ctx, bookmarkCount)}
       <button type="button" class="folder-tile" data-toggle-folder="${escapeHtml(folder.id)}"
               aria-expanded="${expanded}"
               title="${expanded ? '收起这一层' : '就地展开这一层（不换页）'}"
