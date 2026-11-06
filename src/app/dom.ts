@@ -80,10 +80,13 @@ export type DragPayload =
   /**
    * 多选的一批标签（窗口栏）。`tabIds` 按**窗口顺序**给，搬动时就用这个顺序。
    *
+   * `groupKeys` 是这一批里**整组被选中**的分组的键（`groupPickKey()`）。只有它里面的分组
+   * 存进收藏夹时才写成文件夹；组内标签**逐枚选中**时即使一枚不落也不建文件夹。
+   *
    * 与 `selection`（收藏夹节点 id）分开：两者 id 混不到一起，而 `windowTabsFor()` /
    * `childrenFor()` 都要按 tabId 去 `windowChildren` 里找。
    */
-  | {kind: 'tabs'; tabIds: number[]}
+  | {kind: 'tabs'; tabIds: number[]; groupKeys?: string[]}
   | {kind: 'bookmark'; id: string}
   | {kind: 'folder'; id: string}
   | {kind: 'separator'; id: string}

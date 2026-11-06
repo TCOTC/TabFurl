@@ -11,6 +11,7 @@ const {
   closeKey,
   closeSlotMarkup,
   countLabel,
+  groupPickKey,
   groupRowMarkup,
   parseCloseKey,
   pendingCloseKey,
@@ -188,6 +189,13 @@ test('groupRowMarkup：拖拽下标用**分组在列表里的下标**，不是�
   assert.match(html, /data-pick-line="g100"/)
   assert.match(html, /data-pick-group="3"/)
   assert.equal(count(html, 'type="checkbox"'), 0)
+})
+
+test('groupPickKey：优先用 groupId（列表下标会随着别的分组变化漂移）', () => {
+  const withId = {kind: 'group', name: '工作', tabs: [tab({groupId: 100})]} as const
+  assert.equal(groupPickKey(withId, 3), 'g100')
+  const noId = {kind: 'group', name: '工作', tabs: [tab()]} as const
+  assert.equal(groupPickKey(noId, 3), 'g3')
 })
 
 test('groupRowMarkup：确认态只落在命中的那一个上（标签的 t<id> 不会连带分组）', () => {

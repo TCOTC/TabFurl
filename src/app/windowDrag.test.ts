@@ -25,6 +25,7 @@ const {
   moveIndexFor,
   payloadFromDataset,
   payloadNodeId,
+  pickWindowChildren,
   windowTabsFor
 } = await import('./windowDrag')
 
@@ -89,12 +90,23 @@ test('childrenFor：从分组里拖**单枚**标签出来，只写这一枚（�
   assert.equal(first.kind === 'tab' ? first.tab.tabId : 0, 3)
 })
 
-test('childrenFor：多选里**整组都选中**的分组照旧写成文件夹（分组名不能丢）', () => {
-  const children = childrenFor({kind: 'tabs', tabIds: [2, 3]}, sampleChildren())
+test('childrenFor：多选里**整组被选中**的分组写成文件夹（分组名不能丢）', () => {
+  const children = childrenFor(
+    {kind: 'tabs', tabIds: [2, 3], groupKeys: ['g100']},
+    sampleChildren()
+  )
   assert.equal(children.length, 1)
   const first = at(children, 0)
   assert.equal(first.kind, 'group')
   assert.equal(first.kind === 'group' ? first.name : '', '工作')
+})
+
+test('childrenFor：组内标签**逐枚全选**不等于选中分组 → 写成散装书签', () => {
+  const children = childrenFor({kind: 'tabs', tabIds: [2, 3]}, sampleChildren())
+  assert.deepEqual(
+    children.map((child) => (child.kind === 'tab' ? `t${child.tab.tabId}` : `g:${child.name}`)),
+    ['t2', 't3']
+  )
 })
 
 test('childrenFor：多选只碰到分组里的一部分时，那几枚当散装书签写（不把整组搬过去）', () => {
@@ -107,10 +119,30 @@ test('childrenFor：多选只碰到分组里的一部分时，那几枚当散装
 
 test('childrenFor：多选跨组时按**窗口顺序**输出，整组仍然是整组', () => {
   // 选中 t1（散装）、整组 (t2,t3)、t4：顺序即列表顺序。
-  const children = childrenFor({kind: 'tabs', tabIds: [1, 2, 3, 4]}, sampleChildren())
+  const children = childrenFor(
+    {kind: 'tabs', tabIds: [1, 2, 3, 4], groupKeys: ['g100']},
+    sampleChildren()
+  )
   assert.deepEqual(
     children.map((child) => (child.kind === 'tab' ? `t${child.tab.tabId}` : `g:${child.name}`)),
     ['t1', 'g:工作', 't4']
+  )
+})
+
+test('pickWindowChildren：整组选中 → 整组一个文件夹；组内全选但组未选中 → 逐枚散装', () => {
+  const unit = sampleChildren()
+  const whole = pickWindowChildren(unit, new Set(), new Set(['g100']))
+  assert.deepEqual(whole.map((child) => child.kind), ['group'])
+
+  const loose = pickWindowChildren(unit, new Set([2, 3]), new Set())
+  assert.deepEqual(loose.map((child) => child.kind), ['tab', 'tab'])
+})
+
+test('pickWindowChildren：只保留选中的散装标签与选中组，顺序即窗口顺序', () => {
+  const picked = pickWindowChildren(sampleChildren(), new Set([1, 4]), new Set())
+  assert.deepEqual(
+    picked.map((child) => (child.kind === 'tab' ? `t${child.tab.tabId}` : `g:${child.name}`)),
+    ['t1', 't4']
   )
 })
 
@@ -127,6 +159,14 @@ test('windowTabsFor：分组给出组内**全部**标签（算插入位置要整
 
 test('windowTabsFor：多选给出那一批（组内外都算），顺序按窗口', () => {
   assert.deepEqual(windowTabsFor({kind: 'tabs', tabIds: [3, 1, 4]}, sampleChildren()).map((t) => t.tabId), [1, 3, 4])
+})
+
+test('windowTabsFor：整组被选中的分组连组内没被逐枚点到的标签一起搬', () => {
+  const tabs = windowTabsFor(
+    {kind: 'tabs', tabIds: [1], groupKeys: ['g100']},
+    sampleChildren()
+  )
+  assert.deepEqual(tabs.map((t) => t.tabId), [1, 2, 3])
 })
 
 test('windowTabsFor：单枚标签在组内也能找出来', () => {

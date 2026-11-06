@@ -43,9 +43,10 @@ import {
 import {archiveBookmarkIds, countValue} from './archiveCounts'
 import {canDropTo, dropTargetId} from './archiveDrop'
 import {archiveRowMarkup, type MarkupContext} from './archiveMarkup'
-import {isOpenableRow, pickOwnerOf, rangeBetween, splitPicked, topLevelPicked} from './archivePick'
+import {isOpenableRow, pickOwnerOf, rangeBetween, splitPicked} from './archivePick'
 import {flattenArchive, type ArchiveRow} from './archiveRows'
 import {openBookmarkDialog} from './BookmarkDialog'
+import {createPickSet} from './pickSet'
 
 /** 面板递给实例的那几样东西。 */
 /** 多选能落在哪些行上（见 `ArchivePane.setPickScope`）。 */
@@ -404,24 +405,24 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   })
 
   /**
-   * 被点选过的条目（**多选**）。
+   * 多选状态。
    *
-   * 存「用户点过的 id」，不存「画出来的那些」——选中文件夹的子项不必再记一份（靠父链归属）。
-   * 所以这是**原样的选择**，用之前先过 `topLevelPicked()`，否则同一个文件夹会被搬两次。
+   * **三块列表用的是同一个实现**（`pickSet.ts`），这里只交代三件本栏特有的事：
+   * 谁是谁的容器（书签树的父链）、Shift 范围按什么顺序取（可见行，展开的子级也在范围里）、
+   * 这一档哪些行点得动（「打开」档只认会被打开的行）。选中集、归约、三种手势全在那一份里。
    */
-  const pickedIds = new Set<string>()
-  /**
-   * Shift 范围选择的起点（上次不带修饰键点击的那一行）。
-   * Shift 点击**不更新它** → 连按几次可反复调范围，不会每次以新结果为新起点（资源管理器的惯例）。
-   */
-  let pickAnchor: string | undefined
+  const picks = createPickSet({
+    parentOf: (id) => parentById.get(id),
+    rangeTo: (from, to) => rangeBetween(archiveRows, from, to),
+    // 更深层的书签 / 空文件夹 / 记号在「打开」档下点了也什么都开不了 → 让它们亮起来就是假话。
+    selectable: (id) => pickScope === 'all' || pickableIds().has(id)
+  })
 
   /** 这一栏的多选范围（窗口档只管「打开」，收藏夹档要能搬任意层级）。 */
   let pickScope: PickScope = 'open'
 
   function clearPick(): void {
-    pickedIds.clear()
-    pickAnchor = undefined
+    picks.clear()
   }
 
   function setPickScope(scope: PickScope): void {
@@ -433,95 +434,43 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /**
-   * 现在能被点选的节点 id。
+   * 现在能被点选的节点 id（`'open'` 档下就是这些）。
    *
-   * `'all'` 时整棵子树都行；`'open'` 时只留 `isOpenableRow` 认可的那些。
    * 每次点选算一份：`archiveRows` 最多一万行，而点一下本来就要重绘。
    */
   function pickableIds(): Set<string> {
     const out = new Set<string>()
     for (const row of archiveRows) {
       if (row.kind !== 'node') continue
-      if (pickScope === 'all' || isOpenableRow(row)) out.add(row.node.id)
+      if (isOpenableRow(row)) out.add(row.node.id)
     }
     return out
   }
 
   /**
-   * 把选择**规约成顶层项**（`archivePick.ts` 的纯函数，这里只是补上本实例的索引）。
+   * 被点选的**顶层**项（已归约，所以不含「祖先也选中」的后代）。
    * 绘制（否则嵌套框一个套一个）与拖拽（否则同一棵子树搬两次）都要它。
    */
   function pickedTopLevel(): string[] {
-    return topLevelPicked(pickedIds, parentById)
+    return [...picks.ids()]
   }
 
   /**
-   * Shift 点击：把起点到这一行之间的**可见行**全选上（按**可见顺序**而非层级）。
-   * 起点或终点找不到时退化成「只选终点那一条」。
-   */
-  function extendPickTo(id: string): void {
-    const allowed = pickableIds()
-    pickedIds.clear()
-    for (const picked of rangeBetween(archiveRows, pickAnchor, id)) {
-      if (allowed.has(picked)) pickedIds.add(picked)
-    }
-  }
-
-  /**
-   * 点一行：**Ctrl / Cmd 切换一条、Shift 扩范围、普通点击取消已选的那一批**。
+   * 点一行：**Ctrl / Cmd 切换、Shift 扩范围、普通点击收掉已选的那批**。
    *
-   * 普通点击按**这一条本来有没有被选中**分两种情况：
-   * 没选中 → 取消已选的那批（亮着的框只该靠「点别处」或那枚按钮收掉；
-   * 以前是点哪儿都不动，于是那一批会一直亮到下一次 Ctrl 点击，看着像点了没反应）；
-   * 已选中 → 什么都不做（按住它把整批拖走是常见动作，那时选择不该被清掉）。
+   * 判定与状态变化全在 `picks.click()` 里（三块列表同一份）；这里只负责「落到哪一行」与事后重绘。
    *
-   * 两种都**不选中点到的那一条**：现在没有勾选框，「点一下 = 只选它」会让
-   * 「先 Ctrl 选一批、再随手点一下」变成一次误清空。
-   * 两种都**挪 Shift 起点**（看不见，但「先随手点一下再 Shift 点另一头」依赖它）。
-   *
-   * 返回 true = 这次点击已处理完；落在行内按钮 / 输入框上时返回 false（各有自己的语义）。
+   * 返回 true = 这次点击已处理完；落在行内按钮 / 输入框上、或落在这一档点不动的行上时返回 false。
    */
   function handlePickClick(event: MouseEvent): boolean {
     const target = event.target as HTMLElement
     if (target.closest('input, button, a, [data-rename-input]')) return false
     const row = target.closest<HTMLElement>('[data-node-id]')
-    const rawId = row && archiveList.contains(row) ? row.dataset.nodeId : undefined
-    // 落在「点了也不会打开」的行上（更深层的书签 / 空文件夹 / 记号）时按空白处理：
-    // 这一档只负责「打开」，让它们亮起来却什么都不开就是假话。
-    const id = rawId !== undefined && pickableIds().has(rawId) ? rawId : undefined
-
-    // 点到「本来就不在点选范围里」的行（更深层的书签 / 空文件夹 / 记号）：什么都不做。
-    // 别把它当成点空白——那会把已经选好的那一批清掉（与原来「这些行没有勾选框」的行为一致）。
-    if (id === undefined && rawId !== undefined) return false
-
-    // 点在空白处：取消选择（不然那几条会一直在下面亮着，而用户以为已经点掉了）。
-    if (id === undefined) {
-      if (pickedIds.size === 0) return false
-      clearPick()
-      applyPickChanged()
-      return true
+    const id = row && archiveList.contains(row) ? row.dataset.nodeId : undefined
+    if (!picks.click({id, shift: event.shiftKey, toggle: event.ctrlKey || event.metaKey})) {
+      return false
     }
-
-    if (event.shiftKey) {
-      extendPickTo(id)
-      // Shift 不挪起点（见 `pickAnchor`）。
-      applyPickChanged()
-      return true
-    }
-    if (event.ctrlKey || event.metaKey) {
-      if (pickedIds.has(id)) pickedIds.delete(id)
-      else pickedIds.add(id)
-      pickAnchor = id
-      applyPickChanged()
-      return true
-    }
-    // 普通点击：点到**没选中**的那一条 → 取消已选的那批（不必重绘——本来就没选中任何东西）；
-    // 点到**已选中**的那一条 → 什么都不做（见上面的理由）。两种都不选中这一条。
-    if (!pickedIds.has(id) && pickedIds.size > 0) {
-      pickedIds.clear()
-      applyPickChanged()
-    }
-    pickAnchor = id
+    applyPickChanged()
     return true
   }
 
@@ -543,7 +492,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   function markPickedDragging(): void {
     for (const row of archiveList.querySelectorAll<HTMLElement>('[data-node-id]')) {
       const id = row.dataset.nodeId
-      if (id !== undefined && pickedIds.has(id)) row.classList.add('is-dragging')
+      if (id !== undefined && picks.has(id)) row.classList.add('is-dragging')
     }
   }
 
@@ -603,7 +552,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     archiveRows = []
     // 「取消选中」只在真选中了东西时露面。放在**开头**：这个函数有好几条提前 return
     //（空文件夹、书签树根），每一条都得把它算一遍，否则从「选中了一批」的层走到空层时它还会留着。
-    clearPickButton.classList.toggle('is-slot-hidden', pickedIds.size === 0)
+    clearPickButton.classList.toggle('is-slot-hidden', picks.size === 0)
     // 胸章数「这一层里能干活的东西」：子文件夹可以进去，书签可以打开。分隔线两样都不是。
     // **这一栏可以没有胸章**（左栏那个实例）：它的两档共用一枚，而那枚归面板管（见 `count()`）。
     if (archiveCount) archiveCount.textContent = String(countValue(archiveChildren))
@@ -714,7 +663,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     // 但集合没理由越攒越大。
     for (const id of [...expandedIds]) if (!nodeIndex.has(id)) expandedIds.delete(id)
     // 多选也剔一遍：被搬走 / 被删掉的那几条不该继续亮着（它们已经不在这里了）。
-    for (const id of [...pickedIds]) if (!nodeIndex.has(id)) pickedIds.delete(id)
+    for (const id of [...picks.ids()]) if (!nodeIndex.has(id)) picks.delete(id)
 
     /*
      * 刚存下的分组默认展开，而且**连它的祖先一起展开**。
@@ -1276,7 +1225,7 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
    */
   function dragIdsOf(row: HTMLElement): string[] | undefined {
     const id = row.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId
-    if (id === undefined || !pickedIds.has(id)) return undefined
+    if (id === undefined || !picks.has(id)) return undefined
     const ids = pickedTopLevel()
     if (ids.length < 2) return undefined
     // 整段一起变淡（拖动时才看得出这一批有哪几条）。
@@ -1285,12 +1234,12 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
   }
 
   /**
-   * 本栏现在选中的条目（规约过的顶层项）。
+   * 本栏现在选中的条目（已归约的顶层项）。
    *
    * 面板用它把「这一批」写进拖拽载荷（`{kind: 'selection', ids}`）。
    */
   function selectionIds(): string[] {
-    return topLevelPicked(pickedIds, parentById)
+    return pickedTopLevel()
   }
 
   return {
@@ -1305,10 +1254,11 @@ export function createArchivePane(deps: ArchivePaneDeps): ArchivePane {
     setPickScope,
     currentFolderId: () => viewFolderId,
     currentFolderTitle: () => viewPath.at(-1)?.title ?? '',
-    keptCount: () => splitPicked(archiveBookmarkIds(archiveChildren), pickedIds, parentById).picked.length,
+    keptCount: () =>
+      splitPicked(archiveBookmarkIds(archiveChildren), picks.snapshot(), parentById).picked.length,
     count: () => countValue(archiveChildren),
     excludedFromPick: () =>
-      new Set(splitPicked(archiveBookmarkIds(archiveChildren), pickedIds, parentById).excluded),
+      new Set(splitPicked(archiveBookmarkIds(archiveChildren), picks.snapshot(), parentById).excluded),
     reload: refresh,
     navigateTo,
     updateButtons,

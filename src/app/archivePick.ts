@@ -18,28 +18,6 @@ export function isOpenableRow(row: ArchiveRow): boolean {
 }
 
 /**
- * 把选择**规约成顶层项**：被选中文件夹的后代不再单列一份。
- * 绘制（否则嵌套框一个套一个）与拖拽（否则同一棵子树搬两次）都要它。
- */
-export function topLevelPicked(
-  pickedIds: ReadonlySet<string>,
-  parentById: ReadonlyMap<string, string>
-): string[] {
-  const out: string[] = []
-  for (const id of pickedIds) {
-    let nested = false
-    for (let at = parentById.get(id); at !== undefined; at = parentById.get(at)) {
-      if (pickedIds.has(at)) {
-        nested = true
-        break
-      }
-    }
-    if (!nested) out.push(id)
-  }
-  return out
-}
-
-/**
  * 这一行归谁的高亮框（沿父链向上找第一个顶层选中项）。
  * 用**规约过**的集合查 → 展开的文件夹被选中时，子行全归它名下，于是连成**一段**、共用一个框。
  */

@@ -1,6 +1,7 @@
 import type {WindowChild} from '../shared/capture'
 import type {TabSnapshot} from '../shared/types'
 import type {DragPayload} from './dom'
+import {groupPickKey} from './windowMarkup'
 
 /** 左栏的落点。`end` 表示落在末尾（空白处），那时归组看**最后一行**属于哪个分组。 */
 export type WindowDrop =
@@ -36,13 +37,47 @@ export function payloadNodeId(payload: DragPayload | undefined): string | undefi
 }
 
 /**
+ * 按「逐枚选中 + 整组选中」裁剪窗口子级。保存、计数、拖到收藏夹三处共用这一份口径。
+ *
+ * - **整组被选中** → 整组照旧是一个文件夹（分组名是用户起的信息，内部页面也不会被拆散）。
+ * - **组内只有标签被逐枚选中** → 那几枚就地当**散装标签**写出去。把所有标签都勾一遍
+ *   不等于「选中了这个分组」——否则用户无法得到「一串平铺书签」而只能得到文件夹。
+ * - 未选中的标签 / 整组没选中的组不出现。
+ *
+ * 顺序即窗口顺序（与 `planWindowChildren()` 一致）：组内散装标签留在原来分组的位置，
+ * 不会被集中挑到末尾。
+ */
+export function pickWindowChildren(
+  children: readonly WindowChild[],
+  pickedTabIds: ReadonlySet<number>,
+  pickedGroupKeys: ReadonlySet<string>
+): WindowChild[] {
+  const out: WindowChild[] = []
+  children.forEach((child, index) => {
+    if (child.kind === 'tab') {
+      if (pickedTabIds.has(child.tab.tabId)) out.push(child)
+      return
+    }
+    if (pickedGroupKeys.has(groupPickKey(child, index))) {
+      out.push(child)
+      return
+    }
+    for (const tab of child.tabs) {
+      if (pickedTabIds.has(tab.tabId)) out.push({kind: 'tab', tab})
+    }
+  })
+  return out
+}
+
+/**
  * 载荷 → 要写进书签的子级。
  *
  * 组内的标签单独拖出来时只写**这一枚**（散装书签），而不是把整组建一遍。
  *
- * 多选（`tabs`）时：**整组都被选中的分组照旧写成文件夹**（分组名是用户起的信息，丢不得），
- * 只选中一部分的分组则把它被选中的那几枚当散装书签写出去——把「只挑了两枚」写成整个文件夹
- * 等于多存了没选的标签。顺序即窗口顺序（`tabIds` 就是按窗口顺序给的）。
+ * 多选（`tabs`）时一律交给 `pickWindowChildren()`：只有载荷里 `groupKeys` 列出的分组
+ * 才写成文件夹；组内标签只是逐枚选中时当散装书签写出去（否则会多存没选的标签，
+ * 或者把「全选了标签」误读成「选中了分组」）。
+ * 顺序即窗口顺序（`tabIds` 就是按窗口顺序给的）。
  */
 export function childrenFor(payload: DragPayload, children: readonly WindowChild[]): WindowChild[] {
   if (payload.kind === 'group') {
@@ -50,23 +85,11 @@ export function childrenFor(payload: DragPayload, children: readonly WindowChild
     return child?.kind === 'group' ? [child] : []
   }
   if (payload.kind === 'tabs') {
-    const ids = new Set(payload.tabIds)
-    const out: WindowChild[] = []
-    for (const child of children) {
-      if (child.kind === 'tab') {
-        if (ids.has(child.tab.tabId)) out.push(child)
-        continue
-      }
-      const hits = child.tabs.filter((item) => ids.has(item.tabId))
-      if (hits.length === 0) continue
-      if (hits.length === child.tabs.length) {
-        out.push(child)
-        continue
-      }
-      // 只选中一部分：这几枚按散装书签写，别把整个分组搬过去。
-      for (const item of hits) out.push({kind: 'tab', tab: item})
-    }
-    return out
+    return pickWindowChildren(
+      children,
+      new Set(payload.tabIds),
+      new Set(payload.groupKeys ?? [])
+    )
   }
   if (payload.kind !== 'tab') return []
 
@@ -89,14 +112,17 @@ export function windowTabsFor(payload: DragPayload, children: readonly WindowChi
   }
   if (payload.kind === 'tabs') {
     const wanted = new Set(payload.tabIds)
+    const wholeGroups = new Set(payload.groupKeys ?? [])
     const out: TabSnapshot[] = []
-    for (const child of children) {
+    children.forEach((child, index) => {
       if (child.kind === 'tab') {
         if (wanted.has(child.tab.tabId)) out.push(child.tab)
-        continue
+        return
       }
-      for (const item of child.tabs) if (wanted.has(item.tabId)) out.push(item)
-    }
+      // 整组被选中的分组连组内没被逐枚点到的标签一起搬（它们本来就在那一批里）。
+      const whole = wholeGroups.has(groupPickKey(child, index))
+      for (const item of child.tabs) if (whole || wanted.has(item.tabId)) out.push(item)
+    })
     return out
   }
   if (payload.kind !== 'tab') return []

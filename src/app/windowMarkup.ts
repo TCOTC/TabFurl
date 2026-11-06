@@ -27,6 +27,27 @@ export function closeKey(target: CloseTarget): string {
   return target.kind === 'tab' ? `t${target.tabId}` : `g${target.groupId}`
 }
 
+/**
+ * 一条标签行在多选里的键：`t<tabId>`。
+ *
+ * 与 `groupPickKey()` 成对：两个键合起来就是这一列里「哪一行」的唯一名字，也正是行上
+ * `data-pick-line` 的值——于是选中集、高亮框与 DOM 用的是同一串东西。
+ */
+export function tabPickKey(tabId: number): string {
+  return `t${tabId}`
+}
+
+/**
+ * 分组行在多选里的键：`g<groupId>`，拿不到 groupId 时才退回 `g<列表下标>`。
+ *
+ * **必须只有这一处定义**：行上的 `data-pick-line`、选中集里的键、以及拖拽载荷里的分组名单
+ * 都按它比，写第二份就会在某个组没有 id 时静默对不上。
+ */
+export function groupPickKey(child: WindowChild & {kind: 'group'}, index: number): string {
+  const groupId = child.tabs[0]?.groupId
+  return groupId === undefined ? `g${index}` : `g${groupId}`
+}
+
 /** `data-close` 值 → 关闭目标（`closeKey` 的逆运算）。 */
 export function parseCloseKey(value: string): CloseTarget {
   const id = Number(value.slice(1))
@@ -89,7 +110,7 @@ export function tabRowMarkup(tab: TabSnapshot, pendingKey: string | undefined): 
   const url = tab.url
   const groupAttr = tab.groupId === undefined ? '' : ` data-tab-group="${tab.groupId}"`
   return `
-    <li class="item leaf" draggable="true" data-drop-row="tab" data-pick-line="t${tab.tabId}"
+    <li class="item leaf" draggable="true" data-drop-row="tab" data-pick-line="${tabPickKey(tab.tabId)}"
         data-pick-tab="${tab.tabId}"
         data-tab-index="${tab.index}"${groupAttr} data-drag-tab="${tab.tabId}">
       ${faviconMarkup(url, FAVICON_BASE)}
@@ -118,7 +139,7 @@ export function groupRowMarkup(
   const bucketGroupId = child.tabs[0]?.groupId
   const groupAttr = bucketGroupId === undefined ? '' : ` data-group-id="${bucketGroupId}"`
   // 多选的键优先用 groupId：分组在列表里的下标会随着别的分组变化而漂，而 Shift 起点要跨刷新记住。
-  const pickKey = bucketGroupId === undefined ? `g${index}` : `g${bucketGroupId}`
+  const pickKey = groupPickKey(child, index)
   const label = `解散这一组并关闭它的全部标签页（共 ${child.tabs.length} 枚已列出；组里的浏览器内部页面也会一起关）`
   // 关闭要按 groupId 问浏览器要这一组的全部标签（界面这份跳过了内部页面，关的时候跳过就错了）。
   // 拿不到 groupId 时不给按钮：给了也只能按名字 / 下标猜。

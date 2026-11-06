@@ -455,10 +455,22 @@
   margin-left: auto;
 }
 
+/*
+ * 分组行下面那一段（组内标签）。
+ *
+ * **缩进挂在行上，不挂在 `.kids` 上**：多选的高亮框画在行的盒子上，`.kids` 一缩进，
+ * 组内每一行的框就整体内缩 20px——选中一个分组时那个框在分组头与组内行之间会**差一级台阶**，
+ * 而收藏夹栏的行是扁平的、框一律占满整行。两栏必须是同一个框。
+ * （同一条理由也在 `.list--archive > li` 的 `--depth` 上：缩进必须写在行自己身上。）
+ */
 .kids {
   margin: 0;
-  padding: 0 0 var(--space-1) calc(14px + var(--space-2));
+  padding: 0 0 var(--space-1);
   list-style: none;
+}
+
+.kids > .item {
+  padding-left: calc(var(--item-pad-x) + 14px + var(--space-2));
 }
 
 /*

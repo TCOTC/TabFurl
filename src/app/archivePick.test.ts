@@ -6,8 +6,7 @@ import {
   pickOwnerOf,
   planPickedMove,
   rangeBetween,
-  splitPicked,
-  topLevelPicked
+  splitPicked
 } from './archivePick'
 import {flattenArchive, type ArchiveNodeRow} from './archiveRows'
 import type {BookmarkNode} from '../shared/types'
@@ -43,18 +42,6 @@ function parentIndex(children: readonly BookmarkNode[]): Map<string, string> {
   walk(children, 'root')
   return out
 }
-
-test('topLevelPicked：被选中文件夹的后代不再单列（否则同一棵子树会被搬两次）', () => {
-  assert.deepEqual(topLevelPicked(new Set(['a', 'a1', 'a2', 'a2x']), parentIndex(sampleTree())), ['a'])
-})
-
-test('topLevelPicked：彼此无关的几条都留着', () => {
-  assert.deepEqual(topLevelPicked(new Set(['a1', 'b']), parentIndex(sampleTree())), ['a1', 'b'])
-})
-
-test('topLevelPicked：空集合返回空', () => {
-  assert.deepEqual(topLevelPicked(new Set(), parentIndex(sampleTree())), [])
-})
 
 const nodeRow = (node: BookmarkNode, depth = 0): ArchiveNodeRow => ({
   kind: 'node',
